@@ -40,7 +40,22 @@ jobs:
         run: |
           $cmake = Get-Content "work/CMakeLists.txt" -Raw
           $cmake = $cmake.Replace("project(J3Worship VERSION 0.3.0 LANGUAGES CXX)", "project(J3Worship VERSION 0.3.0 LANGUAGES C CXX)")
+          $cmake = $cmake.Replace('    COMPANY_NAME "J3 Worship"' + [Environment]::NewLine + '    VERSION "0.3.0"', '    COMPANY_NAME "J3 Worship"' + [Environment]::NewLine + '    BUNDLE_ID "com.j3worship.desktop"' + [Environment]::NewLine + '    VERSION "0.3.0"')
           Set-Content "work/CMakeLists.txt" $cmake -Encoding utf8
+
+          $cpp = Get-Content "work/app/MainComponent.cpp" -Raw
+          $cpp = $cpp.Replace('    livePage_.setOpaque(true);' + [Environment]::NewLine, '')
+          $cpp = $cpp.Replace('    livePage_.setColour(juce::Component::backgroundColourId, juce::Colour(panel));' + [Environment]::NewLine, '')
+          $cpp = $cpp.Replace('    mixerPage_.setOpaque(true);' + [Environment]::NewLine, '')
+          $cpp = $cpp.Replace('    mixerPage_.setColour(juce::Component::backgroundColourId, juce::Colour(panel));' + [Environment]::NewLine, '')
+          $cpp = $cpp.Replace('    diagnosticsPage_.setOpaque(true);' + [Environment]::NewLine, '')
+          $cpp = $cpp.Replace('    diagnosticsPage_.setColour(juce::Component::backgroundColourId, juce::Colour(panel));' + [Environment]::NewLine, '')
+          $cpp = $cpp.Replace('if (const auto* d = deviceManager_.getCurrentAudioDevice())', 'if (auto* d = deviceManager_.getCurrentAudioDevice())')
+          Set-Content "work/app/MainComponent.cpp" $cpp -Encoding utf8
+
+          $hdr = Get-Content "work/app/MainComponent.h" -Raw
+          $hdr = $hdr.Replace('        juce::ProgressBar meterBar_;' + [Environment]::NewLine + '        double meterValue_ { 0.0 };', '        double meterValue_ { 0.0 };' + [Environment]::NewLine + '        juce::ProgressBar meterBar_;')
+          Set-Content "work/app/MainComponent.h" $hdr -Encoding utf8
 
       - name: Configure Visual Studio x64
         shell: pwsh
