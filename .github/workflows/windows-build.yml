@@ -35,6 +35,13 @@ jobs:
           }
           Expand-Archive -Path source/J3Worship-source.zip -DestinationPath work -Force
 
+      - name: Apply Windows validation patch
+        shell: pwsh
+        run: |
+          $cmake = Get-Content "work/CMakeLists.txt" -Raw
+          $cmake = $cmake.Replace("project(J3Worship VERSION 0.3.0 LANGUAGES CXX)", "project(J3Worship VERSION 0.3.0 LANGUAGES C CXX)")
+          Set-Content "work/CMakeLists.txt" $cmake -Encoding utf8
+
       - name: Configure Visual Studio x64
         shell: pwsh
         run: cmake -S work -B work/build-win -G "Visual Studio 17 2022" -A x64 -DJ3_BUILD_DESKTOP_APP=ON
