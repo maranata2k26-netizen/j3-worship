@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'source/chunks/**'
+      - 'source/patches/**'
       - '.github/workflows/windows-build.yml'
 
 permissions:
@@ -35,34 +36,13 @@ jobs:
           }
           Expand-Archive -Path source/J3Worship-source.zip -DestinationPath work -Force
 
-      - name: Apply Windows validation patch
+      - name: Apply canonical 0.4.0 source patch
         shell: pwsh
         run: |
-          $cmake = Get-Content "work/CMakeLists.txt" -Raw
-          $cmake = $cmake.Replace("project(J3Worship VERSION 0.3.0 LANGUAGES CXX)", "project(J3Worship VERSION 0.3.0 LANGUAGES C CXX)")
-          Set-Content "work/CMakeLists.txt" $cmake -Encoding utf8
-
-          $cpp = Get-Content "work/app/MainComponent.cpp" -Raw
-          $cpp = $cpp -replace '(?m)^\s*livePage_\.setOpaque\(true\);\r?\n', ''
-          $cpp = $cpp -replace '(?m)^\s*livePage_\.setColour\(juce::Component::backgroundColourId, juce::Colour\(panel\)\);\r?\n', ''
-          $cpp = $cpp -replace '(?m)^\s*mixerPage_\.setOpaque\(true\);\r?\n', ''
-          $cpp = $cpp -replace '(?m)^\s*mixerPage_\.setColour\(juce::Component::backgroundColourId, juce::Colour\(panel\)\);\r?\n', ''
-          $cpp = $cpp -replace '(?m)^\s*diagnosticsPage_\.setOpaque\(true\);\r?\n', ''
-          $cpp = $cpp -replace '(?m)^\s*diagnosticsPage_\.setColour\(juce::Component::backgroundColourId, juce::Colour\(panel\)\);\r?\n', ''
-          $cpp = $cpp.Replace('if (const auto* d = deviceManager_.getCurrentAudioDevice())', 'if (auto* d = deviceManager_.getCurrentAudioDevice())')
-          Set-Content "work/app/MainComponent.cpp" $cpp -Encoding utf8
-
-          $rh = Get-Content "work/include/j3/Recording.h" -Raw
-          $rh = $rh.Replace('    MultiTrackRecorder() = default;', '    MultiTrackRecorder();')
-          $rh = $rh.Replace('    SpscRing<RecordingBlock, 64> queue_;', '    std::unique_ptr<SpscRing<RecordingBlock, 64>> queue_;')
-          Set-Content "work/include/j3/Recording.h" $rh -Encoding utf8
-
-          $rcpp = Get-Content "work/src/Recording.cpp" -Raw
-          $rcpp = $rcpp.Replace('MultiTrackRecorder::~MultiTrackRecorder(){ std::string ignored; stop(ignored); }', 'MultiTrackRecorder::MultiTrackRecorder() : queue_(std::make_unique<SpscRing<RecordingBlock, 64>>()) {}' + "`n" + 'MultiTrackRecorder::~MultiTrackRecorder(){ std::string ignored; stop(ignored); }')
-          $rcpp = $rcpp.Replace('if(!queue_.push(b))', 'if(!queue_->push(b))')
-          $rcpp = $rcpp.Replace('||!queue_.empty())', '||!queue_->empty())')
-          $rcpp = $rcpp.Replace('if(!queue_.pop(b))', 'if(!queue_->pop(b))')
-          Set-Content "work/src/Recording.cpp" $rcpp -Encoding utf8
+          $patch = Join-Path $PWD "source/patches/0.4.0-alpha.patch"
+          if (!(Test-Path $patch)) { throw "0.4.0 source patch missing" }
+          & "C:\Program Files\Git\usr\bin\patch.exe" -p4 -d work -i $patch
+          if ($LASTEXITCODE -ne 0) { throw "Source patch failed with exit code $LASTEXITCODE" }
 
       - name: Configure Visual Studio x64
         shell: pwsh
