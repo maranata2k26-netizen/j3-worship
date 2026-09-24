@@ -1,0 +1,88 @@
+name: Windows Release Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'source/chunks/**'
+      - '.github/workflows/windows-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct J3 Worship source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path work | Out-Null
+          $chunks = Get-ChildItem "source/chunks/part*.b64" | Sort-Object Name
+          if ($chunks.Count -ne 7) { throw "Expected 7 source chunks, found $($chunks.Count)" }
+          $b64 = ($chunks | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          $bytes = [Convert]::FromBase64String($b64)
+          [IO.File]::WriteAllBytes("source/J3Worship-source.zip", $bytes)
+          $hash = (Get-FileHash "source/J3Worship-source.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne "35d6ddc15d1d93a290bf6e057aedb1b6b1f8bd39bb6414fb844b16bb2c642daf") {
+            throw "Source archive integrity check failed: $hash"
+          }
+          Expand-Archive -Path source/J3Worship-source.zip -DestinationPath work -Force
+
+      - name: Configure Visual Studio x64
+        shell: pwsh
+        run: cmake -S work -B work/build-win -G "Visual Studio 17 2022" -A x64 -DJ3_BUILD_DESKTOP_APP=ON
+
+      - name: Build Release
+        shell: pwsh
+        run: cmake --build work/build-win --config Release --parallel
+
+      - name: Run core tests
+        shell: pwsh
+        run: ctest --test-dir work/build-win -C Release --output-on-failure
+
+      - name: Validate executable
+        shell: pwsh
+        run: |
+          if (!(Test-Path "work/dist/J3Worship.exe")) { throw "J3Worship.exe was not produced" }
+          Get-Item "work/dist/J3Worship.exe" | Format-List Name,Length,LastWriteTime
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "work\installer\J3Worship.iss"
+          if (!(Test-Path "work/dist-installer/J3Worship-Setup.exe")) { throw "Installer was not produced" }
+
+      - name: SHA256
+        shell: pwsh
+        run: |
+          $app = Get-FileHash "work/dist/J3Worship.exe" -Algorithm SHA256
+          $setup = Get-FileHash "work/dist-installer/J3Worship-Setup.exe" -Algorithm SHA256
+          "J3Worship.exe $($app.Hash)" | Out-File -Encoding ascii "work/dist-installer/SHA256SUMS.txt"
+          "J3Worship-Setup.exe $($setup.Hash)" | Out-File -Encoding ascii -Append "work/dist-installer/SHA256SUMS.txt"
+
+      - name: Upload Windows application
+        uses: actions/upload-artifact@v4
+        with:
+          name: J3Worship-Windows-App
+          path: work/dist/J3Worship.exe
+          if-no-files-found: error
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: J3Worship-Windows-Installer
+          path: |
+            work/dist-installer/J3Worship-Setup.exe
+            work/dist-installer/SHA256SUMS.txt
+          if-no-files-found: error
