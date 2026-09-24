@@ -997,7 +997,8 @@ diff -ruN /mnt/data/J3old/app/MainComponent.h /mnt/data/J3newdiff/app/MainCompon
      void audioDeviceStopped() override;
 +    void audioDeviceError(const juce::String& errorMessage) override;
      void timerCallback() override;
-+    void changeListenerCallback(juce::ChangeBroadcaster*) override; 
++    void changeListenerCallback(juce::ChangeBroadcaster*) override;
+ 
      juce::AudioDeviceManager deviceManager_;
      std::atomic<double> sampleRate_ { 48000.0 };
 @@ -74,8 +91,14 @@
