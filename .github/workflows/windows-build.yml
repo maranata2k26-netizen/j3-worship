@@ -52,6 +52,18 @@ jobs:
           $cpp = $cpp.Replace('if (const auto* d = deviceManager_.getCurrentAudioDevice())', 'if (auto* d = deviceManager_.getCurrentAudioDevice())')
           Set-Content "work/app/MainComponent.cpp" $cpp -Encoding utf8
 
+          $rh = Get-Content "work/include/j3/Recording.h" -Raw
+          $rh = $rh.Replace('    MultiTrackRecorder() = default;', '    MultiTrackRecorder();')
+          $rh = $rh.Replace('    SpscRing<RecordingBlock, 64> queue_;', '    std::unique_ptr<SpscRing<RecordingBlock, 64>> queue_;')
+          Set-Content "work/include/j3/Recording.h" $rh -Encoding utf8
+
+          $rcpp = Get-Content "work/src/Recording.cpp" -Raw
+          $rcpp = $rcpp.Replace('MultiTrackRecorder::~MultiTrackRecorder(){ std::string ignored; stop(ignored); }', 'MultiTrackRecorder::MultiTrackRecorder() : queue_(std::make_unique<SpscRing<RecordingBlock, 64>>()) {}' + "`n" + 'MultiTrackRecorder::~MultiTrackRecorder(){ std::string ignored; stop(ignored); }')
+          $rcpp = $rcpp.Replace('if(!queue_.push(b))', 'if(!queue_->push(b))')
+          $rcpp = $rcpp.Replace('||!queue_.empty())', '||!queue_->empty())')
+          $rcpp = $rcpp.Replace('if(!queue_.pop(b))', 'if(!queue_->pop(b))')
+          Set-Content "work/src/Recording.cpp" $rcpp -Encoding utf8
+
       - name: Configure Visual Studio x64
         shell: pwsh
         run: cmake -S work -B work/build-win -G "Visual Studio 17 2022" -A x64 -DJ3_BUILD_DESKTOP_APP=ON
@@ -67,6 +79,9 @@ jobs:
       - name: Validate executable
         shell: pwsh
         run: |
+          if (Test-Path "work/dist/J3 Worship.exe") {
+            Copy-Item "work/dist/J3 Worship.exe" "work/dist/J3Worship.exe" -Force
+          }
           if (!(Test-Path "work/dist/J3Worship.exe")) { throw "J3Worship.exe was not produced" }
           Get-Item "work/dist/J3Worship.exe" | Format-List Name,Length,LastWriteTime
 
