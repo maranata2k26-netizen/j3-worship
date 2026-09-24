@@ -75,6 +75,31 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "work\installer\J3Worship.iss"
           if (!(Test-Path "work/dist-installer/J3Worship-Setup.exe")) { throw "Installer was not produced" }
 
+      - name: End-to-end installer smoke test
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "J3Worship-E2E"
+          if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+          $setup = (Resolve-Path "work/dist-installer/J3Worship-Setup.exe").Path
+          $installer = Start-Process -FilePath $setup -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/DIR=$installDir") -PassThru -Wait
+          if ($installer.ExitCode -ne 0) { throw "Installer exited with $($installer.ExitCode)" }
+          $installedExe = Join-Path $installDir "J3Worship.exe"
+          if (!(Test-Path $installedExe)) { throw "Installed J3Worship.exe missing" }
+
+          $app = Start-Process -FilePath $installedExe -PassThru
+          Start-Sleep -Seconds 8
+          $app.Refresh()
+          if ($app.HasExited) { throw "Installed application exited during launch smoke test with code $($app.ExitCode)" }
+          Stop-Process -Id $app.Id -Force
+          Start-Sleep -Seconds 1
+
+          $uninstaller = Join-Path $installDir "unins000.exe"
+          if (!(Test-Path $uninstaller)) { throw "Uninstaller missing" }
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART") -PassThru -Wait
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
+          Start-Sleep -Seconds 1
+          if (Test-Path $installedExe) { throw "Application still present after uninstall" }
+
       - name: SHA256
         shell: pwsh
         run: |
