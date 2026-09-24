@@ -1,0 +1,1175 @@
+diff -ruN /mnt/data/J3old/.github/workflows/windows-build.yml /mnt/data/J3newdiff/.github/workflows/windows-build.yml
+--- /mnt/data/J3old/.github/workflows/windows-build.yml	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/J3newdiff/.github/workflows/windows-build.yml	2026-09-24 19:03:02.000000000 +0000
+@@ -0,0 +1,79 @@
++name: Windows Release Build
++
++on:
++  workflow_dispatch:
++  push:
++    branches: [main]
++    paths:
++      - 'source/J3Worship-source.zip'
++      - '.github/workflows/windows-build.yml'
++
++permissions:
++  contents: read
++
++jobs:
++  build-windows:
++    runs-on: windows-2022
++    timeout-minutes: 45
++
++    steps:
++      - name: Checkout
++        uses: actions/checkout@v4
++
++      - name: Extract J3 Worship source
++        shell: pwsh
++        run: |
++          New-Item -ItemType Directory -Force -Path work | Out-Null
++          Expand-Archive -Path source/J3Worship-source.zip -DestinationPath work -Force
++
++      - name: Configure Visual Studio x64
++        shell: pwsh
++        run: cmake -S work -B work/build-win -G "Visual Studio 17 2022" -A x64 -DJ3_BUILD_DESKTOP_APP=ON
++
++      - name: Build Release
++        shell: pwsh
++        run: cmake --build work/build-win --config Release --parallel
++
++      - name: Run core tests
++        shell: pwsh
++        run: ctest --test-dir work/build-win -C Release --output-on-failure
++
++      - name: Validate executable
++        shell: pwsh
++        run: |
++          if (!(Test-Path "work/dist/J3Worship.exe")) { throw "J3Worship.exe was not produced" }
++          Get-Item "work/dist/J3Worship.exe" | Format-List Name,Length,LastWriteTime
++
++      - name: Install Inno Setup
++        shell: pwsh
++        run: choco install innosetup --no-progress -y
++
++      - name: Build installer
++        shell: pwsh
++        run: |
++          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "work\installer\J3Worship.iss"
++          if (!(Test-Path "work/dist-installer/J3Worship-Setup.exe")) { throw "Installer was not produced" }
++
++      - name: SHA256
++        shell: pwsh
++        run: |
++          $app = Get-FileHash "work/dist/J3Worship.exe" -Algorithm SHA256
++          $setup = Get-FileHash "work/dist-installer/J3Worship-Setup.exe" -Algorithm SHA256
++          "J3Worship.exe $($app.Hash)" | Out-File -Encoding ascii "work/dist-installer/SHA256SUMS.txt"
++          "J3Worship-Setup.exe $($setup.Hash)" | Out-File -Encoding ascii -Append "work/dist-installer/SHA256SUMS.txt"
++
++      - name: Upload Windows application
++        uses: actions/upload-artifact@v4
++        with:
++          name: J3Worship-Windows-App
++          path: work/dist/J3Worship.exe
++          if-no-files-found: error
++
++      - name: Upload Windows installer
++        uses: actions/upload-artifact@v4
++        with:
++          name: J3Worship-Windows-Installer
++          path: |
++            work/dist-installer/J3Worship-Setup.exe
++            work/dist-installer/SHA256SUMS.txt
++          if-no-files-found: error
+diff -ruN /mnt/data/J3old/CMakeLists.txt /mnt/data/J3newdiff/CMakeLists.txt
+--- /mnt/data/J3old/CMakeLists.txt	2026-09-24 19:03:03.000000000 +0000
++++ /mnt/data/J3newdiff/CMakeLists.txt	2026-09-24 19:33:52.000000000 +0000
+@@ -2,7 +2,7 @@
+ if(POLICY CMP0091)
+   cmake_policy(SET CMP0091 NEW)
+ endif()
+-project(J3Worship VERSION 0.3.0 LANGUAGES CXX)
++project(J3Worship VERSION 0.4.0 LANGUAGES C CXX)
+ 
+ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+@@ -62,7 +62,8 @@
+   juce_add_gui_app(J3Worship
+     PRODUCT_NAME "J3 Worship"
+     COMPANY_NAME "J3 Worship"
+-    VERSION "0.3.0"
++    BUNDLE_ID "com.j3worship.desktop"
++    VERSION "0.4.0"
+     NEEDS_CURL FALSE
+     NEEDS_WEB_BROWSER FALSE
+   )
+@@ -93,6 +94,7 @@
+     juce::juce_recommended_warning_flags
+   )
+   set_target_properties(J3Worship PROPERTIES
++    OUTPUT_NAME "J3Worship"
+     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist"
+     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/dist"
+   )
+diff -ruN /mnt/data/J3old/README.md /mnt/data/J3newdiff/README.md
+--- /mnt/data/J3old/README.md	2026-09-24 19:03:28.000000000 +0000
++++ /mnt/data/J3newdiff/README.md	2026-09-24 19:33:32.000000000 +0000
+@@ -1,22 +1,27 @@
+ # J3 Worship
+ 
+-J3 Worship is a native Windows live-worship audio application under active engineering. The project is **device-agnostic**: XR18 is a reference/preset target, not a dependency. Focusrite, Behringer, PreSonus, RME, MOTU, Audient, SSL and other devices are intended to work through their compatible Windows ASIO drivers.
++J3 Worship is a native Windows live-worship audio application focused on stability, low latency, safe routing, simple live operation, and broad interface compatibility.
+ 
+-## Windows engineering build 0.3.0-alpha
+-This revision adds a real JUCE desktop application target in addition to the tested native core. On Windows it enables JUCE ASIO/WASAPI support and builds `J3Worship.exe`.
++## Device compatibility
++J3 Worship is not tied to XR18. XR18 is only a useful reference device. On Windows, the desktop app uses JUCE's audio-device layer with ASIO enabled and WASAPI available as a fallback. Interfaces and digital mixers from Focusrite, Behringer, PreSonus, RME, MOTU, Audient, SSL and other vendors are intended to work when Windows exposes a compatible driver.
+ 
+-Current desktop shell includes:
+-- native Windows GUI (not Electron/web)
+-- Audio/MIDI device selector with ASIO enabled
+-- safe-default startup: live input monitoring starts OFF
+-- eight-input real-time mixer path with fader, pan, mute, DSP and soft output protection
+-- LIVE section controls (Intro, Verse, Pre-Chorus, Chorus, Bridge, Instrumental, Free/Pad, Ending)
+-- system diagnostics showing device, driver type, sample rate, buffer and reported I/O latency
+-- core architecture for routing protection, IEM, recording, scenes, pads, setlists, MIDI, VST3 catalog and recovery
+-- GitHub Actions Windows x64 build
+-- Inno Setup conventional installer build
++## 0.4.0-alpha engineering build
++This revision includes:
++- native Windows JUCE application, not Electron/web
++- ASIO + WASAPI device selection
++- persisted audio-device state between launches
++- first-run ASIO preference when an ASIO device is available
++- device/driver rescan and inventory
++- automatic recovery attempt after an unexpected device stop/error
++- safe-default startup with live input monitoring OFF
++- selectable PA Left/Mono and PA Right outputs
++- Click/Guide output reservation with a hard safety rule preventing Click from sharing PA outputs
++- driver control-panel access when provided by the device
++- live diagnostics: device, driver type, active I/O, sample rate, buffer, reported latency, XRuns/dropouts and last audio error
++- 8-channel low-latency live mixer path with per-channel fader, pan, mute, DSP and output soft protection
++- LIVE worship section controls with quantized section transitions and FREE/PAD state
++- tested native core for routing, scenes, IEM models, recording, setlists, MIDI, pads, DSP, update safety and recovery
++- multitrack recorder queue moved to preallocated heap memory to avoid Windows stack overflow while keeping the audio callback allocation-free
+ 
+-## Important release boundary
+-`0.3.0-alpha` is an **engineering validation build**, not a production-live release. A CI pass proves that the Windows source compiles, core tests pass, and the installer is generated. It does **not** prove physical behavior with a particular interface, PA/IEM wiring or commercial plugin. Hardware validation remains mandatory before calling a build production-ready.
+-
+-The final product goal remains: open J3 Worship, choose the installed ASIO device, configure PA/IEM safely, run System Check, Soundcheck, then LIVE.
++## Release boundary
++A successful CI build proves that the Windows source compiles, the native core tests pass, and the installer can be generated. It cannot prove the behavior of every third-party ASIO driver, physical interface, PA/IEM wiring, or commercial VST3 plugin. J3 Worship therefore includes local System Check and safe routing controls, and production release still requires hardware validation on representative devices.
+diff -ruN /mnt/data/J3old/app/Main.cpp /mnt/data/J3newdiff/app/Main.cpp
+--- /mnt/data/J3old/app/Main.cpp	2026-09-24 19:02:04.000000000 +0000
++++ /mnt/data/J3newdiff/app/Main.cpp	2026-09-24 19:31:22.000000000 +0000
+@@ -5,7 +5,7 @@
+ {
+ public:
+     const juce::String getApplicationName() override { return "J3 Worship"; }
+-    const juce::String getApplicationVersion() override { return "0.3.0-alpha"; }
++    const juce::String getApplicationVersion() override { return "0.4.0-alpha"; }
+     bool moreThanOneInstanceAllowed() override { return false; }
+ 
+     void initialise(const juce::String&) override
+diff -ruN /mnt/data/J3old/app/MainComponent.cpp /mnt/data/J3newdiff/app/MainComponent.cpp
+--- /mnt/data/J3old/app/MainComponent.cpp	2026-09-24 19:02:04.000000000 +0000
++++ /mnt/data/J3newdiff/app/MainComponent.cpp	2026-09-24 19:31:22.000000000 +0000
+@@ -1,20 +1,35 @@
+ #include "MainComponent.h"
++
+ #include <algorithm>
+ #include <cmath>
+ 
+ namespace
+ {
+-constexpr auto background = 0xff0f1115;
+-constexpr auto panel = 0xff171a20;
+-constexpr auto panel2 = 0xff20242c;
++constexpr auto background = 0xff0b0e13;
++constexpr auto topBar = 0xff11151c;
++constexpr auto panel = 0xff151a22;
++constexpr auto panel2 = 0xff1d2430;
++constexpr auto panel3 = 0xff252e3b;
+ constexpr auto accent = 0xff4da3ff;
+-constexpr auto good = 0xff42c777;
++constexpr auto accentDeep = 0xff286da8;
++constexpr auto good = 0xff43d17d;
+ constexpr auto warning = 0xffffb84d;
++constexpr auto danger = 0xffff5b68;
++constexpr auto text = 0xfff3f6fa;
++constexpr auto mutedText = 0xff9da8b7;
+ 
+ float dbToGain(double db)
+ {
+     return static_cast<float>(juce::Decibels::decibelsToGain(db, -90.0));
+ }
++
++juce::String outputName(juce::AudioIODevice& device, int index)
++{
++    const auto names = device.getOutputChannelNames();
++    if (index >= 0 && index < names.size() && names[index].isNotEmpty())
++        return names[index];
++    return "OUT " + juce::String(index + 1);
++}
+ }
+ 
+ MainComponent::MixerStrip::MixerStrip(int index, std::atomic<float>& gain,
+@@ -22,15 +37,21 @@
+                                       std::atomic<float>& meter)
+     : index_(index), gain_(gain), pan_(pan), muted_(muted), meter_(meter), meterBar_(meterValue_)
+ {
++    setOpaque(false);
++
+     title_.setText("IN " + juce::String(index_ + 1), juce::dontSendNotification);
+     title_.setJustificationType(juce::Justification::centred);
+     title_.setFont(juce::FontOptions(15.0f, juce::Font::bold));
++    title_.setColour(juce::Label::textColourId, juce::Colour(text));
+     addAndMakeVisible(title_);
+ 
+     fader_.setSliderStyle(juce::Slider::LinearVertical);
+     fader_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 72, 22);
+     fader_.setRange(-60.0, 6.0, 0.1);
+     fader_.setValue(-6.0, juce::dontSendNotification);
++    fader_.setDoubleClickReturnValue(true, 0.0);
++    fader_.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
++    fader_.setColour(juce::Slider::trackColourId, juce::Colour(accentDeep));
+     gain_.store(dbToGain(-6.0));
+     fader_.onValueChange = [this] { gain_.store(dbToGain(fader_.getValue()), std::memory_order_relaxed); };
+     addAndMakeVisible(fader_);
+@@ -39,23 +60,38 @@
+     panSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 20);
+     panSlider_.setRange(-1.0, 1.0, 0.01);
+     panSlider_.setValue(0.0, juce::dontSendNotification);
++    panSlider_.setDoubleClickReturnValue(true, 0.0);
++    panSlider_.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(accent));
+     panSlider_.onValueChange = [this] { pan_.store(static_cast<float>(panSlider_.getValue()), std::memory_order_relaxed); };
+     addAndMakeVisible(panSlider_);
+ 
++    muteButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(mutedText));
+     muteButton_.onClick = [this] { muted_.store(muteButton_.getToggleState(), std::memory_order_relaxed); };
+     addAndMakeVisible(muteButton_);
+ 
+     meterBar_.setPercentageDisplay(false);
++    meterBar_.setColour(juce::ProgressBar::foregroundColourId, juce::Colour(good));
++    meterBar_.setColour(juce::ProgressBar::backgroundColourId, juce::Colour(0xff090c10));
+     addAndMakeVisible(meterBar_);
+ }
+ 
++void MainComponent::MixerStrip::paint(juce::Graphics& g)
++{
++    auto r = getLocalBounds().toFloat().reduced(2.0f);
++    g.setColour(juce::Colour(panel2));
++    g.fillRoundedRectangle(r, 8.0f);
++    g.setColour(juce::Colour(0xff303946));
++    g.drawRoundedRectangle(r, 8.0f, 1.0f);
++}
++
+ void MainComponent::MixerStrip::resized()
+ {
+-    auto r = getLocalBounds().reduced(6);
++    auto r = getLocalBounds().reduced(9);
+     title_.setBounds(r.removeFromTop(28));
+     meterBar_.setBounds(r.removeFromRight(12).reduced(0, 18));
++    r.removeFromRight(5);
+     muteButton_.setBounds(r.removeFromBottom(30));
+-    panSlider_.setBounds(r.removeFromBottom(90));
++    panSlider_.setBounds(r.removeFromBottom(92));
+     fader_.setBounds(r.reduced(2, 6));
+ }
+ 
+@@ -78,45 +114,61 @@
+     }
+ 
+     brandLabel_.setText("J3 WORSHIP", juce::dontSendNotification);
+-    brandLabel_.setFont(juce::FontOptions(24.0f, juce::Font::bold));
+-    brandLabel_.setColour(juce::Label::textColourId, juce::Colour(0xfff2f4f7));
++    brandLabel_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
++    brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
+     addAndMakeVisible(brandLabel_);
+ 
++    versionLabel_.setText("0.4.0 ALPHA", juce::dontSendNotification);
++    versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
++    versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
++    addAndMakeVisible(versionLabel_);
++
+     statusLabel_.setText("Audio: inicializando...", juce::dontSendNotification);
+     statusLabel_.setJustificationType(juce::Justification::centredRight);
++    statusLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+     addAndMakeVisible(statusLabel_);
+ 
++    audioSettingsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
++    audioSettingsButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(text));
+     audioSettingsButton_.onClick = [this] { openAudioSettings(); };
+     addAndMakeVisible(audioSettingsButton_);
+ 
+-    liveMonitorButton_.setTooltip("Habilita el monitoreo de entradas hacia las salidas PA elegidas. Arranca apagado por seguridad.");
++    liveMonitorButton_.setTooltip("Habilita el monitoreo de entradas hacia el PA. Arranca apagado por seguridad.");
++    liveMonitorButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(mutedText));
+     liveMonitorButton_.onClick = [this]
+     {
+         if (liveMonitorButton_.getToggleState())
+         {
+-            const auto* device = deviceManager_.getCurrentAudioDevice();
++            auto* device = deviceManager_.getCurrentAudioDevice();
+             if (device == nullptr || device->getActiveInputChannels().countNumberOfSetBits() == 0)
+             {
+                 liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
+-                showAudioError("No hay entradas de audio activas. Configurá primero Audio / MIDI.");
++                showAudioError("No hay entradas de audio activas. Configurá primero AUDIO / MIDI.");
++                return;
++            }
++            if (!routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load()))
++            {
++                liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
++                showAudioError("Routing bloqueado: CLICK no puede compartir una salida asignada al PA.");
+                 return;
+             }
+         }
+         liveMonitorEnabled_.store(liveMonitorButton_.getToggleState(), std::memory_order_release);
++        updateDiagnostics();
+     };
+     addAndMakeVisible(liveMonitorButton_);
+ 
+-    livePage_.setOpaque(true);
+-    livePage_.setColour(juce::Component::backgroundColourId, juce::Colour(panel));
+     nowLabel_.setText("NOW: STOPPED", juce::dontSendNotification);
+-    nowLabel_.setFont(juce::FontOptions(30.0f, juce::Font::bold));
++    nowLabel_.setFont(juce::FontOptions(32.0f, juce::Font::bold));
++    nowLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
+     nowLabel_.setJustificationType(juce::Justification::centred);
+     nextLabel_.setText("NEXT: —", juce::dontSendNotification);
+     nextLabel_.setFont(juce::FontOptions(20.0f));
++    nextLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffbdc6d3));
+     nextLabel_.setJustificationType(juce::Justification::centred);
+-    liveHint_.setText("Las transiciones estructurales del núcleo son cuantizadas. Esta build inicia con monitoreo PA apagado por seguridad.", juce::dontSendNotification);
++    liveHint_.setText("LIVE WORSHIP · cambios cuantizados · FREE / PAD mantiene ambiente · monitoreo PA arranca apagado", juce::dontSendNotification);
+     liveHint_.setJustificationType(juce::Justification::centred);
+-    liveHint_.setColour(juce::Label::textColourId, juce::Colour(0xffaab2bf));
++    liveHint_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+     livePage_.addAndMakeVisible(nowLabel_);
+     livePage_.addAndMakeVisible(nextLabel_);
+     livePage_.addAndMakeVisible(liveHint_);
+@@ -127,32 +179,89 @@
+     for (size_t i = 0; i < names.size(); ++i)
+     {
+         auto b = std::make_unique<juce::TextButton>(names[i]);
+-        b->setColour(juce::TextButton::buttonColourId, i == 6 ? juce::Colour(0xff6346a8) : juce::Colour(panel2));
++        b->setColour(juce::TextButton::buttonColourId, i == 6 ? juce::Colour(0xff593d86) : juce::Colour(panel2));
+         b->setColour(juce::TextButton::buttonOnColourId, juce::Colour(accent));
++        b->setColour(juce::TextButton::textColourOffId, juce::Colour(text));
++        b->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+         b->onClick = [this, name = names[i], kind = kinds[i]] { setLiveSection(name, kind, kind == j3::SectionKind::FreePad ? 1 : 4); };
+         livePage_.addAndMakeVisible(*b);
+         liveButtons_[i] = std::move(b);
+     }
+ 
+-    mixerPage_.setOpaque(true);
+-    mixerPage_.setColour(juce::Component::backgroundColourId, juce::Colour(panel));
+     for (int i = 0; i < kVisibleChannels; ++i)
+     {
+         strips_[i] = std::make_unique<MixerStrip>(i, channelGain_[i], channelPan_[i], channelMute_[i], channelMeter_[i]);
+         mixerPage_.addAndMakeVisible(*strips_[i]);
+     }
+ 
+-    diagnosticsPage_.setOpaque(true);
+-    diagnosticsPage_.setColour(juce::Component::backgroundColourId, juce::Colour(panel));
+-    diagnosticsLabel_.setFont(juce::FontOptions(18.0f));
++    setupTitle_.setText("AUDIO & ROUTING", juce::dontSendNotification);
++    setupTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
++    setupTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
++    setupPage_.addAndMakeVisible(setupTitle_);
++
++    setupDeviceLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffbdc6d3));
++    setupDeviceLabel_.setFont(juce::FontOptions(16.0f));
++    setupDeviceLabel_.setJustificationType(juce::Justification::topLeft);
++    setupPage_.addAndMakeVisible(setupDeviceLabel_);
++
++    routingTitle_.setText("SAFE OUTPUT ROUTING", juce::dontSendNotification);
++    routingTitle_.setFont(juce::FontOptions(16.0f, juce::Font::bold));
++    routingTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
++    setupPage_.addAndMakeVisible(routingTitle_);
++
++    paLeftLabel_.setText("PA LEFT / MONO", juce::dontSendNotification);
++    paRightLabel_.setText("PA RIGHT", juce::dontSendNotification);
++    clickLabel_.setText("CLICK / GUIDE", juce::dontSendNotification);
++    for (auto* label : { &paLeftLabel_, &paRightLabel_, &clickLabel_ })
++    {
++        label->setColour(juce::Label::textColourId, juce::Colour(mutedText));
++        setupPage_.addAndMakeVisible(*label);
++    }
++    setupPage_.addAndMakeVisible(paLeftBox_);
++    setupPage_.addAndMakeVisible(paRightBox_);
++    setupPage_.addAndMakeVisible(clickBox_);
++    paLeftBox_.onChange = [this] { applyRoutingFromControls(); };
++    paRightBox_.onChange = [this] { applyRoutingFromControls(); };
++    clickBox_.onChange = [this] { applyRoutingFromControls(); };
++
++    rescanButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
++    testOutputButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
++    driverPanelButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
++    rescanButton_.onClick = [this]
++    {
++        scanAvailableDevices();
++        updateDiagnostics();
++        refreshRoutingControls();
++    };
++    testOutputButton_.onClick = [this]
++    {
++        if (deviceManager_.getCurrentAudioDevice() == nullptr)
++            showAudioError("No hay un dispositivo de audio activo.");
++        else
++            deviceManager_.playTestSound();
++    };
++    driverPanelButton_.onClick = [this] { openDriverControlPanel(); };
++    setupPage_.addAndMakeVisible(rescanButton_);
++    setupPage_.addAndMakeVisible(testOutputButton_);
++    setupPage_.addAndMakeVisible(driverPanelButton_);
++
++    diagnosticsLabel_.setFont(juce::FontOptions(16.5f));
++    diagnosticsLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd4dbe5));
+     diagnosticsLabel_.setJustificationType(juce::Justification::topLeft);
+     diagnosticsPage_.addAndMakeVisible(diagnosticsLabel_);
+-    runCheckButton_.onClick = [this] { updateDiagnostics(); };
++    runCheckButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
++    runCheckButton_.onClick = [this]
++    {
++        scanAvailableDevices();
++        updateDiagnostics();
++    };
+     diagnosticsPage_.addAndMakeVisible(runCheckButton_);
+ 
+     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
++    tabs_.setTabBarDepth(46);
+     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
+     tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
++    tabs_.addTab("AUDIO / ROUTING", juce::Colour(panel), &setupPage_, false);
+     tabs_.addTab("SYSTEM CHECK", juce::Colour(panel), &diagnosticsPage_, false);
+     addAndMakeVisible(tabs_);
+ 
+@@ -163,8 +272,11 @@
+ 
+ MainComponent::~MainComponent()
+ {
++    shuttingDown_.store(true, std::memory_order_release);
+     stopTimer();
+     liveMonitorEnabled_.store(false, std::memory_order_release);
++    saveAudioState();
++    deviceManager_.removeChangeListener(this);
+     deviceManager_.removeAudioCallback(this);
+     deviceManager_.closeAudioDevice();
+ }
+@@ -172,30 +284,31 @@
+ void MainComponent::paint(juce::Graphics& g)
+ {
+     g.fillAll(juce::Colour(background));
+-    auto top = getLocalBounds().removeFromTop(62);
+-    g.setColour(juce::Colour(0xff15181d));
++    auto top = getLocalBounds().removeFromTop(66);
++    g.setColour(juce::Colour(topBar));
+     g.fillRect(top);
+-    g.setColour(juce::Colour(0xff2a3039));
+-    g.drawHorizontalLine(61, 0.0f, static_cast<float>(getWidth()));
++    g.setColour(juce::Colour(0xff2a3340));
++    g.drawHorizontalLine(65, 0.0f, static_cast<float>(getWidth()));
+ }
+ 
+ void MainComponent::resized()
+ {
+     auto area = getLocalBounds();
+-    auto top = area.removeFromTop(62).reduced(16, 8);
+-    brandLabel_.setBounds(top.removeFromLeft(220));
++    auto top = area.removeFromTop(66).reduced(16, 8);
++    brandLabel_.setBounds(top.removeFromLeft(190));
++    versionLabel_.setBounds(top.removeFromLeft(100).reduced(0, 11));
+     audioSettingsButton_.setBounds(top.removeFromRight(150));
+-    top.removeFromRight(8);
+-    liveMonitorButton_.setBounds(top.removeFromRight(130));
+-    top.removeFromRight(8);
+-    statusLabel_.setBounds(top.removeFromRight(420));
++    top.removeFromRight(10);
++    liveMonitorButton_.setBounds(top.removeFromRight(132));
++    top.removeFromRight(10);
++    statusLabel_.setBounds(top.removeFromRight(510));
+     tabs_.setBounds(area.reduced(10));
+ 
+     auto liveArea = livePage_.getLocalBounds().reduced(24);
+-    nowLabel_.setBounds(liveArea.removeFromTop(55));
++    nowLabel_.setBounds(liveArea.removeFromTop(58));
+     nextLabel_.setBounds(liveArea.removeFromTop(38));
+     liveHint_.setBounds(liveArea.removeFromTop(36));
+-    liveArea.removeFromTop(20);
++    liveArea.removeFromTop(18);
+     const int gap = 12;
+     const int columns = 4;
+     const int rows = 2;
+@@ -210,35 +323,147 @@
+     }
+ 
+     auto mixerArea = mixerPage_.getLocalBounds().reduced(12);
+-    const int stripW = mixerArea.getWidth() / kVisibleChannels;
++    const int stripW = std::max(1, mixerArea.getWidth() / kVisibleChannels);
+     for (int i = 0; i < kVisibleChannels; ++i)
+         strips_[i]->setBounds(mixerArea.removeFromLeft(stripW).reduced(3));
+ 
++    auto setup = setupPage_.getLocalBounds().reduced(32);
++    setupTitle_.setBounds(setup.removeFromTop(42));
++    setupDeviceLabel_.setBounds(setup.removeFromTop(160));
++    setup.removeFromTop(14);
++    routingTitle_.setBounds(setup.removeFromTop(32));
++    auto routeRow = setup.removeFromTop(78);
++    const int routeGap = 16;
++    const int routeWidth = (routeRow.getWidth() - routeGap * 2) / 3;
++    auto left = routeRow.removeFromLeft(routeWidth);
++    routeRow.removeFromLeft(routeGap);
++    auto right = routeRow.removeFromLeft(routeWidth);
++    routeRow.removeFromLeft(routeGap);
++    auto click = routeRow;
++    paLeftLabel_.setBounds(left.removeFromTop(24));
++    paLeftBox_.setBounds(left.removeFromTop(36));
++    paRightLabel_.setBounds(right.removeFromTop(24));
++    paRightBox_.setBounds(right.removeFromTop(36));
++    clickLabel_.setBounds(click.removeFromTop(24));
++    clickBox_.setBounds(click.removeFromTop(36));
++    setup.removeFromTop(20);
++    auto buttons = setup.removeFromTop(44);
++    rescanButton_.setBounds(buttons.removeFromLeft(180));
++    buttons.removeFromLeft(12);
++    testOutputButton_.setBounds(buttons.removeFromLeft(170));
++    buttons.removeFromLeft(12);
++    driverPanelButton_.setBounds(buttons.removeFromLeft(220));
++
+     auto d = diagnosticsPage_.getLocalBounds().reduced(28);
+     runCheckButton_.setBounds(d.removeFromTop(44).removeFromLeft(210));
+-    d.removeFromTop(20);
++    d.removeFromTop(18);
+     diagnosticsLabel_.setBounds(d);
+ }
+ 
++juce::File MainComponent::getAudioStateFile() const
++{
++    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
++        .getChildFile("J3 Worship")
++        .getChildFile("audio-device.xml");
++}
++
+ void MainComponent::configureAudio()
+ {
+-    auto error = deviceManager_.initialise(0, 2, nullptr, true, {}, nullptr);
++    deviceManager_.addChangeListener(this);
++    const auto stateFile = getAudioStateFile();
++    std::unique_ptr<juce::XmlElement> savedState;
++    if (stateFile.existsAsFile())
++        savedState = juce::XmlDocument::parse(stateFile);
++
++    auto error = deviceManager_.initialise(kMaxChannels, kMaxChannels, savedState.get(), true, {}, nullptr);
++    if (error.isNotEmpty() && savedState != nullptr)
++        error = deviceManager_.initialise(kMaxChannels, kMaxChannels, nullptr, true, {}, nullptr);
++
+     if (error.isNotEmpty())
+     {
++        lastAudioError_ = error;
+         statusLabel_.setText("Audio: requiere configuración", juce::dontSendNotification);
+         statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
+     }
+     else
+     {
++        if (savedState == nullptr)
++            preferAsioWhenAvailable(true);
+         deviceManager_.addAudioCallback(this);
+-        updateDiagnostics();
++    }
++
++    scanAvailableDevices();
++    refreshRoutingControls();
++    updateDiagnostics();
++    saveAudioState();
++}
++
++void MainComponent::preferAsioWhenAvailable(bool onlyIfNoSavedState)
++{
++    juce::ignoreUnused(onlyIfNoSavedState);
++#if JUCE_WINDOWS && JUCE_ASIO
++    for (auto* type : deviceManager_.getAvailableDeviceTypes())
++    {
++        if (type == nullptr || !type->getTypeName().containsIgnoreCase("ASIO"))
++            continue;
++        type->scanForDevices();
++        const auto outputs = type->getDeviceNames(false);
++        const auto inputs = type->getDeviceNames(true);
++        if (!outputs.isEmpty() || !inputs.isEmpty())
++        {
++            deviceManager_.setCurrentAudioDeviceType(type->getTypeName(), true);
++            return;
++        }
++    }
++#endif
++}
++
++void MainComponent::scanAvailableDevices()
++{
++    juce::String inventory;
++    for (auto* type : deviceManager_.getAvailableDeviceTypes())
++    {
++        if (type == nullptr)
++            continue;
++        type->scanForDevices();
++        const auto outputs = type->getDeviceNames(false);
++        const auto inputs = type->getDeviceNames(true);
++        inventory << type->getTypeName() << ": ";
++        if (outputs.isEmpty() && inputs.isEmpty())
++        {
++            inventory << "no devices";
++        }
++        else
++        {
++            juce::StringArray unique;
++            unique.addArray(outputs);
++            unique.addArray(inputs);
++            unique.removeDuplicates(false);
++            inventory << unique.joinIntoString(", ");
++        }
++        inventory << "\n";
++    }
++    deviceInventory_ = inventory.trimEnd();
++}
++
++void MainComponent::saveAudioState()
++{
++    if (shuttingDown_.load(std::memory_order_acquire) && deviceManager_.getCurrentAudioDevice() == nullptr)
++        return;
++
++    if (auto state = deviceManager_.createStateXml())
++    {
++        const auto file = getAudioStateFile();
++        const auto result = file.getParentDirectory().createDirectory();
++        if (result.wasOk())
++            file.replaceWithText(state->toString(), false, false, "\n");
+     }
+ }
+ 
+ void MainComponent::openAudioSettings()
+ {
+     auto selector = std::make_unique<juce::AudioDeviceSelectorComponent>(deviceManager_, 0, kMaxChannels, 0, kMaxChannels, true, true, true, false);
+-    selector->setSize(760, 640);
++    selector->setSize(800, 680);
+ 
+     juce::DialogWindow::LaunchOptions options;
+     options.content.setOwned(selector.release());
+@@ -250,34 +475,142 @@
+     options.launchAsync();
+ }
+ 
++void MainComponent::openDriverControlPanel()
++{
++    if (auto* device = deviceManager_.getCurrentAudioDevice())
++    {
++        if (device->hasControlPanel())
++        {
++            device->showControlPanel();
++            return;
++        }
++    }
++    showAudioError("El driver actual no expone un panel de control propio. Usá AUDIO / MIDI para cambiar sample rate, buffer o dispositivo.");
++}
++
+ void MainComponent::showAudioError(const juce::String& message)
+ {
+     juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "J3 Worship", message);
+ }
+ 
++juce::String MainComponent::buildDeviceInventoryText() const
++{
++    if (deviceInventory_.isEmpty())
++        return "No se escanearon drivers todavía.";
++    return deviceInventory_;
++}
++
++void MainComponent::refreshRoutingControls()
++{
++    paLeftBox_.clear(juce::dontSendNotification);
++    paRightBox_.clear(juce::dontSendNotification);
++    clickBox_.clear(juce::dontSendNotification);
++    clickBox_.addItem("OFF / NOT ROUTED", 1);
++
++    auto* device = deviceManager_.getCurrentAudioDevice();
++    if (device == nullptr)
++    {
++        setupDeviceLabel_.setText("No hay interfaz activa. Abrí AUDIO / MIDI para elegir un driver.", juce::dontSendNotification);
++        clickBox_.setSelectedId(1, juce::dontSendNotification);
++        return;
++    }
++
++    const auto names = device->getOutputChannelNames();
++    const int outputCount = names.size();
++    for (int i = 0; i < outputCount; ++i)
++    {
++        const auto label = juce::String(i + 1) + " · " + outputName(*device, i);
++        paLeftBox_.addItem(label, i + 1);
++        paRightBox_.addItem(label, i + 1);
++        clickBox_.addItem(label, i + 2);
++    }
++
++    const int left = juce::jlimit(0, std::max(0, outputCount - 1), paLeft_.load());
++    const int rightDefault = outputCount > 1 ? 1 : 0;
++    const int right = juce::jlimit(0, std::max(0, outputCount - 1), paRight_.load() < outputCount ? paRight_.load() : rightDefault);
++    paLeft_.store(left);
++    paRight_.store(right);
++    paLeftBox_.setSelectedId(outputCount > 0 ? left + 1 : 0, juce::dontSendNotification);
++    paRightBox_.setSelectedId(outputCount > 0 ? right + 1 : 0, juce::dontSendNotification);
++
++    const int click = clickOutput_.load();
++    if (click >= 0 && click < outputCount && click != left && click != right)
++        clickBox_.setSelectedId(click + 2, juce::dontSendNotification);
++    else
++    {
++        clickOutput_.store(-1);
++        clickBox_.setSelectedId(1, juce::dontSendNotification);
++    }
++
++    setupDeviceLabel_.setText("ACTIVE DEVICE\n" + device->getName() + "  ·  " + deviceManager_.getCurrentAudioDeviceType()
++        + "\n" + juce::String(device->getActiveInputChannels().countNumberOfSetBits()) + " active inputs  ·  "
++        + juce::String(device->getActiveOutputChannels().countNumberOfSetBits()) + " active outputs\n"
++        + "PA and monitor routes remain muted until LIVE INPUTS is enabled.", juce::dontSendNotification);
++}
++
++void MainComponent::applyRoutingFromControls()
++{
++    const int newLeft = paLeftBox_.getSelectedId() > 0 ? paLeftBox_.getSelectedId() - 1 : 0;
++    const int newRight = paRightBox_.getSelectedId() > 0 ? paRightBox_.getSelectedId() - 1 : newLeft;
++    const int newClick = clickBox_.getSelectedId() <= 1 ? -1 : clickBox_.getSelectedId() - 2;
++
++    if (!routeIsSafe(newLeft, newRight, newClick))
++    {
++        clickOutput_.store(-1);
++        clickBox_.setSelectedId(1, juce::dontSendNotification);
++        showAudioError("J3 SAFE ROUTING bloqueó esa selección: CLICK / GUIDE no puede ir a una salida usada por el PA.");
++    }
++    else
++    {
++        paLeft_.store(newLeft);
++        paRight_.store(newRight);
++        clickOutput_.store(newClick);
++    }
++    updateDiagnostics();
++}
++
+ void MainComponent::updateDiagnostics()
+ {
+     juce::String report;
+-    if (const auto* d = deviceManager_.getCurrentAudioDevice())
++    if (auto* d = deviceManager_.getCurrentAudioDevice())
+     {
+         const auto sr = d->getCurrentSampleRate();
+         const auto bs = d->getCurrentBufferSizeSamples();
+         const auto inLatencyMs = sr > 0.0 ? (1000.0 * d->getInputLatencyInSamples() / sr) : 0.0;
+         const auto outLatencyMs = sr > 0.0 ? (1000.0 * d->getOutputLatencyInSamples() / sr) : 0.0;
++        const auto activeInputs = d->getActiveInputChannels().countNumberOfSetBits();
++        const auto activeOutputs = d->getActiveOutputChannels().countNumberOfSetBits();
++        const auto xruns = deviceManager_.getXRunCount();
++        const auto isAsio = deviceManager_.getCurrentAudioDeviceType().containsIgnoreCase("ASIO");
++
+         report << "✓ AUDIO DEVICE\n    " << d->getName() << "\n\n";
+-        report << "✓ DRIVER TYPE\n    " << deviceManager_.getCurrentAudioDeviceType() << "\n\n";
++        report << (isAsio ? "✓" : "⚠") << " DRIVER TYPE\n    " << deviceManager_.getCurrentAudioDeviceType();
++        if (!isAsio)
++            report << "  (ASIO recommended for lowest-latency live use when the interface provides it)";
++        report << "\n\n";
++        report << "✓ I/O\n    " << activeInputs << " active inputs  ·  " << activeOutputs << " active outputs\n\n";
+         report << "✓ SAMPLE RATE\n    " << juce::String(sr, 0) << " Hz\n\n";
+         report << "✓ BUFFER\n    " << bs << " samples\n\n";
+         report << "✓ REPORTED I/O LATENCY\n    Input " << juce::String(inLatencyMs, 2)
+                << " ms  ·  Output " << juce::String(outLatencyMs, 2) << " ms\n\n";
++        report << (xruns == 0 ? "✓" : "⚠") << " XRUNS / DROPOUTS\n    " << xruns << "\n\n";
++        report << (routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load()) ? "✓" : "✕")
++               << " SAFE ROUTING\n    PA L " << (paLeft_.load() + 1) << "  ·  PA R " << (paRight_.load() + 1)
++               << "  ·  CLICK " << (clickOutput_.load() < 0 ? juce::String("OFF") : juce::String(clickOutput_.load() + 1)) << "\n\n";
+         report << (liveMonitorEnabled_.load() ? "⚠ LIVE INPUT MONITORING: ON" : "✓ LIVE INPUT MONITORING: OFF (safe default)") << "\n\n";
+-        report << "VST3 / hardware-specific validation: run on this Windows machine with the intended plugins and interface.";
+-        statusLabel_.setText("Audio: " + d->getName() + " · " + juce::String(sr / 1000.0, 1) + " kHz · " + juce::String(bs) + " smp", juce::dontSendNotification);
+-        statusLabel_.setColour(juce::Label::textColourId, juce::Colour(good));
++        if (lastAudioError_.isNotEmpty())
++            report << "⚠ LAST AUDIO ERROR\n    " << lastAudioError_ << "\n\n";
++        report << "AVAILABLE AUDIO DRIVERS\n" << buildDeviceInventoryText();
++
++        statusLabel_.setText("Audio: " + d->getName() + " · " + deviceManager_.getCurrentAudioDeviceType()
++            + " · " + juce::String(sr / 1000.0, 1) + " kHz · " + juce::String(bs) + " smp", juce::dontSendNotification);
++        statusLabel_.setColour(juce::Label::textColourId, xruns == 0 ? juce::Colour(good) : juce::Colour(warning));
+     }
+     else
+     {
+-        report = "✕ AUDIO DEVICE\n    No hay dispositivo seleccionado.\n\nAbrí AUDIO / MIDI y elegí un driver. En Windows, J3 Worship habilita ASIO.";
++        report = "✕ AUDIO DEVICE\n    No hay dispositivo seleccionado.\n\nAbrí AUDIO / MIDI y elegí un driver. J3 Worship soporta cualquier interfaz que Windows exponga a JUCE mediante ASIO o WASAPI.\n\nAVAILABLE AUDIO DRIVERS\n" + buildDeviceInventoryText();
++        if (lastAudioError_.isNotEmpty())
++            report << "\n\nLAST ERROR\n" << lastAudioError_;
+         statusLabel_.setText("Audio: sin dispositivo", juce::dontSendNotification);
+         statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
+     }
+@@ -340,6 +673,7 @@
+     if (outL == nullptr || outR == nullptr)
+         return;
+ 
++    const bool mono = left == right;
+     const auto master = masterGain_.load(std::memory_order_relaxed);
+     const int channels = std::min({ numInputChannels, kMaxChannels, kVisibleChannels });
+     for (int ch = 0; ch < channels; ++ch)
+@@ -359,8 +693,13 @@
+         {
+             auto x = channelDsp_[ch].process(in[i]);
+             peak = std::max(peak, std::abs(x));
+-            outL[i] += x * gl;
+-            outR[i] += x * gr;
++            if (mono)
++                outL[i] += x * gain;
++            else
++            {
++                outL[i] += x * gl;
++                outR[i] += x * gr;
++            }
+         }
+         auto previous = channelMeter_[ch].load(std::memory_order_relaxed);
+         while (peak > previous && !channelMeter_[ch].compare_exchange_weak(previous, peak, std::memory_order_relaxed)) {}
+@@ -369,7 +708,8 @@
+     for (int i = 0; i < numSamples; ++i)
+     {
+         outL[i] = std::tanh(outL[i]);
+-        outR[i] = std::tanh(outR[i]);
++        if (!mono)
++            outR[i] = std::tanh(outR[i]);
+     }
+ }
+ 
+@@ -377,15 +717,24 @@
+ {
+     if (device == nullptr)
+         return;
+-    sampleRate_.store(device->getCurrentSampleRate(), std::memory_order_release);
++
++    const auto sr = device->getCurrentSampleRate();
++    sampleRate_.store(sr, std::memory_order_release);
+     bufferSize_.store(device->getCurrentBufferSizeSamples(), std::memory_order_release);
+     for (auto& dsp : channelDsp_)
+-        dsp.prepare(device->getCurrentSampleRate());
++        dsp.prepare(sr);
+     audioRunning_.store(true, std::memory_order_release);
++    reconnectAttempts_ = 0;
++    lastAudioError_.clear();
++
+     juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this)]
+     {
+         if (safe != nullptr)
++        {
++            safe->refreshRoutingControls();
+             safe->updateDiagnostics();
++            safe->saveAudioState();
++        }
+     });
+ }
+ 
+@@ -393,6 +742,45 @@
+ {
+     audioRunning_.store(false, std::memory_order_release);
+     liveMonitorEnabled_.store(false, std::memory_order_release);
++    juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this)]
++    {
++        if (safe != nullptr)
++        {
++            safe->liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
++            safe->updateDiagnostics();
++        }
++    });
++}
++
++void MainComponent::audioDeviceError(const juce::String& errorMessage)
++{
++    juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this), errorMessage]
++    {
++        if (safe == nullptr)
++            return;
++        safe->lastAudioError_ = errorMessage;
++        safe->liveMonitorEnabled_.store(false, std::memory_order_release);
++        safe->liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
++        safe->statusLabel_.setText("Audio error · intentando recuperar", juce::dontSendNotification);
++        safe->statusLabel_.setColour(juce::Label::textColourId, juce::Colour(danger));
++        safe->scheduleReconnect();
++        safe->updateDiagnostics();
++    });
++}
++
++void MainComponent::scheduleReconnect()
++{
++    audioRunning_.store(false, std::memory_order_release);
++    lastReconnectAttemptMs_ = 0;
++}
++
++void MainComponent::changeListenerCallback(juce::ChangeBroadcaster*)
++{
++    if (shuttingDown_.load(std::memory_order_acquire))
++        return;
++    saveAudioState();
++    refreshRoutingControls();
++    updateDiagnostics();
+ }
+ 
+ void MainComponent::timerCallback()
+@@ -403,4 +791,17 @@
+     static int ticks = 0;
+     if (++ticks % 30 == 0)
+         updateDiagnostics();
++
++    if (!audioRunning_.load(std::memory_order_acquire) && !shuttingDown_.load(std::memory_order_acquire)
++        && deviceManager_.getCurrentAudioDevice() != nullptr)
++    {
++        const auto now = static_cast<std::uint64_t>(juce::Time::getMillisecondCounterHiRes());
++        const auto waitMs = static_cast<std::uint64_t>(std::min(10000, 2000 + reconnectAttempts_ * 1500));
++        if (lastReconnectAttemptMs_ == 0 || now - lastReconnectAttemptMs_ >= waitMs)
++        {
++            lastReconnectAttemptMs_ = now;
++            ++reconnectAttempts_;
++            deviceManager_.restartLastAudioDevice();
++        }
++    }
+ }
+diff -ruN /mnt/data/J3old/app/MainComponent.h /mnt/data/J3newdiff/app/MainComponent.h
+--- /mnt/data/J3old/app/MainComponent.h	2026-09-24 19:02:04.000000000 +0000
++++ /mnt/data/J3newdiff/app/MainComponent.h	2026-09-24 19:31:22.000000000 +0000
+@@ -1,14 +1,18 @@
+ #pragma once
++
+ #include <JuceHeader.h>
+ #include "j3/Dsp.h"
+ #include "j3/LiveEngine.h"
++
+ #include <array>
+ #include <atomic>
++#include <cstdint>
+ #include <memory>
+ 
+ class MainComponent final : public juce::Component,
+                             private juce::AudioIODeviceCallback,
+-                            private juce::Timer
++                            private juce::Timer,
++                            private juce::ChangeListener
+ {
+ public:
+     MainComponent();
+@@ -26,8 +30,10 @@
+     public:
+         MixerStrip(int index, std::atomic<float>& gain, std::atomic<float>& pan,
+                    std::atomic<bool>& muted, std::atomic<float>& meter);
++        void paint(juce::Graphics&) override;
+         void resized() override;
+         void timerTick();
++
+     private:
+         int index_{};
+         std::atomic<float>& gain_;
+@@ -38,17 +44,26 @@
+         juce::Slider fader_;
+         juce::Slider panSlider_;
+         juce::ToggleButton muteButton_ { "MUTE" };
+-        juce::ProgressBar meterBar_;
+         double meterValue_ { 0.0 };
++        juce::ProgressBar meterBar_;
+     };
+ 
+     void configureAudio();
++    void preferAsioWhenAvailable(bool onlyIfNoSavedState);
++    void scanAvailableDevices();
++    void saveAudioState();
++    juce::File getAudioStateFile() const;
+     void openAudioSettings();
++    void openDriverControlPanel();
+     void showAudioError(const juce::String&);
+     void updateDiagnostics();
++    void refreshRoutingControls();
++    void applyRoutingFromControls();
++    juce::String buildDeviceInventoryText() const;
+     void setLiveSection(const juce::String& name, j3::SectionKind kind, int bars = 4);
+     void refreshLiveLabels();
+     bool routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept;
++    void scheduleReconnect();
+ 
+     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
+                                           int numInputChannels,
+@@ -58,7 +73,9 @@
+                                           const juce::AudioIODeviceCallbackContext&) override;
+     void audioDeviceAboutToStart(juce::AudioIODevice*) override;
+     void audioDeviceStopped() override;
++    void audioDeviceError(const juce::String& errorMessage) override;
+     void timerCallback() override;
++    void changeListenerCallback(juce::ChangeBroadcaster*) override; 
+     juce::AudioDeviceManager deviceManager_;
+     std::atomic<double> sampleRate_ { 48000.0 };
+@@ -74,8 +91,14 @@
+     std::atomic<int> paRight_ { 1 };
+     std::atomic<int> clickOutput_ { -1 };
+     std::atomic<float> masterGain_ { 0.8f };
++    std::atomic<bool> shuttingDown_ { false };
++    std::uint64_t lastReconnectAttemptMs_ { 0 };
++    int reconnectAttempts_ { 0 };
++    juce::String lastAudioError_;
++    juce::String deviceInventory_;
+ 
+     juce::Label brandLabel_;
++    juce::Label versionLabel_;
+     juce::Label statusLabel_;
+     juce::TextButton audioSettingsButton_ { "AUDIO / MIDI" };
+     juce::ToggleButton liveMonitorButton_ { "LIVE INPUTS" };
+@@ -92,6 +115,20 @@
+     juce::Component mixerPage_;
+     std::array<std::unique_ptr<MixerStrip>, kVisibleChannels> strips_;
+ 
++    juce::Component setupPage_;
++    juce::Label setupTitle_;
++    juce::Label setupDeviceLabel_;
++    juce::Label routingTitle_;
++    juce::Label paLeftLabel_;
++    juce::Label paRightLabel_;
++    juce::Label clickLabel_;
++    juce::ComboBox paLeftBox_;
++    juce::ComboBox paRightBox_;
++    juce::ComboBox clickBox_;
++    juce::TextButton rescanButton_ { "RESCAN DEVICES" };
++    juce::TextButton testOutputButton_ { "TEST OUTPUT" };
++    juce::TextButton driverPanelButton_ { "DRIVER CONTROL PANEL" };
++
+     juce::Component diagnosticsPage_;
+     juce::Label diagnosticsLabel_;
+     juce::TextButton runCheckButton_ { "RUN SYSTEM CHECK" };
+diff -ruN /mnt/data/J3old/docs/TEST_REPORT.md /mnt/data/J3newdiff/docs/TEST_REPORT.md
+--- /mnt/data/J3old/docs/TEST_REPORT.md	2026-09-24 19:03:03.000000000 +0000
++++ /mnt/data/J3newdiff/docs/TEST_REPORT.md	2026-09-24 19:33:32.000000000 +0000
+@@ -1,33 +1,38 @@
+-# J3 Worship test report — 0.3.0-alpha
++# J3 Worship Test Report — 0.4.0-alpha
+ 
+-## Core tests already executed in the development environment
+-- Release test suite: PASS
+-- AddressSanitizer: PASS
+-- UndefinedBehaviorSanitizer: PASS
++## Native core
++- Release build: PASS
++- Core functional tests: PASS
++- AddressSanitizer + UndefinedBehaviorSanitizer: PASS
+ - ThreadSanitizer: PASS
+ 
+-Covered core behaviors include DSP, routing safety, loop prevention, LIVE section state, FREE/PAD state, setlists, scenes/safe channels, MIDI mapping, Auto Setup, recording queue/writer behavior, session recovery, plugin catalog/quarantine model and update safety rules.
++## Covered core behavior
++- generic audio-device capability model (2x2 through multichannel)
++- device disconnect/reconnect state
++- dropout counter
++- safe routing: Click/Guide direct-to-PA blocked
++- routing-cycle prevention
++- drum/vocal presets and conservative pan behavior
++- scenes and safe channels
++- LIVE quantized transitions and FREE/PAD
++- click timing/accent model
++- DSP stress: HPF, LPF, parametric EQ, gate, compressor, denoise
++- seamless pad loop model
++- stem-name classification
++- setlist reorder/current/next/advance
++- MIDI mapping
++- independent IEM mix model and copy-mix
++- worship Auto Setup layout
++- Panic behavior preserving live inputs
++- SPSC queue ordering/overflow
++- atomic session recovery
++- multitrack WAV recording on worker thread
++- VST3 catalog discovery/search/quarantine model
++- updater semantic-version and live/recording safety rules
++- diagnostic report generation
+ 
+-## Windows CI gate
+-The repository Windows workflow must:
+-1. configure with Visual Studio 2022 x64;
+-2. fetch pinned JUCE 9.0.2;
+-3. compile the native GUI application with ASIO enabled;
+-4. compile the native core;
+-5. run the core tests in Release;
+-6. verify `J3Worship.exe` exists;
+-7. generate `J3Worship-Setup.exe` with Inno Setup;
+-8. calculate SHA-256 hashes;
+-9. upload both app and installer artifacts.
++## Windows CI finding fixed in 0.4
++The initial Windows test executable crashed because MultiTrackRecorder embedded approximately 4 MB of preallocated recording queue storage directly in a stack object. Windows' default executable stack is substantially smaller than typical Linux defaults. The queue is now allocated once on the heap before recording; no heap allocation is added to the real-time submit path. Release/ASan/UBSan/TSan tests pass after this change.
+ 
+-A successful CI run is a build/integration validation, not a substitute for physical audio validation.
+-
+-## Physical validation still required
+-- at least one real ASIO interface on Windows (XR18, Focusrite or equivalent)
+-- input/output channel mapping
+-- PA/IEM isolation and click/guide safety
+-- long-duration low-latency run
+-- disconnect/reconnect behavior
+-- VST3 commercial plugins intended for use
+-- MIDI controller(s)
+-- recording to the target storage device
++## Hardware boundary
++CI cannot physically validate vendor drivers or analog/digital wiring. Representative hardware tests remain required for production certification (at minimum: one 2x2 ASIO interface, one multichannel USB interface, and one digital mixer such as XR18/X32-class hardware). The application is deliberately device-agnostic and uses runtime enumeration instead of vendor-specific hardcoding.
+diff -ruN /mnt/data/J3old/include/j3/Recording.h /mnt/data/J3newdiff/include/j3/Recording.h
+--- /mnt/data/J3old/include/j3/Recording.h	2026-09-24 18:48:09.000000000 +0000
++++ /mnt/data/J3newdiff/include/j3/Recording.h	2026-09-24 19:32:12.000000000 +0000
+@@ -34,7 +34,7 @@
+ 
+ class MultiTrackRecorder {
+ public:
+-    MultiTrackRecorder() = default;
++    MultiTrackRecorder();
+     ~MultiTrackRecorder();
+     bool start(const std::filesystem::path& directory, std::uint32_t sampleRate, const std::vector<std::string>& channelNames, std::string& error);
+     bool submit(const float* const* inputs, std::size_t channels, std::size_t frames) noexcept;
+@@ -45,7 +45,7 @@
+ private:
+     void workerMain();
+     static std::string safeName(std::string name);
+-    SpscRing<RecordingBlock, 64> queue_;
++    std::unique_ptr<SpscRing<RecordingBlock, 64>> queue_;
+     std::vector<std::unique_ptr<FloatWavWriter>> writers_;
+     std::thread worker_;
+     std::atomic_bool running_{false};
+diff -ruN /mnt/data/J3old/installer/J3Worship.iss /mnt/data/J3newdiff/installer/J3Worship.iss
+--- /mnt/data/J3old/installer/J3Worship.iss	2026-09-24 19:03:03.000000000 +0000
++++ /mnt/data/J3newdiff/installer/J3Worship.iss	2026-09-24 19:31:22.000000000 +0000
+@@ -1,5 +1,5 @@
+ #define MyAppName "J3 Worship"
+-#define MyAppVersion "0.3.0-alpha"
++#define MyAppVersion "0.4.0-alpha"
+ #define MyAppPublisher "J3 Worship"
+ #define MyAppExeName "J3Worship.exe"
+ 
+@@ -18,7 +18,7 @@
+ ArchitecturesInstallIn64BitMode=x64compatible
+ WizardStyle=modern
+ UninstallDisplayIcon={app}\{#MyAppExeName}
+-VersionInfoVersion=0.3.0.0
++VersionInfoVersion=0.4.0.0
+ VersionInfoCompany=J3 Worship
+ VersionInfoDescription=J3 Worship Installer
+ VersionInfoProductName=J3 Worship
+diff -ruN /mnt/data/J3old/src/Recording.cpp /mnt/data/J3newdiff/src/Recording.cpp
+--- /mnt/data/J3old/src/Recording.cpp	2026-09-24 18:48:24.000000000 +0000
++++ /mnt/data/J3newdiff/src/Recording.cpp	2026-09-24 19:32:12.000000000 +0000
+@@ -21,6 +21,7 @@
+ bool FloatWavWriter::writeInterleaved(const float* s,std::size_t frames,std::string& error){ if(!out_){error="WAV not open";return false;} out_.write(reinterpret_cast<const char*>(s),static_cast<std::streamsize>(frames*channels_*sizeof(float))); if(!out_){error="WAV write failed";return false;} framesWritten_+=frames;return true; }
+ bool FloatWavWriter::close(std::string& error){ if(!out_.is_open()) return true; const auto bytes64=framesWritten_*channels_*sizeof(float); if(bytes64>0xFFFFFFFFull){error="WAV exceeded RIFF 4GB limit";out_.close();return false;} writeHeader(out_,sampleRate_,channels_,static_cast<std::uint32_t>(bytes64)); out_.flush(); const bool ok=static_cast<bool>(out_); out_.close(); if(!ok)error="WAV finalization failed"; return ok; }
+ 
++MultiTrackRecorder::MultiTrackRecorder() : queue_(std::make_unique<SpscRing<RecordingBlock, 64>>()) {}
+ MultiTrackRecorder::~MultiTrackRecorder(){ std::string ignored; stop(ignored); }
+ std::string MultiTrackRecorder::safeName(std::string n){ for(char&c:n) if(c=='/'||c=='\\'||c==':'||c=='*'||c=='?'||c=='\"'||c=='<'||c=='>'||c=='|') c='_'; if(n.empty())n="Channel"; return n; }
+ bool MultiTrackRecorder::start(const std::filesystem::path& dir,std::uint32_t sr,const std::vector<std::string>& names,std::string& error){
+@@ -32,12 +33,12 @@
+     if(!running_.load(std::memory_order_acquire)||channels!=writers_.size()||frames==0||frames>kRecordMaxFrames) return false;
+     RecordingBlock b; b.channels=static_cast<std::uint16_t>(channels); b.frames=static_cast<std::uint16_t>(frames);
+     for(std::size_t c=0;c<channels;++c) std::memcpy(b.planar.data()+c*kRecordMaxFrames,inputs[c],frames*sizeof(float));
+-    if(!queue_.push(b)){overflows_.fetch_add(1,std::memory_order_relaxed);return false;} return true;
++    if(!queue_->push(b)){overflows_.fetch_add(1,std::memory_order_relaxed);return false;} return true;
+ }
+ void MultiTrackRecorder::workerMain(){
+     RecordingBlock b; std::vector<float> mono(kRecordMaxFrames); std::string error;
+-    while(!stopRequested_.load(std::memory_order_acquire)||!queue_.empty()){
+-        if(!queue_.pop(b)){std::this_thread::sleep_for(std::chrono::milliseconds(1));continue;}
++    while(!stopRequested_.load(std::memory_order_acquire)||!queue_->empty()){
++        if(!queue_->pop(b)){std::this_thread::sleep_for(std::chrono::milliseconds(1));continue;}
+         for(std::size_t c=0;c<b.channels;++c){std::copy_n(b.planar.data()+c*kRecordMaxFrames,b.frames,mono.begin()); if(!writers_[c]->writeInterleaved(mono.data(),b.frames,error)) workerError_.store(true);}
+         blocksWritten_.fetch_add(1,std::memory_order_relaxed);
+     }
