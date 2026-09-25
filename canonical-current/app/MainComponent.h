@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "j3/Dsp.h"
+#include "j3/AmbientPad.h"
 #include "j3/LiveEngine.h"
 #include "j3/ClickGenerator.h"
 #include "j3/Recording.h"
@@ -119,6 +120,7 @@ private:
     void refreshLiveLabels();
     void updateClickUi();
     void handleTapTempo();
+    void refreshPadUi();
     bool routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept;
     bool iemRouteIsSafe(int mix, int left, int right) const noexcept;
     void scheduleReconnect();
@@ -155,6 +157,8 @@ private:
     std::atomic<bool> clickAudible_ { false };
     std::atomic<int> pendingBeatEvents_ { 0 };
     j3::ClickGenerator clickGenerator_;
+    j3::AmbientPad ambientPad_;
+    std::atomic<bool> padToPa_ { true };
     j3::MultiTrackRecorder recorder_;
     std::atomic<bool> recordingEnabled_ { false };
     std::atomic<int> recordChannelCount_ { 0 };
@@ -265,6 +269,15 @@ private:
     int selectedIemMix_ { 0 };
     int iemBankStart_ { 0 };
     std::array<std::unique_ptr<IemSendStrip>, kVisibleChannels> iemStrips_;
+
+    juce::Component padPage_;
+    juce::Label padTitle_;
+    juce::ComboBox padKeyBox_;
+    juce::ToggleButton padMinorButton_ { "MINOR" };
+    juce::ToggleButton padEnabledButton_ { "PAD ON" };
+    juce::ToggleButton padToPaButton_ { "ROUTE TO PA" };
+    juce::Slider padVolumeSlider_;
+    juce::Label padInfoLabel_;
 
     juce::Component clickPage_;
     juce::Label clickTitle_;
