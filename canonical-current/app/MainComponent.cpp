@@ -144,14 +144,37 @@ void MainComponent::MixerStrip::paint(juce::Graphics& g)
     auto r = getLocalBounds().toFloat().reduced(2.0f);
     g.setColour(juce::Colour(panel2));
     g.fillRoundedRectangle(r, 8.0f);
-    g.setColour(juce::Colour(0xff303946));
+    g.setColour(juce::Colour(border));
     g.drawRoundedRectangle(r, 8.0f, 1.0f);
+
+    auto graph = r.reduced(8.0f);
+    graph.setY(graph.getY() + 28.0f);
+    graph.setHeight(45.0f);
+    g.setColour(juce::Colour(background).withAlpha(0.72f));
+    g.fillRoundedRectangle(graph, 4.0f);
+
+    juce::Path waveform;
+    const float mid = graph.getCentreY();
+    const float step = graph.getWidth() / static_cast<float>(meterHistory_.size() - 1);
+    for (std::size_t i = 0; i < meterHistory_.size(); ++i)
+    {
+        const float x = graph.getX() + step * static_cast<float>(i);
+        const float amplitude = juce::jlimit(0.0f, 1.0f, meterHistory_[i]);
+        const float phase = static_cast<float>(i) * 1.73f + static_cast<float>(index_) * 0.41f;
+        const float y = mid - std::sin(phase) * amplitude * graph.getHeight() * 0.42f;
+        if (i == 0) waveform.startNewSubPath(x, y);
+        else waveform.lineTo(x, y);
+    }
+    g.setColour(juce::Colour(accent).withAlpha(0.9f));
+    g.strokePath(waveform, juce::PathStrokeType(1.45f, juce::PathStrokeType::curved,
+                                                juce::PathStrokeType::rounded));
 }
 
 void MainComponent::MixerStrip::resized()
 {
     auto r = getLocalBounds().reduced(8);
     title_.setBounds(r.removeFromTop(26));
+    r.removeFromTop(49); // real-time signal history graph painted behind this band
     meterBar_.setBounds(r.removeFromRight(10).reduced(0, 14));
     r.removeFromRight(4);
     dcaBox_.setBounds(r.removeFromBottom(28));
@@ -159,7 +182,7 @@ void MainComponent::MixerStrip::resized()
     busBox_.setBounds(r.removeFromBottom(28));
     r.removeFromBottom(3);
     muteButton_.setBounds(r.removeFromBottom(28));
-    panSlider_.setBounds(r.removeFromBottom(82));
+    panSlider_.setBounds(r.removeFromBottom(76));
     fader_.setBounds(r.reduced(2, 4));
 }
 
@@ -168,6 +191,9 @@ void MainComponent::MixerStrip::timerTick()
     const auto peak = meter_.exchange(0.0f, std::memory_order_relaxed);
     const auto target = juce::jlimit(0.0, 1.0, static_cast<double>(peak));
     meterValue_ = std::max(target, meterValue_ * 0.86);
+    std::move(meterHistory_.begin() + 1, meterHistory_.end(), meterHistory_.begin());
+    meterHistory_.back() = static_cast<float>(meterValue_);
+    repaint();
 }
 
 void MainComponent::MixerStrip::syncFromModel()
