@@ -646,6 +646,135 @@ void MainComponent::paint(juce::Graphics& g)
     g.drawHorizontalLine(65, 0.0f, static_cast<float>(getWidth()));
 }
 
+juce::String MainComponent::inputChannelName(int channel) const
+{
+    if (auto* device = deviceManager_.getCurrentAudioDevice())
+    {
+        const auto names = device->getInputChannelNames();
+        if (channel >= 0 && channel < names.size() && names[channel].isNotEmpty())
+            return names[channel];
+    }
+    return "IN " + juce::String(channel + 1);
+}
+
+void MainComponent::setMixerBank(int firstChannel)
+{
+    const int maxStart = std::max(0, kMaxChannels - kVisibleChannels);
+    const int snapped = (juce::jlimit(0, maxStart, firstChannel) / kVisibleChannels) * kVisibleChannels;
+    if (snapped == mixerBankStart_ && strips_[0] != nullptr)
+        return;
+    mixerBankStart_ = snapped;
+    rebuildMixerBank();
+    resized();
+}
+
+void MainComponent::rebuildMixerBank()
+{
+    for (int i = 0; i < kVisibleChannels; ++i)
+    {
+        strips_[i].reset();
+        const int channel = mixerBankStart_ + i;
+        strips_[i] = std::make_unique<MixerStrip>(
+            channel, inputChannelName(channel),
+            channelGain_[channel], channelPan_[channel], channelMute_[channel], channelMeter_[channel],
+            channelBus_[channel], channelDca_[channel]);
+        mixerPage_.addAndMakeVisible(*strips_[i]);
+    }
+    mixerBankLabel_.setText("INPUTS " + juce::String(mixerBankStart_ + 1) + "–"
+        + juce::String(std::min(kMaxChannels, mixerBankStart_ + kVisibleChannels))
+        + " / " + juce::String(kMaxChannels), juce::dontSendNotification);
+    mixerPrevButton_.setEnabled(mixerBankStart_ > 0);
+    mixerNextButton_.setEnabled(mixerBankStart_ + kVisibleChannels < kMaxChannels);
+}
+
+void MainComponent::rebuildIemBank()
+{
+    for (int i = 0; i < kVisibleChannels; ++i)
+    {
+        iemStrips_[i].reset();
+        const int channel = iemBankStart_ + i;
+        iemStrips_[i] = std::make_unique<IemSendStrip>(
+            channel, inputChannelName(channel),
+            iemSendGain_[selectedIemMix_][channel], iemSendPan_[selectedIemMix_][channel]);
+        iemPage_.addAndMakeVisible(*iemStrips_[i]);
+    }
+    iemBankLabel_.setText("SOURCES " + juce::String(iemBankStart_ + 1) + "–"
+        + juce::String(std::min(kMaxChannels, iemBankStart_ + kVisibleChannels))
+        + " / " + juce::String(kMaxChannels), juce::dontSendNotification);
+    iemPrevButton_.setEnabled(iemBankStart_ > 0);
+    iemNextButton_.setEnabled(iemBankStart_ + kVisibleChannels < kMaxChannels);
+}
+
+void MainComponent::refreshIemUi()
+{
+    const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+    const auto master = std::max(1.0e-6f, iemMaster_[mix].load(std::memory_order_relaxed));
+    iemMasterSlider_.setValue(juce::Decibels::gainToDecibels(master, -60.0f), juce::dontSendNotification);
+    iemMuteButton_.setToggleState(iemMute_[mix].load(std::memory_order_relaxed), juce::dontSendNotification);
+
+    const int left = iemOutLeft_[mix].load(std::memory_order_relaxed);
+    const int right = iemOutRight_[mix].load(std::memory_order_relaxed);
+    iemOutLeftBox_.setSelectedId(left >= 0 ? left + 2 : 1, juce::dontSendNotification);
+    iemOutRightBox_.setSelectedId(right >= 0 ? right + 2 : 1, juce::dontSendNotification);
+
+    for (auto& strip : iemStrips_)
+        if (strip) strip->syncFromModel();
+}
+
+bool MainComponent::iemRouteIsSafe(int mix, int left, int right) const noexcept
+{
+    if (left < 0 || right < 0)
+        return left < 0 && right < 0;
+    if (left == right)
+        return false;
+    const int paL = paLeft_.load(std::memory_order_relaxed);
+    const int paR = paRight_.load(std::memory_order_relaxed);
+    const int click = clickOutput_.load(std::memory_order_relaxed);
+    if (left == paL || left == paR || right == paL || right == paR || left == click || right == click)
+        return false;
+    for (int i = 0; i < kIemMixes; ++i)
+    {
+        if (i == mix) continue;
+        const int l = iemOutLeft_[i].load(std::memory_order_relaxed);
+        const int r = iemOutRight_[i].load(std::memory_order_relaxed);
+        if (l < 0 || r < 0) continue;
+        if (left == l || left == r || right == l || right == r)
+            return false;
+    }
+    return true;
+}
+
+bool MainComponent::anyIemRouted() const noexcept
+{
+    for (int i = 0; i < kIemMixes; ++i)
+        if (iemOutLeft_[i].load(std::memory_order_relaxed) >= 0
+            && iemOutRight_[i].load(std::memory_order_relaxed) >= 0
+            && !iemMute_[i].load(std::memory_order_relaxed))
+            return true;
+    return false;
+}
+
+void MainComponent::applyIemRoutingFromControls()
+{
+    const int mix = selectedIemMix_;
+    const int left = iemOutLeftBox_.getSelectedId() <= 1 ? -1 : iemOutLeftBox_.getSelectedId() - 2;
+    const int right = iemOutRightBox_.getSelectedId() <= 1 ? -1 : iemOutRightBox_.getSelectedId() - 2;
+    const bool bothOff = left < 0 && right < 0;
+    if (!bothOff && !iemRouteIsSafe(mix, left, right))
+    {
+        iemOutLeft_[mix].store(-1, std::memory_order_relaxed);
+        iemOutRight_[mix].store(-1, std::memory_order_relaxed);
+        iemOutLeftBox_.setSelectedId(1, juce::dontSendNotification);
+        iemOutRightBox_.setSelectedId(1, juce::dontSendNotification);
+        showAudioError("J3 SAFE ROUTING bloqueó ese IEM: usá dos salidas libres, distintas del PA, CLICK y otros IEM.");
+        return;
+    }
+    iemOutLeft_[mix].store(left, std::memory_order_relaxed);
+    iemOutRight_[mix].store(right, std::memory_order_relaxed);
+    saveAppState();
+    updateDiagnostics();
+}
+
 void MainComponent::resized()
 {
     auto area = getLocalBounds();
