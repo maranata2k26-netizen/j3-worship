@@ -32,34 +32,33 @@ juce::String outputName(juce::AudioIODevice& device, int index)
 }
 }
 
-MainComponent::MixerStrip::MixerStrip(int index, std::atomic<float>& gain,
-                                      std::atomic<float>& pan, std::atomic<bool>& muted,
-                                      std::atomic<float>& meter)
-    : index_(index), gain_(gain), pan_(pan), muted_(muted), meter_(meter), meterBar_(meterValue_)
+MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
+                                      std::atomic<float>& gain, std::atomic<float>& pan,
+                                      std::atomic<bool>& muted, std::atomic<float>& meter,
+                                      std::atomic<int>& bus, std::atomic<int>& dca)
+    : index_(index), gain_(gain), pan_(pan), muted_(muted), meter_(meter),
+      bus_(bus), dca_(dca), meterBar_(meterValue_)
 {
     setOpaque(false);
 
-    title_.setText("IN " + juce::String(index_ + 1), juce::dontSendNotification);
+    title_.setText(title, juce::dontSendNotification);
     title_.setJustificationType(juce::Justification::centred);
-    title_.setFont(juce::FontOptions(15.0f, juce::Font::bold));
+    title_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
     title_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(title_);
 
     fader_.setSliderStyle(juce::Slider::LinearVertical);
     fader_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 72, 22);
     fader_.setRange(-60.0, 6.0, 0.1);
-    fader_.setValue(-6.0, juce::dontSendNotification);
     fader_.setDoubleClickReturnValue(true, 0.0);
     fader_.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
     fader_.setColour(juce::Slider::trackColourId, juce::Colour(accentDeep));
-    gain_.store(dbToGain(-6.0));
     fader_.onValueChange = [this] { gain_.store(dbToGain(fader_.getValue()), std::memory_order_relaxed); };
     addAndMakeVisible(fader_);
 
     panSlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     panSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 20);
     panSlider_.setRange(-1.0, 1.0, 0.01);
-    panSlider_.setValue(0.0, juce::dontSendNotification);
     panSlider_.setDoubleClickReturnValue(true, 0.0);
     panSlider_.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(accent));
     panSlider_.onValueChange = [this] { pan_.store(static_cast<float>(panSlider_.getValue()), std::memory_order_relaxed); };
@@ -69,10 +68,21 @@ MainComponent::MixerStrip::MixerStrip(int index, std::atomic<float>& gain,
     muteButton_.onClick = [this] { muted_.store(muteButton_.getToggleState(), std::memory_order_relaxed); };
     addAndMakeVisible(muteButton_);
 
+    busBox_.addItem("MASTER", 1);
+    for (int i = 0; i < kBuses; ++i) busBox_.addItem("BUS " + juce::String(i + 1), i + 2);
+    busBox_.onChange = [this] { bus_.store(busBox_.getSelectedId() <= 1 ? -1 : busBox_.getSelectedId() - 2, std::memory_order_relaxed); };
+    addAndMakeVisible(busBox_);
+
+    dcaBox_.addItem("NO DCA", 1);
+    for (int i = 0; i < kDcas; ++i) dcaBox_.addItem("DCA " + juce::String(i + 1), i + 2);
+    dcaBox_.onChange = [this] { dca_.store(dcaBox_.getSelectedId() <= 1 ? -1 : dcaBox_.getSelectedId() - 2, std::memory_order_relaxed); };
+    addAndMakeVisible(dcaBox_);
+
     meterBar_.setPercentageDisplay(false);
     meterBar_.setColour(juce::ProgressBar::foregroundColourId, juce::Colour(good));
     meterBar_.setColour(juce::ProgressBar::backgroundColourId, juce::Colour(0xff090c10));
     addAndMakeVisible(meterBar_);
+    syncFromModel();
 }
 
 void MainComponent::MixerStrip::paint(juce::Graphics& g)
@@ -86,13 +96,17 @@ void MainComponent::MixerStrip::paint(juce::Graphics& g)
 
 void MainComponent::MixerStrip::resized()
 {
-    auto r = getLocalBounds().reduced(9);
-    title_.setBounds(r.removeFromTop(28));
-    meterBar_.setBounds(r.removeFromRight(12).reduced(0, 18));
-    r.removeFromRight(5);
-    muteButton_.setBounds(r.removeFromBottom(30));
-    panSlider_.setBounds(r.removeFromBottom(92));
-    fader_.setBounds(r.reduced(2, 6));
+    auto r = getLocalBounds().reduced(8);
+    title_.setBounds(r.removeFromTop(26));
+    meterBar_.setBounds(r.removeFromRight(10).reduced(0, 14));
+    r.removeFromRight(4);
+    dcaBox_.setBounds(r.removeFromBottom(28));
+    r.removeFromBottom(3);
+    busBox_.setBounds(r.removeFromBottom(28));
+    r.removeFromBottom(3);
+    muteButton_.setBounds(r.removeFromBottom(28));
+    panSlider_.setBounds(r.removeFromBottom(82));
+    fader_.setBounds(r.reduced(2, 4));
 }
 
 void MainComponent::MixerStrip::timerTick()
@@ -108,6 +122,106 @@ void MainComponent::MixerStrip::syncFromModel()
     fader_.setValue(juce::Decibels::gainToDecibels(gain, -60.0f), juce::dontSendNotification);
     panSlider_.setValue(pan_.load(std::memory_order_relaxed), juce::dontSendNotification);
     muteButton_.setToggleState(muted_.load(std::memory_order_relaxed), juce::dontSendNotification);
+    const int bus = bus_.load(std::memory_order_relaxed);
+    const int dca = dca_.load(std::memory_order_relaxed);
+    busBox_.setSelectedId(bus >= 0 && bus < kBuses ? bus + 2 : 1, juce::dontSendNotification);
+    dcaBox_.setSelectedId(dca >= 0 && dca < kDcas ? dca + 2 : 1, juce::dontSendNotification);
+}
+
+MainComponent::GroupStrip::GroupStrip(const juce::String& title, std::atomic<float>& gain, std::atomic<bool>& muted)
+    : gain_(gain), muted_(muted)
+{
+    title_.setText(title, juce::dontSendNotification);
+    title_.setJustificationType(juce::Justification::centred);
+    title_.setColour(juce::Label::textColourId, juce::Colour(text));
+    title_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+    addAndMakeVisible(title_);
+    fader_.setSliderStyle(juce::Slider::LinearVertical);
+    fader_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 22);
+    fader_.setRange(-60.0, 12.0, 0.1);
+    fader_.setDoubleClickReturnValue(true, 0.0);
+    fader_.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
+    fader_.onValueChange = [this] { gain_.store(dbToGain(fader_.getValue()), std::memory_order_relaxed); };
+    addAndMakeVisible(fader_);
+    muteButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(mutedText));
+    muteButton_.onClick = [this] { muted_.store(muteButton_.getToggleState(), std::memory_order_relaxed); };
+    addAndMakeVisible(muteButton_);
+    syncFromModel();
+}
+
+void MainComponent::GroupStrip::paint(juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced(2.0f);
+    g.setColour(juce::Colour(panel2));
+    g.fillRoundedRectangle(r, 7.0f);
+    g.setColour(juce::Colour(0xff303946));
+    g.drawRoundedRectangle(r, 7.0f, 1.0f);
+}
+
+void MainComponent::GroupStrip::resized()
+{
+    auto r = getLocalBounds().reduced(7);
+    title_.setBounds(r.removeFromTop(26));
+    muteButton_.setBounds(r.removeFromBottom(28));
+    fader_.setBounds(r.reduced(2, 4));
+}
+
+void MainComponent::GroupStrip::syncFromModel()
+{
+    const auto gain = std::max(1.0e-6f, gain_.load(std::memory_order_relaxed));
+    fader_.setValue(juce::Decibels::gainToDecibels(gain, -60.0f), juce::dontSendNotification);
+    muteButton_.setToggleState(muted_.load(std::memory_order_relaxed), juce::dontSendNotification);
+}
+
+MainComponent::IemSendStrip::IemSendStrip(int sourceIndex, const juce::String& title,
+                                          std::atomic<float>& gain, std::atomic<float>& pan)
+    : sourceIndex_(sourceIndex), gain_(gain), pan_(pan)
+{
+    title_.setText(title, juce::dontSendNotification);
+    title_.setJustificationType(juce::Justification::centred);
+    title_.setColour(juce::Label::textColourId, juce::Colour(text));
+    title_.setFont(juce::FontOptions(13.5f, juce::Font::bold));
+    addAndMakeVisible(title_);
+
+    level_.setSliderStyle(juce::Slider::LinearVertical);
+    level_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 72, 22);
+    level_.setRange(-80.0, 6.0, 0.1);
+    level_.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
+    level_.onValueChange = [this] { gain_.store(dbToGain(level_.getValue()), std::memory_order_relaxed); };
+    addAndMakeVisible(level_);
+
+    pan_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    pan_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 20);
+    pan_.setRange(-1.0, 1.0, 0.01);
+    pan_.setDoubleClickReturnValue(true, 0.0);
+    pan_.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(accent));
+    pan_.onValueChange = [this] { pan_.setValue(pan_.getValue(), juce::dontSendNotification); pan_.repaint(); };
+    addAndMakeVisible(pan_);
+    syncFromModel();
+}
+
+void MainComponent::IemSendStrip::paint(juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced(2.0f);
+    g.setColour(juce::Colour(panel2));
+    g.fillRoundedRectangle(r, 8.0f);
+    g.setColour(juce::Colour(0xff303946));
+    g.drawRoundedRectangle(r, 8.0f, 1.0f);
+}
+
+void MainComponent::IemSendStrip::resized()
+{
+    auto r = getLocalBounds().reduced(8);
+    title_.setBounds(r.removeFromTop(26));
+    pan_.setBounds(r.removeFromBottom(86));
+    level_.setBounds(r.reduced(2, 4));
+}
+
+void MainComponent::IemSendStrip::syncFromModel()
+{
+    const auto gain = std::max(1.0e-8f, gain_.load(std::memory_order_relaxed));
+    level_.setValue(juce::Decibels::gainToDecibels(gain, -80.0f), juce::dontSendNotification);
+    pan_.setValue(pan_.load(std::memory_order_relaxed), juce::dontSendNotification);
 }
 
 MainComponent::MainComponent()
