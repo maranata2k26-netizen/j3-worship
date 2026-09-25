@@ -1072,7 +1072,7 @@ void DawWorkspace::importFiles(const juce::StringArray& files, int targetTrack, 
         }
         if (static_cast<int>(clips_.size()) >= kMaxClips)
         {
-            lastError = "Máximo de 128 clips alcanzado";
+            lastError = "Máximo de 512 clips alcanzado";
             break;
         }
 
@@ -1391,7 +1391,7 @@ void DawWorkspace::importRecordedTake()
         }
         if (static_cast<int>(clips_.size()) >= kMaxClips)
         {
-            lastError = "Máximo de 128 clips alcanzado";
+            lastError = "Máximo de 512 clips alcanzado";
             break;
         }
 
