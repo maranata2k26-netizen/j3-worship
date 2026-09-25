@@ -510,6 +510,111 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(mixerBankLabel_);
     rebuildMixerBank();
 
+    dashboardLeftCard_ = std::make_unique<DashboardCard>();
+    dashboardRightCard_ = std::make_unique<DashboardCard>();
+    dashboardBottomCard_ = std::make_unique<DashboardCard>();
+    mixerPage_.addAndMakeVisible(*dashboardLeftCard_);
+    mixerPage_.addAndMakeVisible(*dashboardRightCard_);
+    mixerPage_.addAndMakeVisible(*dashboardBottomCard_);
+
+    dashboardSetlistTitle_.setText("SETLIST", juce::dontSendNotification);
+    dashboardSetlistTitle_.setFont(juce::FontOptions(17.0f, juce::Font::bold));
+    dashboardSongInfo_.setFont(juce::FontOptions(14.0f));
+    dashboardSongInfo_.setJustificationType(juce::Justification::topLeft);
+    dashboardSongBox_.onChange = [this]
+    {
+        const int id = dashboardSongBox_.getSelectedId();
+        if (id > 0 && setlist_.select(static_cast<std::size_t>(id - 1)))
+        {
+            setlistSongBox_.setSelectedId(id, juce::dontSendNotification);
+            refreshSetlistUi();
+        }
+    };
+    dashboardLoadSongButton_.onClick = [this] { loadSelectedSong(); };
+    mixerPage_.addAndMakeVisible(dashboardSetlistTitle_);
+    mixerPage_.addAndMakeVisible(dashboardSongBox_);
+    mixerPage_.addAndMakeVisible(dashboardLoadSongButton_);
+    mixerPage_.addAndMakeVisible(dashboardSongInfo_);
+
+    dashboardIemTitle_.setText("IEM · MONITORES", juce::dontSendNotification);
+    dashboardIemTitle_.setFont(juce::FontOptions(16.0f, juce::Font::bold));
+    for (int i = 0; i < kIemMixes; ++i)
+        dashboardIemMixBox_.addItem("MIX " + juce::String(i + 1), i + 1);
+    dashboardIemMixBox_.setSelectedId(1, juce::dontSendNotification);
+    dashboardIemMixBox_.onChange = [this]
+    {
+        selectedIemMix_ = juce::jlimit(0, kIemMixes - 1, dashboardIemMixBox_.getSelectedId() - 1);
+        iemMixBox_.setSelectedId(selectedIemMix_ + 1, juce::dontSendNotification);
+        rebuildIemBank();
+        refreshIemUi();
+    };
+    dashboardIemMasterSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+    dashboardIemMasterSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 62, 22);
+    dashboardIemMasterSlider_.setRange(-60.0, 12.0, 0.1);
+    dashboardIemMasterSlider_.setTextValueSuffix(" dB");
+    dashboardIemMasterSlider_.onValueChange = [this]
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, dashboardIemMixBox_.getSelectedId() - 1);
+        iemMaster_[mix].store(dbToGain(dashboardIemMasterSlider_.getValue()), std::memory_order_relaxed);
+        if (mix == selectedIemMix_)
+            iemMasterSlider_.setValue(dashboardIemMasterSlider_.getValue(), juce::dontSendNotification);
+    };
+    mixerPage_.addAndMakeVisible(dashboardIemTitle_);
+    mixerPage_.addAndMakeVisible(dashboardIemMixBox_);
+    mixerPage_.addAndMakeVisible(dashboardIemMasterSlider_);
+
+    dashboardRecordTitle_.setText("GRABACIÓN", juce::dontSendNotification);
+    dashboardRecordTitle_.setFont(juce::FontOptions(16.0f, juce::Font::bold));
+    dashboardRecordButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(danger).darker(0.35f));
+    dashboardRecordButton_.onClick = [this] { startStopRecording(); };
+    dashboardRecordInfo_.setFont(juce::FontOptions(13.5f));
+    dashboardRecordInfo_.setJustificationType(juce::Justification::topLeft);
+    mixerPage_.addAndMakeVisible(dashboardRecordTitle_);
+    mixerPage_.addAndMakeVisible(dashboardRecordButton_);
+    mixerPage_.addAndMakeVisible(dashboardRecordInfo_);
+
+    dashboardPluginsTitle_.setText("PLUGINS VST3", juce::dontSendNotification);
+    dashboardPluginsTitle_.setFont(juce::FontOptions(16.0f, juce::Font::bold));
+    dashboardPluginsInfo_.setFont(juce::FontOptions(13.5f));
+    dashboardPluginsInfo_.setJustificationType(juce::Justification::topLeft);
+    mixerPage_.addAndMakeVisible(dashboardPluginsTitle_);
+    mixerPage_.addAndMakeVisible(dashboardPluginsInfo_);
+
+    dashboardLiveTitle_.setText("LIVE · SECCIONES", juce::dontSendNotification);
+    dashboardLiveTitle_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+    dashboardPadButton_.onClick = [this]
+    {
+        padEnabledButton_.triggerClick();
+        refreshDashboard();
+    };
+    dashboardClickButton_.onClick = [this]
+    {
+        clickEnabledButton_.triggerClick();
+        refreshDashboard();
+    };
+    dashboardTempoLabel_.setJustificationType(juce::Justification::centred);
+    dashboardTempoLabel_.setFont(juce::FontOptions(13.5f, juce::Font::bold));
+    mixerPage_.addAndMakeVisible(dashboardLiveTitle_);
+    mixerPage_.addAndMakeVisible(dashboardPadButton_);
+    mixerPage_.addAndMakeVisible(dashboardClickButton_);
+    mixerPage_.addAndMakeVisible(dashboardTempoLabel_);
+
+    for (std::size_t i = 0; i < names.size(); ++i)
+    {
+        auto b = std::make_unique<juce::TextButton>(names[i]);
+        b->setColour(juce::TextButton::buttonColourId,
+                     i == 3 ? juce::Colour(danger).darker(0.28f)
+                            : (i == 6 ? juce::Colour(0xff593d86) : juce::Colour(panel3)));
+        b->onClick = [this, name = names[i], kind = kinds[i]]
+        {
+            setLiveSection(name, kind, kind == j3::SectionKind::FreePad ? 1 : 4);
+            refreshDashboard();
+        };
+        mixerPage_.addAndMakeVisible(*b);
+        dashboardSectionButtons_[i] = std::move(b);
+    }
+    refreshDashboard();
+
     dspTitle_.setText("J3 CHANNEL DSP · EQ · GATE · COMP · DENOISE", juce::dontSendNotification);
     dspTitle_.setFont(juce::FontOptions(23.0f, juce::Font::bold));
     dspTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
@@ -954,19 +1059,20 @@ MainComponent::MainComponent()
 
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(46);
+    tabs_.addTab("MEZCLADOR", juce::Colour(panel), &mixerPage_, false);
     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
-    tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
-    tabs_.addTab("CHANNEL DSP", juce::Colour(panel), &dspPage_, false);
-    tabs_.addTab("GROUPS", juce::Colour(panel), &groupsPage_, false);
-    tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
-    tabs_.addTab("PLUGINS", juce::Colour(panel), &pluginsPage_, false);
+    tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
+    tabs_.addTab("GRUPOS", juce::Colour(panel), &groupsPage_, false);
     tabs_.addTab("PADS", juce::Colour(panel), &padPage_, false);
+    tabs_.addTab("PLUGINS", juce::Colour(panel), &pluginsPage_, false);
+    tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
     tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
-    tabs_.addTab("RECORD", juce::Colour(panel), &recordingPage_, false);
-    tabs_.addTab("AUDIO / ROUTING", juce::Colour(panel), &setupPage_, false);
-    tabs_.addTab("SYSTEM CHECK", juce::Colour(panel), &diagnosticsPage_, false);
+    tabs_.addTab("GRABACIÓN", juce::Colour(panel), &recordingPage_, false);
+    tabs_.addTab("RUTEO", juce::Colour(panel), &setupPage_, false);
+    tabs_.addTab("AJUSTES", juce::Colour(panel), &diagnosticsPage_, false);
     addAndMakeVisible(tabs_);
+    tabs_.setCurrentTabIndex(0);
 
     recoveredAfterUncleanExit_ = getRuntimeLockFile().existsAsFile();
     getRuntimeLockFile().getParentDirectory().createDirectory();
@@ -983,8 +1089,11 @@ MainComponent::MainComponent()
     {
         if (safe != nullptr) safe->scanVst3Plugins();
     });
+    applyTheme(themeId_, false);
+    refreshDashboard();
     startTimerHz(30);
-    setSize(1440, 900);
+    setSize(1600, 960);
+    checkForUpdatesAsync();
 }
 
 MainComponent::~MainComponent()
