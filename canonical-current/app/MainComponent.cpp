@@ -1099,13 +1099,20 @@ void MainComponent::startStopRecording()
         showAudioError("No hay una interfaz de audio activa.");
         return;
     }
+
     const auto active = device->getActiveInputChannels();
     const auto names = device->getInputChannelNames();
     std::vector<std::string> channelNames;
     channelNames.reserve(j3::kRecordMaxChannels);
-    for (int i = 0; i < active.getHighestBit() + 1 && channelNames.size() < j3::kRecordMaxChannels; ++i)
-        if (active[i])
-            channelNames.push_back((i < names.size() && names[i].isNotEmpty() ? names[i] : "Input " + juce::String(i + 1)).toStdString());
+    int mapped = 0;
+    for (int input = 0; input <= active.getHighestBit() && mapped < static_cast<int>(j3::kRecordMaxChannels); ++input)
+    {
+        if (!active[input]) continue;
+        recordInputIndices_[static_cast<std::size_t>(mapped)] = input;
+        channelNames.push_back((input < names.size() && names[input].isNotEmpty()
+            ? names[input] : "Input " + juce::String(input + 1)).toStdString());
+        ++mapped;
+    }
     if (channelNames.empty())
     {
         showAudioError("No hay entradas activas para grabar. Activá entradas desde AUDIO / MIDI.");
@@ -1123,6 +1130,23 @@ void MainComponent::startStopRecording()
     recordChannelCount_.store(static_cast<int>(channelNames.size()), std::memory_order_release);
     recordingEnabled_.store(true, std::memory_order_release);
     updateRecordingUi();
+}
+
+void MainComponent::stopRecordingAfterDeviceLoss(const juce::String& reason)
+{
+    const bool wasRecording = recordingEnabled_.exchange(false, std::memory_order_acq_rel);
+    if (!wasRecording && !recorder_.recording())
+        return;
+
+    std::string error;
+    recorder_.stop(error);
+    recordChannelCount_.store(0, std::memory_order_release);
+    updateRecordingUi();
+
+    juce::String message = reason;
+    if (!error.empty()) message << "\nRecorder: " << juce::String(error);
+    if (message.isNotEmpty())
+        lastAudioError_ = message;
 }
 
 void MainComponent::updateRecordingUi()
