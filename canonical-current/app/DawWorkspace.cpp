@@ -259,6 +259,14 @@ void DawWorkspace::configureControls()
     setupDb(fadeInSlider_, 0.0, 16.0, " b");
     setupDb(fadeOutSlider_, 0.0, 16.0, " b");
 
+    trackVolumeSlider_.setDoubleClickReturnValue(true, 0.0);
+    trackPanSlider_.setDoubleClickReturnValue(true, 0.0);
+    clipGainSlider_.setDoubleClickReturnValue(true, 0.0);
+    fadeInSlider_.setDoubleClickReturnValue(true, 0.0);
+    fadeOutSlider_.setDoubleClickReturnValue(true, 0.0);
+    bpmSlider_.setDoubleClickReturnValue(true, 120.0);
+    zoomSlider_.setDoubleClickReturnValue(true, 1.0);
+
     trackVolumeSlider_.onValueChange = [this]
     {
         if (selectedTrack_ >= 0 && selectedTrack_ < trackCount_)
@@ -1144,6 +1152,20 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
             selectedTrack_ = t;
             selectedClipId_ = -1;
             selectedMidiNoteId_ = -1;
+
+            const auto header = trackHeaderBounds(t).reduced(9, 7);
+            const int chipStart = header.getRight() - 69;
+            if (!e.mods.isPopupMenu() && e.x >= chipStart && e.y >= header.getY() + 25)
+            {
+                const int chip = juce::jlimit(0, 2, (e.x - chipStart) / 23);
+                checkpointUndo();
+                if (chip == 0) tracks_[t].mute = !tracks_[t].mute;
+                else if (chip == 1) tracks_[t].solo = !tracks_[t].solo;
+                else if (!tracks_[t].midi) tracks_[t].armed = !tracks_[t].armed;
+                projectDirty_ = true;
+                markRenderDirty();
+            }
+
             syncInspector();
             repaint();
             if (e.mods.isPopupMenu())
