@@ -387,7 +387,7 @@ void DawWorkspace::paint(juce::Graphics& g)
         auto meta = header.reduced(9, 7).withTrimmedTop(25);
         g.setFont(juce::FontOptions(10.5f));
         g.setColour(juce::Colour(kMuted));
-        const auto typeText = tracks_[t].midi ? "MIDI / PIANO ROLL" : "AUDIO";
+        const juce::String typeText = tracks_[t].midi ? "MIDI / PIANO ROLL" : "AUDIO";
         g.drawText(typeText + juce::String("  ·  ") + juce::String(gainToDb(tracks_[t].gain), 1) + " dB",
                    meta.removeFromLeft(std::max(48, meta.getWidth() - 74)), juce::Justification::centredLeft);
 
