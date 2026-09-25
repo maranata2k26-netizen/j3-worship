@@ -1742,15 +1742,27 @@ void MainComponent::applyIemRoutingFromControls()
 void MainComponent::resized()
 {
     auto area = getLocalBounds();
-    auto top = area.removeFromTop(66).reduced(16, 8);
+    auto top = area.removeFromTop(74).reduced(14, 8);
     brandLabel_.setBounds(top.removeFromLeft(190));
-    versionLabel_.setBounds(top.removeFromLeft(100).reduced(0, 11));
-    audioSettingsButton_.setBounds(top.removeFromRight(150));
-    top.removeFromRight(10);
-    liveMonitorButton_.setBounds(top.removeFromRight(132));
-    top.removeFromRight(10);
-    statusLabel_.setBounds(top.removeFromRight(510));
-    tabs_.setBounds(area.reduced(10));
+    versionLabel_.setBounds(top.removeFromLeft(62).reduced(0, 11));
+
+    audioSettingsButton_.setBounds(top.removeFromRight(132));
+    top.removeFromRight(8);
+    liveMonitorButton_.setBounds(top.removeFromRight(112));
+    top.removeFromRight(8);
+    themeBox_.setBounds(top.removeFromRight(154).reduced(0, 3));
+    top.removeFromRight(8);
+    if (updateButton_.isVisible())
+    {
+        updateButton_.setBounds(top.removeFromRight(148).reduced(0, 2));
+        top.removeFromRight(8);
+    }
+    else
+    {
+        updateButton_.setBounds({});
+    }
+    statusLabel_.setBounds(top.reduced(4, 0));
+    tabs_.setBounds(area.reduced(8));
 
     auto liveArea = livePage_.getLocalBounds().reduced(24);
     nowLabel_.setBounds(liveArea.removeFromTop(58));
@@ -1795,15 +1807,72 @@ void MainComponent::resized()
     setArea.removeFromTop(20);
     setlistInfoLabel_.setBounds(setArea.removeFromTop(170));
 
-    auto mixerArea = mixerPage_.getLocalBounds().reduced(12);
-    auto mixerNav = mixerArea.removeFromTop(40);
-    mixerPrevButton_.setBounds(mixerNav.removeFromLeft(110));
-    mixerNextButton_.setBounds(mixerNav.removeFromRight(110));
+    auto mixerArea = mixerPage_.getLocalBounds().reduced(9);
+    const int leftWidth = juce::jlimit(190, 248, mixerArea.getWidth() * 16 / 100);
+    const int rightWidth = juce::jlimit(218, 278, mixerArea.getWidth() * 18 / 100);
+    auto dashboardLeft = mixerArea.removeFromLeft(leftWidth);
+    mixerArea.removeFromLeft(8);
+    auto dashboardRight = mixerArea.removeFromRight(rightWidth);
+    mixerArea.removeFromRight(8);
+    auto dashboardBottom = mixerArea.removeFromBottom(118);
+    mixerArea.removeFromBottom(8);
+
+    if (dashboardLeftCard_) dashboardLeftCard_->setBounds(dashboardLeft);
+    if (dashboardRightCard_) dashboardRightCard_->setBounds(dashboardRight);
+    if (dashboardBottomCard_) dashboardBottomCard_->setBounds(dashboardBottom);
+
+    auto leftContent = dashboardLeft.reduced(12);
+    dashboardSetlistTitle_.setBounds(leftContent.removeFromTop(28));
+    leftContent.removeFromTop(4);
+    dashboardSongBox_.setBounds(leftContent.removeFromTop(34));
+    leftContent.removeFromTop(8);
+    dashboardSongInfo_.setBounds(leftContent.removeFromTop(70));
+    leftContent.removeFromTop(8);
+    dashboardLoadSongButton_.setBounds(leftContent.removeFromTop(36));
+
+    auto rightContent = dashboardRight.reduced(12);
+    dashboardIemTitle_.setBounds(rightContent.removeFromTop(26));
+    auto iemRow = rightContent.removeFromTop(34);
+    dashboardIemMixBox_.setBounds(iemRow.removeFromLeft(92));
+    iemRow.removeFromLeft(6);
+    dashboardIemMasterSlider_.setBounds(iemRow);
+    rightContent.removeFromTop(12);
+    dashboardRecordTitle_.setBounds(rightContent.removeFromTop(24));
+    auto recordRow = rightContent.removeFromTop(38);
+    dashboardRecordButton_.setBounds(recordRow.removeFromLeft(92));
+    recordRow.removeFromLeft(8);
+    dashboardRecordInfo_.setBounds(recordRow);
+    rightContent.removeFromTop(12);
+    dashboardPluginsTitle_.setBounds(rightContent.removeFromTop(24));
+    dashboardPluginsInfo_.setBounds(rightContent.removeFromTop(62));
+
+    auto mixerNav = mixerArea.removeFromTop(34);
+    mixerPrevButton_.setBounds(mixerNav.removeFromLeft(86).reduced(1));
+    mixerNextButton_.setBounds(mixerNav.removeFromRight(86).reduced(1));
     mixerBankLabel_.setBounds(mixerNav);
-    mixerArea.removeFromTop(6);
+    mixerArea.removeFromTop(4);
     const int stripW = std::max(1, mixerArea.getWidth() / kVisibleChannels);
     for (int i = 0; i < kVisibleChannels; ++i)
-        if (strips_[i]) strips_[i]->setBounds(mixerArea.removeFromLeft(stripW).reduced(3));
+        if (strips_[i]) strips_[i]->setBounds(mixerArea.removeFromLeft(stripW).reduced(2));
+
+    auto transport = dashboardBottom.reduced(10);
+    auto transportTop = transport.removeFromTop(28);
+    dashboardLiveTitle_.setBounds(transportTop.removeFromLeft(150));
+    dashboardStopButton_.setBounds(transportTop.removeFromLeft(70).reduced(2));
+    dashboardPadButton_.setBounds(transportTop.removeFromLeft(70).reduced(2));
+    dashboardClickButton_.setBounds(transportTop.removeFromLeft(78).reduced(2));
+    dashboardTempoLabel_.setBounds(transportTop.removeFromRight(150));
+    transport.removeFromTop(7);
+    const int sectionGap = 5;
+    const int sectionWidth = std::max(54, (transport.getWidth() - sectionGap * 7) / 8);
+    for (int i = 0; i < 8; ++i)
+    {
+        if (dashboardSectionButtons_[i])
+        {
+            dashboardSectionButtons_[i]->setBounds(transport.removeFromLeft(sectionWidth));
+            if (i < 7) transport.removeFromLeft(sectionGap);
+        }
+    }
 
     auto dspArea = dspPage_.getLocalBounds().reduced(20);
     auto dspHeader = dspArea.removeFromTop(42);
