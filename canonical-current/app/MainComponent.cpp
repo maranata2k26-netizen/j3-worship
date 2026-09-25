@@ -1090,12 +1090,6 @@ MainComponent::MainComponent()
         }
         updateClickUi();
     };
-    dawWorkspace_.onRecordToggle = [this] { startStopRecording(); };
-    dawWorkspace_.isRecording = [this]
-    {
-        return recordingEnabled_.load(std::memory_order_acquire);
-    };
-
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(46);
     tabs_.addTab("MEZCLADOR", juce::Colour(panel), &mixerPage_, false);
@@ -1366,7 +1360,8 @@ void MainComponent::beginUpdateInstall()
     const auto safeToInstallNow = [this]
     {
         const bool liveMode = liveMonitorEnabled_.load(std::memory_order_acquire);
-        const bool recording = recordingEnabled_.load(std::memory_order_acquire);
+        const bool recording = recordingEnabled_.load(std::memory_order_acquire)
+            || dawWorkspace_.isRecordingTracks();
         const bool sessionActive = transportRunning_.load(std::memory_order_acquire);
         return j3::Updater::safeToInstall(liveMode, recording, sessionActive);
     };
@@ -1421,7 +1416,8 @@ void MainComponent::beginUpdateInstall()
             safe->updateButton_.setButtonText("INSTALAR " + update.versionText);
             const bool canInstall = j3::Updater::safeToInstall(
                 safe->liveMonitorEnabled_.load(std::memory_order_acquire),
-                safe->recordingEnabled_.load(std::memory_order_acquire),
+                safe->recordingEnabled_.load(std::memory_order_acquire)
+                    || safe->dawWorkspace_.isRecordingTracks(),
                 safe->transportRunning_.load(std::memory_order_acquire));
             if (!canInstall)
                 return;
