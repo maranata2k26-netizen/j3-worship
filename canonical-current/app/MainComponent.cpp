@@ -967,24 +967,61 @@ void MainComponent::loadAppState()
     clickGenerator_.setAccentEnabled(accentButton_.getToggleState());
     clickGenerator_.setLevel(static_cast<float>(clickVolumeSlider_.getValue()));
 
-    int index = 0;
     forEachXmlChildElementWithTagName(*xml, ch, "Channel")
     {
-        if (index >= kVisibleChannels) break;
+        const int index = ch->getIntAttribute("index", -1);
+        if (index < 0 || index >= kMaxChannels) continue;
         channelGain_[index].store(static_cast<float>(ch->getDoubleAttribute("gain", dbToGain(-6.0))), std::memory_order_relaxed);
         channelPan_[index].store(static_cast<float>(ch->getDoubleAttribute("pan", 0.0)), std::memory_order_relaxed);
         channelMute_[index].store(ch->getBoolAttribute("mute", false), std::memory_order_relaxed);
-        ++index;
+        channelBus_[index].store(juce::jlimit(-1, kBuses - 1, ch->getIntAttribute("bus", -1)), std::memory_order_relaxed);
+        channelDca_[index].store(juce::jlimit(-1, kDcas - 1, ch->getIntAttribute("dca", -1)), std::memory_order_relaxed);
     }
-    for (auto& strip : strips_)
-        if (strip) strip->syncFromModel();
+
+    forEachXmlChildElementWithTagName(*xml, bus, "Bus")
+    {
+        const int index = bus->getIntAttribute("index", -1);
+        if (index < 0 || index >= kBuses) continue;
+        busGain_[index].store(static_cast<float>(bus->getDoubleAttribute("gain", 1.0)), std::memory_order_relaxed);
+        busMute_[index].store(bus->getBoolAttribute("mute", false), std::memory_order_relaxed);
+    }
+    forEachXmlChildElementWithTagName(*xml, dca, "Dca")
+    {
+        const int index = dca->getIntAttribute("index", -1);
+        if (index < 0 || index >= kDcas) continue;
+        dcaGain_[index].store(static_cast<float>(dca->getDoubleAttribute("gain", 1.0)), std::memory_order_relaxed);
+        dcaMute_[index].store(dca->getBoolAttribute("mute", false), std::memory_order_relaxed);
+    }
+
+    forEachXmlChildElementWithTagName(*xml, iem, "Iem")
+    {
+        const int mix = iem->getIntAttribute("index", -1);
+        if (mix < 0 || mix >= kIemMixes) continue;
+        iemMaster_[mix].store(static_cast<float>(iem->getDoubleAttribute("master", 1.0)), std::memory_order_relaxed);
+        iemMute_[mix].store(iem->getBoolAttribute("mute", false), std::memory_order_relaxed);
+        iemOutLeft_[mix].store(iem->getIntAttribute("outL", -1), std::memory_order_relaxed);
+        iemOutRight_[mix].store(iem->getIntAttribute("outR", -1), std::memory_order_relaxed);
+        forEachXmlChildElementWithTagName(*iem, send, "Send")
+        {
+            const int ch = send->getIntAttribute("channel", -1);
+            if (ch < 0 || ch >= kMaxChannels) continue;
+            iemSendGain_[mix][ch].store(static_cast<float>(send->getDoubleAttribute("gain", 0.0)), std::memory_order_relaxed);
+            iemSendPan_[mix][ch].store(static_cast<float>(send->getDoubleAttribute("pan", 0.0)), std::memory_order_relaxed);
+        }
+    }
+
+    for (auto& strip : busStrips_) if (strip) strip->syncFromModel();
+    for (auto& strip : dcaStrips_) if (strip) strip->syncFromModel();
+    rebuildMixerBank();
+    rebuildIemBank();
     refreshRoutingControls();
+    refreshIemUi();
 }
 
 void MainComponent::saveAppState()
 {
     juce::XmlElement xml("J3WorshipState");
-    xml.setAttribute("version", "0.5.0");
+    xml.setAttribute("version", "1.0.0");
     xml.setAttribute("paLeft", paLeft_.load());
     xml.setAttribute("paRight", paRight_.load());
     xml.setAttribute("clickOutput", clickOutput_.load());
@@ -993,14 +1030,51 @@ void MainComponent::saveAppState()
     xml.setAttribute("subdivisionId", subdivisionBox_.getSelectedId());
     xml.setAttribute("accent", accentButton_.getToggleState());
     xml.setAttribute("clickVolume", clickVolumeSlider_.getValue());
-    for (int i = 0; i < kVisibleChannels; ++i)
+
+    for (int i = 0; i < kMaxChannels; ++i)
     {
         auto* ch = xml.createNewChildElement("Channel");
         ch->setAttribute("index", i);
         ch->setAttribute("gain", static_cast<double>(channelGain_[i].load(std::memory_order_relaxed)));
         ch->setAttribute("pan", static_cast<double>(channelPan_[i].load(std::memory_order_relaxed)));
         ch->setAttribute("mute", channelMute_[i].load(std::memory_order_relaxed));
+        ch->setAttribute("bus", channelBus_[i].load(std::memory_order_relaxed));
+        ch->setAttribute("dca", channelDca_[i].load(std::memory_order_relaxed));
     }
+    for (int i = 0; i < kBuses; ++i)
+    {
+        auto* bus = xml.createNewChildElement("Bus");
+        bus->setAttribute("index", i);
+        bus->setAttribute("gain", static_cast<double>(busGain_[i].load(std::memory_order_relaxed)));
+        bus->setAttribute("mute", busMute_[i].load(std::memory_order_relaxed));
+    }
+    for (int i = 0; i < kDcas; ++i)
+    {
+        auto* dca = xml.createNewChildElement("Dca");
+        dca->setAttribute("index", i);
+        dca->setAttribute("gain", static_cast<double>(dcaGain_[i].load(std::memory_order_relaxed)));
+        dca->setAttribute("mute", dcaMute_[i].load(std::memory_order_relaxed));
+    }
+    for (int m = 0; m < kIemMixes; ++m)
+    {
+        auto* iem = xml.createNewChildElement("Iem");
+        iem->setAttribute("index", m);
+        iem->setAttribute("master", static_cast<double>(iemMaster_[m].load(std::memory_order_relaxed)));
+        iem->setAttribute("mute", iemMute_[m].load(std::memory_order_relaxed));
+        iem->setAttribute("outL", iemOutLeft_[m].load(std::memory_order_relaxed));
+        iem->setAttribute("outR", iemOutRight_[m].load(std::memory_order_relaxed));
+        for (int ch = 0; ch < kMaxChannels; ++ch)
+        {
+            const float gain = iemSendGain_[m][ch].load(std::memory_order_relaxed);
+            const float pan = iemSendPan_[m][ch].load(std::memory_order_relaxed);
+            if (gain <= 1.0e-8f && std::abs(pan) < 1.0e-5f) continue;
+            auto* send = iem->createNewChildElement("Send");
+            send->setAttribute("channel", ch);
+            send->setAttribute("gain", static_cast<double>(gain));
+            send->setAttribute("pan", static_cast<double>(pan));
+        }
+    }
+
     const auto file = getAppStateFile();
     file.getParentDirectory().createDirectory();
     file.replaceWithText(xml.toString(), false, false, "\n");
