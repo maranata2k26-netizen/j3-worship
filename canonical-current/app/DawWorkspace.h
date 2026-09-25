@@ -211,7 +211,8 @@ private:
 
     juce::File projectFile_;
     bool projectDirty_ { false };
-    int autosaveTicks_ { 0 };\n    bool lastReportedPlaying_ { false };
+    int autosaveTicks_ { 0 };
+    bool lastReportedPlaying_ { false };
 
     juce::TextButton newButton_ { "NUEVO" };
     juce::TextButton openButton_ { "ABRIR" };
