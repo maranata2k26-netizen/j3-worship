@@ -6,6 +6,7 @@
 #include "j3/LiveEngine.h"
 #include "j3/ClickGenerator.h"
 #include "j3/Recording.h"
+#include "j3/Setlist.h"
 
 #include <array>
 #include <atomic>
@@ -121,6 +122,10 @@ private:
     void updateClickUi();
     void handleTapTempo();
     void refreshPadUi();
+    void refreshSetlistUi();
+    void addSetlistSong();
+    void removeSetlistSong();
+    void loadSelectedSong();
     bool routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept;
     bool iemRouteIsSafe(int mix, int left, int right) const noexcept;
     void scheduleReconnect();
@@ -220,7 +225,20 @@ private:
     juce::Label liveHint_;
     std::array<std::unique_ptr<juce::TextButton>, 8> liveButtons_;
     j3::LiveEngine liveEngine_;
+    j3::Setlist setlist_ { "Worship Set" };
     bool liveStarted_ { false };
+
+    juce::Component setlistPage_;
+    juce::Label setlistTitle_;
+    juce::ComboBox setlistSongBox_;
+    juce::TextEditor songNameEditor_;
+    juce::TextEditor songArtistEditor_;
+    juce::TextEditor songKeyEditor_;
+    juce::Slider songBpmSlider_;
+    juce::TextButton addSongButton_ { "ADD SONG" };
+    juce::TextButton removeSongButton_ { "REMOVE" };
+    juce::TextButton loadSongButton_ { "LOAD INTO LIVE" };
+    juce::Label setlistInfoLabel_;
 
     juce::Component mixerPage_;
     juce::TextButton mixerPrevButton_ { "< 8 CH" };
