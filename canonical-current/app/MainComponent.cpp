@@ -583,6 +583,8 @@ MainComponent::MainComponent()
 
     dashboardLiveTitle_.setText("LIVE · SECCIONES", juce::dontSendNotification);
     dashboardLiveTitle_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+    dashboardStopButton_.onClick = [this] { stopLiveTransport(); };
+    mixerPage_.addAndMakeVisible(dashboardStopButton_);
     dashboardPadButton_.onClick = [this]
     {
         padEnabledButton_.triggerClick();
@@ -2944,12 +2946,28 @@ void MainComponent::setLiveSection(const juce::String& name, j3::SectionKind kin
         liveEngine_.request(section, j3::Quantize::Bar);
     }
     refreshLiveLabels();
+    refreshDashboard();
+}
+
+void MainComponent::stopLiveTransport()
+{
+    liveEngine_.stop();
+    liveStarted_ = false;
+    transportRunning_.store(false, std::memory_order_release);
+    clickAudible_.store(false, std::memory_order_release);
+    clickEnabledButton_.setToggleState(false, juce::dontSendNotification);
+    clickGenerator_.setEnabled(false);
+    clickGenerator_.reset();
+    refreshLiveLabels();
+    updateClickUi();
+    refreshDashboard();
 }
 
 void MainComponent::refreshLiveLabels()
 {
     nowLabel_.setText("NOW: " + juce::String(liveEngine_.now()), juce::dontSendNotification);
     nextLabel_.setText("NEXT: " + juce::String(liveEngine_.next()), juce::dontSendNotification);
+    refreshDashboard();
 }
 
 bool MainComponent::routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept
