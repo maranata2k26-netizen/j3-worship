@@ -66,6 +66,7 @@ DawWorkspace::DawWorkspace()
     tracks_[7].name = "FX";
 
     configureControls();
+    loadWorkspaceState();
     syncInspector();
     rebuildRenderState();
 
@@ -85,6 +86,7 @@ DawWorkspace::~DawWorkspace()
     stopTimer();
     if (trackRecording_.load(std::memory_order_acquire))
         stopTrackRecording(false);
+    saveWorkspaceState();
     autosaveRecovery();
 }
 
@@ -196,6 +198,35 @@ void DawWorkspace::configureControls()
         }
     };
     addAndMakeVisible(snapBox_);
+
+    workspaceBox_.addItem("LIVE", 1);
+    workspaceBox_.addItem("MIX", 2);
+    workspaceBox_.addItem("RECORD", 3);
+    workspaceBox_.addItem("EDIT", 4);
+    workspaceBox_.addItem("IEM", 5);
+    workspaceBox_.setSelectedId(workspacePreset_, juce::dontSendNotification);
+    workspaceBox_.setTooltip("Workspace: reorganiza Browser, Inspector, Mixer y Arranger");
+    workspaceBox_.onChange = [this] { applyWorkspacePreset(workspaceBox_.getSelectedId()); };
+    addAndMakeVisible(workspaceBox_);
+
+    for (auto* b : { &fitProjectButton_, &fitSelectionButton_, &resetWorkspaceButton_ })
+    {
+        addButton(*b);
+        b->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff142735));
+    }
+    fitProjectButton_.setTooltip("Fit Project");
+    fitSelectionButton_.setTooltip("Fit Selection");
+    resetWorkspaceButton_.setTooltip("Restaurar distribución del workspace");
+    fitProjectButton_.onClick = [this] { fitProject(); };
+    fitSelectionButton_.onClick = [this] { fitSelection(); };
+    resetWorkspaceButton_.onClick = [this] { resetWorkspace(); };
+
+    browserSearch_.setTextToShowWhenEmpty("Buscar canciones, samples, plugins...", juce::Colour(kMuted));
+    browserSearch_.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff0a151e));
+    browserSearch_.setColour(juce::TextEditor::textColourId, juce::Colour(kText));
+    browserSearch_.setColour(juce::TextEditor::outlineColourId, juce::Colour(kBorder));
+    browserSearch_.setTooltip("Buscar en el Browser");
+    addAndMakeVisible(browserSearch_);
 
     trackNameEditor_.setSelectAllWhenFocused(true);
     trackNameEditor_.setColour(juce::TextEditor::backgroundColourId, juce::Colour(kPanel2));
