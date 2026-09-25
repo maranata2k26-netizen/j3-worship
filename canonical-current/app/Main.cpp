@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "MainComponent.h"
+#include "OfficialLogoData.h"
 
 class J3WorshipApplication final : public juce::JUCEApplication
 {
@@ -25,6 +26,7 @@ private:
             : DocumentWindow(std::move(name), juce::Colour(0xff111317), allButtons)
         {
             setUsingNativeTitleBar(true);
+            setIcon(j3logo::loadOfficialLogo());
             setResizable(true, true);
             setResizeLimits(1180, 720, 2560, 1600);
             setContentOwned(new MainComponent(), true);
