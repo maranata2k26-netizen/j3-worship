@@ -1212,7 +1212,13 @@ void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noe
 void DawWorkspace::timerCallback()
 {
     if (renderDirty_.load(std::memory_order_acquire)) rebuildRenderState();
-    playButton_.setButtonText(playing_.load(std::memory_order_acquire) ? "PAUSE" : "PLAY");
+    const bool nowPlaying = playing_.load(std::memory_order_acquire);
+    playButton_.setButtonText(nowPlaying ? "PAUSE" : "PLAY");
+    if (nowPlaying != lastReportedPlaying_)
+    {
+        lastReportedPlaying_ = nowPlaying;
+        if (onPlayStateChanged) onPlayStateChanged(nowPlaying);
+    }
     if (isRecording)
         recordButton_.setButtonText(isRecording() ? "STOP REC" : "REC");
     repaint();
@@ -1310,7 +1316,7 @@ juce::String DawWorkspace::serializeProject() const
         x->setAttribute("fadeOutBeats", c.fadeOutBeats);
         x->setAttribute("colour", static_cast<int>(c.colour.getARGB()));
     }
-    return root.toString(juce::XmlElement::TextFormat().singleLine().withoutHeader());
+    return root.toString();
 }
 
 bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjectFile, const juce::File& sourceFile)
