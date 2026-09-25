@@ -748,6 +748,105 @@ juce::String MainComponent::inputChannelName(int channel) const
     return "IN " + juce::String(channel + 1);
 }
 
+void MainComponent::markDspDirty(int channel) noexcept
+{
+    if (channel >= 0 && channel < kMaxChannels)
+        dspRevision_[channel].fetch_add(1, std::memory_order_release);
+}
+
+void MainComponent::applyDspParameters(int channel) noexcept
+{
+    if (channel < 0 || channel >= kMaxChannels)
+        return;
+    const auto revision = dspRevision_[channel].load(std::memory_order_acquire);
+    if (dspAppliedRevision_[channel] == revision)
+        return;
+
+    auto& dsp = channelDsp_[channel];
+    dsp.setHpf(channelHpf_[channel].load(std::memory_order_relaxed));
+    dsp.setLpf(channelLpf_[channel].load(std::memory_order_relaxed));
+    for (int band = 0; band < 4; ++band)
+        dsp.setEqBand(static_cast<std::size_t>(band),
+                      channelEqFreq_[channel][band].load(std::memory_order_relaxed),
+                      channelEqQ_[channel][band].load(std::memory_order_relaxed),
+                      channelEqGain_[channel][band].load(std::memory_order_relaxed));
+    dsp.setGate(channelGate_[channel].load(std::memory_order_relaxed));
+    dsp.setCompressor(channelCompThreshold_[channel].load(std::memory_order_relaxed),
+                      channelCompRatio_[channel].load(std::memory_order_relaxed));
+    dsp.setDenoise(channelDenoise_[channel].load(std::memory_order_relaxed),
+                   channelDenoiseThreshold_[channel].load(std::memory_order_relaxed));
+    dspAppliedRevision_[channel] = revision;
+}
+
+void MainComponent::refreshDspUi()
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, selectedDspChannel_);
+    dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+    hpfSlider_.setValue(channelHpf_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    lpfSlider_.setValue(channelLpf_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    gateSlider_.setValue(channelGate_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    compThresholdSlider_.setValue(channelCompThreshold_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    compRatioSlider_.setValue(channelCompRatio_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    denoiseSlider_.setValue(channelDenoise_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    denoiseThresholdSlider_.setValue(channelDenoiseThreshold_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    for (int band = 0; band < 4; ++band)
+    {
+        eqFreqSliders_[band].setValue(channelEqFreq_[ch][band].load(std::memory_order_relaxed), juce::dontSendNotification);
+        eqGainSliders_[band].setValue(channelEqGain_[ch][band].load(std::memory_order_relaxed), juce::dontSendNotification);
+    }
+    dspTitle_.setText("J3 CHANNEL DSP · " + inputChannelName(ch), juce::dontSendNotification);
+}
+
+void MainComponent::applyDspPreset(int preset)
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, selectedDspChannel_);
+    float hpf = 20.0f, lpf = 20000.0f, gate = -60.0f, comp = -18.0f, ratio = 3.0f, denoise = 0.0f, noise = -60.0f;
+    float freq[4] { 200.0f, 600.0f, 1800.0f, 5400.0f };
+    float gain[4] { 0.0f, 0.0f, 0.0f, 0.0f };
+
+    switch (preset)
+    {
+        case 1: // Vocal
+            hpf = 80.0f; lpf = 18000.0f; gate = -55.0f; comp = -16.0f; ratio = 3.0f; denoise = 0.22f; noise = -58.0f;
+            freq[0] = 180.0f; gain[0] = -1.0f; freq[1] = 450.0f; gain[1] = -2.0f;
+            freq[2] = 3000.0f; gain[2] = 2.0f; freq[3] = 10000.0f; gain[3] = 1.0f; break;
+        case 2: // Kick
+            hpf = 25.0f; lpf = 12000.0f; gate = -45.0f; comp = -12.0f; ratio = 4.0f; denoise = 0.04f;
+            freq[0] = 60.0f; gain[0] = 3.0f; freq[1] = 300.0f; gain[1] = -3.0f;
+            freq[2] = 3200.0f; gain[2] = 2.0f; freq[3] = 8000.0f; gain[3] = 0.5f; break;
+        case 3: // Snare
+            hpf = 70.0f; lpf = 16000.0f; gate = -48.0f; comp = -14.0f; ratio = 4.0f; denoise = 0.04f;
+            freq[0] = 180.0f; gain[0] = 1.5f; freq[1] = 650.0f; gain[1] = -2.0f;
+            freq[2] = 4200.0f; gain[2] = 2.5f; freq[3] = 9000.0f; gain[3] = 1.0f; break;
+        case 4: // Guitar
+            hpf = 75.0f; lpf = 15000.0f; gate = -65.0f; comp = -20.0f; ratio = 2.5f; denoise = 0.08f;
+            freq[0] = 140.0f; gain[0] = -1.0f; freq[1] = 450.0f; gain[1] = -1.5f;
+            freq[2] = 2500.0f; gain[2] = 1.0f; freq[3] = 7500.0f; gain[3] = 0.5f; break;
+        case 5: // Bass
+            hpf = 30.0f; lpf = 9000.0f; gate = -65.0f; comp = -14.0f; ratio = 4.0f; denoise = 0.03f;
+            freq[0] = 80.0f; gain[0] = 2.0f; freq[1] = 250.0f; gain[1] = -1.0f;
+            freq[2] = 900.0f; gain[2] = 1.0f; freq[3] = 4500.0f; gain[3] = 0.5f; break;
+        default: break;
+    }
+
+    channelHpf_[ch].store(hpf);
+    channelLpf_[ch].store(lpf);
+    channelGate_[ch].store(gate);
+    channelCompThreshold_[ch].store(comp);
+    channelCompRatio_[ch].store(ratio);
+    channelDenoise_[ch].store(denoise);
+    channelDenoiseThreshold_[ch].store(noise);
+    for (int band = 0; band < 4; ++band)
+    {
+        channelEqFreq_[ch][band].store(freq[band]);
+        channelEqGain_[ch][band].store(gain[band]);
+        channelEqQ_[ch][band].store(1.0f);
+    }
+    markDspDirty(ch);
+    refreshDspUi();
+    saveAppState();
+}
+
 void MainComponent::setMixerBank(int firstChannel)
 {
     const int maxStart = std::max(0, kMaxChannels - kVisibleChannels);
