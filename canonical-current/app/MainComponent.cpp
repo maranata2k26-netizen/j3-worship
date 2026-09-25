@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "OfficialLogoData.h"
 
 #include <algorithm>
 #include <cmath>
@@ -362,6 +363,10 @@ MainComponent::MainComponent()
             iemSendPan_[m][ch].store(0.0f);
         }
     }
+
+    logoImage_.setImage(j3logo::loadOfficialLogo(), juce::RectanglePlacement::centred);
+    logoImage_.setInterceptsMouseClicks(false, false);
+    addAndMakeVisible(logoImage_);
 
     brandLabel_.setText("J3 WORSHIP", juce::dontSendNotification);
     brandLabel_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
@@ -1747,8 +1752,10 @@ void MainComponent::resized()
 {
     auto area = getLocalBounds();
     auto top = area.removeFromTop(74).reduced(14, 8);
-    brandLabel_.setBounds(top.removeFromLeft(190));
-    versionLabel_.setBounds(top.removeFromLeft(62).reduced(0, 11));
+    logoImage_.setBounds(top.removeFromLeft(112));
+    top.removeFromLeft(6);
+    brandLabel_.setBounds(top.removeFromLeft(146));
+    versionLabel_.setBounds(top.removeFromLeft(48).reduced(0, 11));
 
     audioSettingsButton_.setBounds(top.removeFromRight(132));
     top.removeFromRight(8);
