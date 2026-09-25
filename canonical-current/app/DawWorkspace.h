@@ -37,6 +37,7 @@ public:
 
     bool isPlaying() const noexcept { return playing_.load(std::memory_order_acquire); }
     bool isRecordingTracks() const noexcept { return trackRecording_.load(std::memory_order_acquire); }
+    void emergencyStop();
     double bpm() const noexcept { return bpm_.load(std::memory_order_relaxed); }
     void setTempoFromHost(double bpm);
 
