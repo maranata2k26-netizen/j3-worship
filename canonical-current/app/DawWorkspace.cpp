@@ -1283,24 +1283,9 @@ bool DawWorkspace::startTrackRecording()
         syncInspector();
     }
 
-    if (recordArmedCount_ == 0)
-    {
-        for (int t = 0; t < trackCount_; ++t)
-        {
-            if (tracks_[t].midi) continue;
-            tracks_[t].armed = true;
-            recordTrackMap_[0] = t;
-            recordInputMap_[0] = 0;
-            recordArmedCount_ = 1;
-            selectedTrack_ = t;
-            syncInspector();
-            break;
-        }
-    }
-
     if (recordArmedCount_ <= 0)
     {
-        refreshStatus("No hay pistas disponibles para grabar.");
+        refreshStatus("Armá al menos una pista de audio para grabar.");
         return false;
     }
 
@@ -1435,7 +1420,9 @@ void DawWorkspace::syncInspector()
     trackPanSlider_.setValue(t.pan, juce::dontSendNotification);
     trackMuteButton_.setToggleState(t.mute, juce::dontSendNotification);
     trackSoloButton_.setToggleState(t.solo, juce::dontSendNotification);
+    if (t.midi) t.armed = false;
     trackArmButton_.setToggleState(t.armed, juce::dontSendNotification);
+    trackArmButton_.setEnabled(!t.midi);
 
     const auto* c = clipAt({ -1, -1 });
     const bool clipSelected = c != nullptr;
@@ -1793,7 +1780,7 @@ void DawWorkspace::redo()
 juce::String DawWorkspace::serializeProject() const
 {
     juce::XmlElement root("J3DAW");
-    root.setAttribute("version", 1);
+    root.setAttribute("version", 2);
     root.setAttribute("bpm", bpm());
     root.setAttribute("trackCount", trackCount_);
     root.setAttribute("viewStartBeat", viewStartBeat_);
