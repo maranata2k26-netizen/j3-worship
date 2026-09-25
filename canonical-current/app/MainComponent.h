@@ -409,5 +409,15 @@ private:
     juce::Label diagnosticsLabel_;
     juce::TextButton runCheckButton_ { "RUN SYSTEM CHECK" };
 
+    juce::Component aboutPage_;
+    juce::ImageComponent aboutLogo_;
+    juce::Label aboutTitle_;
+    juce::Label aboutInfo_;
+
+    juce::Label splashBackdrop_;
+    juce::ImageComponent splashLogo_;
+    juce::Label splashTitle_;
+    std::uint64_t splashUntilMs_ { 0 };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
