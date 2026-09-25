@@ -47,6 +47,7 @@ public:
 private:
     static constexpr int kMaxTracks = 32;
     static constexpr int kMaxClips = 128;
+    static constexpr int kMaxMidiNotes = 1024;
     static constexpr int kRenderBuffers = 3;
 
     struct ClipAudioData
@@ -67,6 +68,17 @@ private:
         bool solo { false };
         bool armed { false };
         bool monitor { false };
+        bool midi { false };
+    };
+
+    struct MidiNote
+    {
+        int id { 0 };
+        int track { 0 };
+        double startBeat { 0.0 };
+        double lengthBeats { 1.0 };
+        int note { 60 };
+        float velocity { 0.8f };
     };
 
     struct Clip
@@ -93,6 +105,15 @@ private:
         bool solo { false };
     };
 
+    struct RenderMidiNote
+    {
+        int track { 0 };
+        std::int64_t startSample { 0 };
+        std::int64_t lengthSamples { 0 };
+        int note { 60 };
+        float velocity { 0.8f };
+    };
+
     struct RenderClip
     {
         const ClipAudioData* audio { nullptr };
@@ -110,8 +131,10 @@ private:
     struct RenderState
     {
         int clipCount { 0 };
+        int midiNoteCount { 0 };
         int trackCount { 0 };
         std::array<RenderClip, kMaxClips> clips {};
+        std::array<RenderMidiNote, kMaxMidiNotes> midiNotes {};
         std::array<RenderTrack, kMaxTracks> tracks {};
         double bpm { 120.0 };
         double sampleRate { 48000.0 };
@@ -119,7 +142,7 @@ private:
         bool anySolo { false };
     };
 
-    enum class DragMode { none, move, trimLeft, trimRight };
+    enum class DragMode { none, move, trimLeft, trimRight, midiMove, midiResize };
 
     void timerCallback() override;
     void configureControls();
@@ -130,6 +153,10 @@ private:
     juce::Rectangle<int> rulerBounds() const;
     juce::Rectangle<int> trackHeaderBounds(int track) const;
     juce::Rectangle<float> clipBounds(const Clip& clip) const;
+    juce::Rectangle<float> midiNoteBounds(const MidiNote& note) const;
+    MidiNote* midiNoteAt(juce::Point<int> point);
+    const MidiNote* midiNoteAt(juce::Point<int> point) const;
+    int midiPitchAtY(int track, int y) const noexcept;
     int trackAtY(int y) const;
     Clip* clipAt(juce::Point<int> point);
     const Clip* clipAt(juce::Point<int> point) const;
@@ -141,6 +168,9 @@ private:
     double projectEndBeat() const noexcept;
 
     void addTrack();
+    void addMidiTrack();
+    void addPattern16();
+    void addMidiNote(int track, double startBeat, int note, double lengthBeats = 1.0, float velocity = 0.8f);
     void importFiles(const juce::StringArray& files, int targetTrack, double startBeat);
     ClipAudioData* loadAudioFile(const juce::File& file, juce::String& error);
     ClipAudioData* audioForPath(const juce::String& path) const;
@@ -177,9 +207,12 @@ private:
     std::array<Track, kMaxTracks> tracks_ {};
     int trackCount_ { 8 };
     std::vector<Clip> clips_;
+    std::vector<MidiNote> midiNotes_;
     int nextClipId_ { 1 };
+    int nextMidiNoteId_ { 1 };
     int selectedTrack_ { 0 };
     int selectedClipId_ { -1 };
+    int selectedMidiNoteId_ { -1 };
 
     std::array<RenderState, kRenderBuffers> renderStates_ {};
     std::array<std::atomic<int>, kRenderBuffers> renderReaders_ {};
@@ -218,6 +251,7 @@ private:
     double dragStartLength_ { 0.0 };
     double dragStartOffsetSeconds_ { 0.0 };
     int dragStartTrack_ { 0 };
+    int dragStartMidiPitch_ { 60 };
     juce::String dragUndoSnapshot_;
     bool dragChanged_ { false };
 
@@ -235,6 +269,8 @@ private:
     juce::TextButton saveButton_ { "GUARDAR" };
     juce::TextButton importButton_ { "IMPORTAR AUDIO" };
     juce::TextButton addTrackButton_ { "+ PISTA" };
+    juce::TextButton addMidiTrackButton_ { "+ MIDI" };
+    juce::TextButton patternButton_ { "PATTERN 16" };
     juce::TextButton playButton_ { "PLAY" };
     juce::TextButton stopButton_ { "STOP" };
     juce::TextButton recordButton_ { "REC" };
