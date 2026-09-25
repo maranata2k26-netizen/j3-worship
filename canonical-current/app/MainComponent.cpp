@@ -1825,6 +1825,254 @@ void MainComponent::handleTapTempo()
     lastTapMs_ = now;
 }
 
+
+void MainComponent::scanVst3Plugins()
+{
+    auto* format = pluginFormatManager_.getFormat(0);
+    if (format == nullptr)
+    {
+        pluginStatusLabel_.setText("VST3 host format is unavailable in this build.", juce::dontSendNotification);
+        return;
+    }
+
+    const auto searchPath = format->getDefaultLocationsToSearch();
+    std::vector<std::filesystem::path> roots;
+    roots.reserve(static_cast<std::size_t>(searchPath.getNumPaths()));
+    for (int i = 0; i < searchPath.getNumPaths(); ++i)
+        roots.emplace_back(searchPath[i].getFullPathName().toStdWString());
+
+    pluginStatusLabel_.setText("Scanning VST3 folders without loading plug-ins...", juce::dontSendNotification);
+    pluginCatalog_.scan(roots);
+
+    pluginCatalogBox_.clear(juce::dontSendNotification);
+    const auto& plugins = pluginCatalog_.plugins();
+    for (std::size_t i = 0; i < plugins.size(); ++i)
+        pluginCatalogBox_.addItem(juce::String(plugins[i].name), static_cast<int>(i + 1));
+    if (!plugins.empty())
+        pluginCatalogBox_.setSelectedId(1, juce::dontSendNotification);
+
+    pluginsScanned_ = true;
+    restoreSavedPluginsAfterScan();
+    refreshPluginUi();
+}
+
+void MainComponent::restoreSavedPluginsAfterScan()
+{
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+            if (pluginPaths_[ch][slot].isNotEmpty()
+                && channelPlugins_[ch][slot].load(std::memory_order_acquire) == nullptr)
+                loadPluginPathIntoSlot(pluginPaths_[ch][slot], ch, slot);
+}
+
+void MainComponent::refreshPluginUi()
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
+
+    const bool loaded = plugin != nullptr;
+    bypassPluginButton_.setToggleState(pluginBypass_[ch][slot].load(std::memory_order_relaxed), juce::dontSendNotification);
+    bypassPluginButton_.setEnabled(loaded);
+    removePluginButton_.setEnabled(loaded || pluginPaths_[ch][slot].isNotEmpty());
+    openPluginEditorButton_.setEnabled(loaded);
+    loadPluginButton_.setEnabled(pluginsScanned_ && pluginCatalogBox_.getSelectedId() > 0);
+
+    juce::String status;
+    status << "Channel: " << inputChannelName(ch) << " · Insert " << (slot + 1) << "\n";
+    if (loaded)
+    {
+        status << "Loaded: " << (pluginNames_[ch][slot].isNotEmpty() ? pluginNames_[ch][slot] : plugin->getName()) << "\n";
+        status << "Latency: " << plugin->getLatencySamples() << " samples · "
+               << (pluginBypass_[ch][slot].load(std::memory_order_relaxed) ? "BYPASSED" : "ACTIVE") << "\n";
+        status << "Use OPEN PARAMETERS for the generic parameter editor.";
+    }
+    else if (pluginPaths_[ch][slot].isNotEmpty())
+    {
+        status << "Saved insert: " << pluginNames_[ch][slot] << "\n";
+        status << "Not loaded yet or unavailable at its previous path.";
+    }
+    else
+    {
+        status << "Empty insert.\n";
+        status << pluginCatalog_.plugins().size() << " VST3 module(s) discovered.";
+    }
+    pluginStatusLabel_.setText(status, juce::dontSendNotification);
+}
+
+void MainComponent::loadSelectedPlugin()
+{
+    const int selected = pluginCatalogBox_.getSelectedId() - 1;
+    const auto& plugins = pluginCatalog_.plugins();
+    if (selected < 0 || selected >= static_cast<int>(plugins.size()))
+    {
+        showAudioError("Seleccioná un VST3 del catálogo.");
+        return;
+    }
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    loadPluginPathIntoSlot(juce::String(plugins[static_cast<std::size_t>(selected)].path.wstring()), ch, slot);
+}
+
+void MainComponent::loadPluginPathIntoSlot(const juce::String& path, int channel, int slot)
+{
+    if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots || path.isEmpty())
+        return;
+
+    auto* format = pluginFormatManager_.getFormat(0);
+    if (format == nullptr)
+        return;
+
+    juce::OwnedArray<juce::PluginDescription> types;
+    format->findAllTypesForFile(types, path);
+    if (types.isEmpty())
+    {
+        pluginStatusLabel_.setText("Could not identify VST3: " + path, juce::dontSendNotification);
+        return;
+    }
+
+    const auto description = *types[0];
+    const double sr = std::max(8000.0, sampleRate_.load(std::memory_order_acquire));
+    const int bs = std::max(64, bufferSize_.load(std::memory_order_acquire));
+    const bool savedBypass = pluginBypass_[channel][slot].load(std::memory_order_relaxed);
+    const auto savedState = pluginStateBase64_[channel][slot];
+
+    pluginStatusLabel_.setText("Loading " + description.name + "...", juce::dontSendNotification);
+    pluginFormatManager_.createPluginInstanceAsync(
+        description, sr, bs,
+        [safe = juce::Component::SafePointer<MainComponent>(this), channel, slot, path, savedBypass, savedState]
+        (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
+        {
+            if (safe == nullptr)
+                return;
+
+            if (instance == nullptr)
+            {
+                safe->pluginStatusLabel_.setText("VST3 load failed: " + error, juce::dontSendNotification);
+                return;
+            }
+
+            const int inChannels = instance->getTotalNumInputChannels();
+            const int outChannels = instance->getTotalNumOutputChannels();
+            if (inChannels > 2 || outChannels > 2 || inChannels < 1 || outChannels < 1)
+            {
+                safe->pluginStatusLabel_.setText(
+                    "Insert rejected: this version supports mono/stereo audio-effect VST3 plug-ins only.",
+                    juce::dontSendNotification);
+                return;
+            }
+
+            instance->setRateAndBufferSizeDetails(
+                std::max(8000.0, safe->sampleRate_.load(std::memory_order_acquire)),
+                std::max(64, safe->bufferSize_.load(std::memory_order_acquire)));
+            instance->prepareToPlay(
+                std::max(8000.0, safe->sampleRate_.load(std::memory_order_acquire)),
+                std::max(64, safe->bufferSize_.load(std::memory_order_acquire)));
+
+            if (savedState.isNotEmpty())
+            {
+                juce::MemoryBlock state;
+                if (state.fromBase64Encoding(savedState))
+                    instance->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            }
+
+            auto shared = std::shared_ptr<juce::AudioPluginInstance>(std::move(instance));
+            safe->pluginPaths_[channel][slot] = path;
+            safe->pluginNames_[channel][slot] = shared->getName();
+            safe->pluginBypass_[channel][slot].store(savedBypass, std::memory_order_release);
+            safe->channelPlugins_[channel][slot].store(shared, std::memory_order_release);
+            safe->refreshPluginUi();
+            safe->saveAppState();
+        });
+}
+
+void MainComponent::removeSelectedPlugin()
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    channelPlugins_[ch][slot].store({}, std::memory_order_release);
+    pluginPaths_[ch][slot].clear();
+    pluginNames_[ch][slot].clear();
+    pluginStateBase64_[ch][slot].clear();
+    pluginBypass_[ch][slot].store(false, std::memory_order_release);
+    refreshPluginUi();
+    saveAppState();
+}
+
+void MainComponent::openSelectedPluginEditor()
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
+    if (plugin == nullptr)
+        return;
+
+    auto holder = std::make_unique<GenericPluginEditorHolder>(plugin);
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(holder.release());
+    options.dialogTitle = "J3 Worship · " + plugin->getName();
+    options.dialogBackgroundColour = juce::Colour(panel);
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = true;
+    options.launchAsync();
+}
+
+const float* MainComponent::processPluginChain(int channel, const float* input, int numSamples) noexcept
+{
+    if (channel < 0 || channel >= kMaxChannels || input == nullptr || numSamples <= 0
+        || pluginScratch_.getNumChannels() < 2 || pluginScratch_.getNumSamples() < numSamples)
+        return input;
+
+    bool hasPlugin = false;
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+        if (!pluginBypass_[channel][slot].load(std::memory_order_relaxed)
+            && channelPlugins_[channel][slot].load(std::memory_order_acquire) != nullptr)
+            hasPlugin = true;
+    if (!hasPlugin)
+        return input;
+
+    pluginScratch_.copyFrom(0, 0, input, numSamples);
+    pluginScratch_.copyFrom(1, 0, input, numSamples);
+
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+    {
+        if (pluginBypass_[channel][slot].load(std::memory_order_relaxed))
+            continue;
+
+        auto plugin = channelPlugins_[channel][slot].load(std::memory_order_acquire);
+        if (plugin == nullptr)
+            continue;
+
+        try
+        {
+            const int channels = juce::jlimit(1, 2,
+                std::max(plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels()));
+            if (channels == 2)
+                pluginScratch_.copyFrom(1, 0, pluginScratch_, 0, 0, numSamples);
+
+            juce::AudioBuffer<float> view(pluginScratch_.getArrayOfWritePointers(), channels, numSamples);
+            pluginMidiScratch_.clear();
+            plugin->processBlock(view, pluginMidiScratch_);
+
+            if (plugin->getTotalNumOutputChannels() >= 2)
+            {
+                auto* mono = pluginScratch_.getWritePointer(0);
+                const auto* right = pluginScratch_.getReadPointer(1);
+                for (int i = 0; i < numSamples; ++i)
+                    mono[i] = (mono[i] + right[i]) * 0.70710678f;
+            }
+            pluginScratch_.copyFrom(1, 0, pluginScratch_, 0, 0, numSamples);
+        }
+        catch (...)
+        {
+            pluginBypass_[channel][slot].store(true, std::memory_order_release);
+        }
+    }
+
+    return pluginScratch_.getReadPointer(0);
+}
+
 void MainComponent::refreshPadUi()
 {
     static const std::array<juce::String, 12> keys { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
