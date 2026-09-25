@@ -58,18 +58,34 @@ class GenericPluginEditorHolder final : public juce::Component
 {
 public:
     explicit GenericPluginEditorHolder(std::shared_ptr<juce::AudioPluginInstance> plugin)
-        : plugin_(std::move(plugin)), editor_(std::make_unique<juce::GenericAudioProcessorEditor>(*plugin_))
+        : plugin_(std::move(plugin))
     {
-        addAndMakeVisible(*editor_);
-        setSize(juce::jlimit(480, 980, editor_->getWidth()),
-                juce::jlimit(420, 760, editor_->getHeight()));
+        if (plugin_ != nullptr && plugin_->hasEditor())
+            editor_.reset(plugin_->createEditorIfNeeded());
+        if (editor_ == nullptr && plugin_ != nullptr)
+            editor_ = std::make_unique<juce::GenericAudioProcessorEditor>(*plugin_);
+
+        if (editor_ != nullptr)
+        {
+            addAndMakeVisible(*editor_);
+            setSize(juce::jlimit(520, 1180, editor_->getWidth()),
+                    juce::jlimit(420, 820, editor_->getHeight()));
+        }
+        else
+        {
+            setSize(640, 480);
+        }
     }
 
-    void resized() override { editor_->setBounds(getLocalBounds()); }
+    void resized() override
+    {
+        if (editor_ != nullptr)
+            editor_->setBounds(getLocalBounds());
+    }
 
 private:
     std::shared_ptr<juce::AudioPluginInstance> plugin_;
-    std::unique_ptr<juce::GenericAudioProcessorEditor> editor_;
+    std::unique_ptr<juce::AudioProcessorEditor> editor_;
 };
 
 class DashboardCard final : public juce::Component
@@ -763,7 +779,7 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
 
-    pluginsTitle_.setText("VST3 INSERTS · 4 SLOTS PER INPUT", juce::dontSendNotification);
+    pluginsTitle_.setText("VST3 INSERTS · 8 SLOTS PER INPUT", juce::dontSendNotification);
     pluginsTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
     pluginsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
     pluginsPage_.addAndMakeVisible(pluginsTitle_);
@@ -784,6 +800,7 @@ MainComponent::MainComponent()
     scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     loadPluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
     removePluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    openPluginEditorButton_.setButtonText("OPEN PLUGIN");
     openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
     bypassPluginButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
     scanPluginsButton_.onClick = [this] { scanVst3Plugins(); };
@@ -1090,10 +1107,37 @@ MainComponent::MainComponent()
         }
         updateClickUi();
     };
+    dawWorkspace_.onSelectedTrackChanged = [this](int track)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, track);
+        pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        selectedDspChannel_ = ch;
+        setMixerBank((ch / kVisibleChannels) * kVisibleChannels);
+        refreshPluginUi();
+        refreshDspUi();
+    };
+    dawWorkspace_.onOpenMixer = [this] { tabs_.setCurrentTabIndex(1); };
+    dawWorkspace_.onOpenDsp = [this]
+    {
+        tabs_.setCurrentTabIndex(4);
+        refreshDspUi();
+    };
+    dawWorkspace_.onOpenPlugins = [this]
+    {
+        tabs_.setCurrentTabIndex(7);
+        refreshPluginUi();
+    };
+    dawWorkspace_.onOpenPads = [this] { tabs_.setCurrentTabIndex(6); };
+    dawWorkspace_.onOpenIem = [this]
+    {
+        tabs_.setCurrentTabIndex(8);
+        refreshIemUi();
+    };
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
-    tabs_.setTabBarDepth(46);
-    tabs_.addTab("MEZCLADOR", juce::Colour(panel), &mixerPage_, false);
-    tabs_.addTab("DAW", juce::Colour(panel), &dawWorkspace_, false);
+    tabs_.setTabBarDepth(42);
+    tabs_.addTab("ARRANGER", juce::Colour(panel), &dawWorkspace_, false);
+    tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
@@ -2522,7 +2566,9 @@ void MainComponent::refreshPluginUi()
         status << "Loaded: " << (pluginNames_[ch][slot].isNotEmpty() ? pluginNames_[ch][slot] : plugin->getName()) << "\n";
         status << "Latency: " << plugin->getLatencySamples() << " samples · "
                << (pluginBypass_[ch][slot].load(std::memory_order_relaxed) ? "BYPASSED" : "ACTIVE") << "\n";
-        status << "Use OPEN PARAMETERS for the generic parameter editor.";
+        status << (plugin->hasEditor()
+            ? "OPEN PLUGIN abre la interfaz nativa del VST3."
+            : "OPEN PLUGIN abre el editor genérico de parámetros.");
     }
     else if (pluginPaths_[ch][slot].isNotEmpty())
     {
