@@ -98,7 +98,8 @@ void DawWorkspace::configureControls()
     };
     for (auto* b : { &newButton_, &openButton_, &saveButton_, &importButton_, &addTrackButton_,
                      &addMidiTrackButton_, &patternButton_, &playButton_, &stopButton_, &recordButton_,
-                     &splitButton_, &duplicateButton_, &deleteButton_ })
+                     &splitButton_, &duplicateButton_, &deleteButton_, &mixerViewButton_, &dspViewButton_,
+                     &pluginsViewButton_, &padsViewButton_, &iemViewButton_ })
         addButton(*b);
 
     playButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(kAccent).darker(0.2f));
@@ -143,6 +144,17 @@ void DawWorkspace::configureControls()
     splitButton_.onClick = [this] { splitSelectedClipAtPlayhead(); };
     duplicateButton_.onClick = [this] { duplicateSelectedClip(); };
     deleteButton_.onClick = [this] { deleteSelectedClip(); };
+
+    mixerViewButton_.onClick = [this] { if (onOpenMixer) onOpenMixer(); };
+    dspViewButton_.onClick = [this] { if (onOpenDsp) onOpenDsp(); };
+    pluginsViewButton_.onClick = [this] { if (onOpenPlugins) onOpenPlugins(); };
+    padsViewButton_.onClick = [this] { if (onOpenPads) onOpenPads(); };
+    iemViewButton_.onClick = [this] { if (onOpenIem) onOpenIem(); };
+    for (auto* b : { &mixerViewButton_, &dspViewButton_, &pluginsViewButton_, &padsViewButton_, &iemViewButton_ })
+    {
+        b->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff162d3d));
+        b->setColour(juce::TextButton::textColourOffId, juce::Colour(0xffd9e9f5));
+    }
 
     bpmSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     bpmSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 68, 22);
@@ -305,13 +317,20 @@ void DawWorkspace::paint(juce::Graphics& g)
 
     auto bounds = getLocalBounds();
     auto toolbar = bounds.removeFromTop(toolbarHeight_);
-    g.setColour(juce::Colour(0xff0a151e));
+    juce::ColourGradient toolbarGradient(juce::Colour(0xff111e29), 0.0f, static_cast<float>(toolbar.getY()),
+                                         juce::Colour(0xff09131b), 0.0f, static_cast<float>(toolbar.getBottom()), false);
+    g.setGradientFill(toolbarGradient);
     g.fillRect(toolbar);
     g.setColour(juce::Colour(kBorder));
     g.drawHorizontalLine(toolbar.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
+    g.setColour(juce::Colour(0xff355064).withAlpha(0.7f));
+    g.drawVerticalLine(535, 8.0f, static_cast<float>(toolbar.getBottom() - 8));
+    g.drawVerticalLine(std::max(0, getWidth() - 292), 8.0f, static_cast<float>(toolbar.getBottom() - 8));
 
     auto inspector = bounds.removeFromBottom(inspectorHeight_);
-    g.setColour(juce::Colour(0xff0b1720));
+    juce::ColourGradient inspectorGradient(juce::Colour(0xff0d1a24), 0.0f, static_cast<float>(inspector.getY()),
+                                           juce::Colour(0xff081119), 0.0f, static_cast<float>(inspector.getBottom()), false);
+    g.setGradientFill(inspectorGradient);
     g.fillRect(inspector);
     g.setColour(juce::Colour(kBorder));
     g.drawHorizontalLine(inspector.getY(), 0.0f, static_cast<float>(getWidth()));
@@ -365,15 +384,27 @@ void DawWorkspace::paint(juce::Graphics& g)
         g.setFont(juce::FontOptions(14.0f, juce::Font::bold));
         g.drawText(juce::String(t + 1) + "  " + tracks_[t].name, header.reduced(9, 7).removeFromTop(23),
                    juce::Justification::centredLeft);
+        auto meta = header.reduced(9, 7).withTrimmedTop(25);
         g.setFont(juce::FontOptions(10.5f));
         g.setColour(juce::Colour(kMuted));
-        juce::String flags;
-        if (tracks_[t].mute) flags << "M ";
-        if (tracks_[t].solo) flags << "S ";
-        if (tracks_[t].armed) flags << "REC ";
-        if (tracks_[t].midi) flags << "MIDI · PIANO ROLL ";
-        flags << juce::String(gainToDb(tracks_[t].gain), 1) << " dB";
-        g.drawText(flags, header.reduced(9, 7).withTrimmedTop(25), juce::Justification::centredLeft);
+        const auto typeText = tracks_[t].midi ? "MIDI / PIANO ROLL" : "AUDIO";
+        g.drawText(typeText + juce::String("  ·  ") + juce::String(gainToDb(tracks_[t].gain), 1) + " dB",
+                   meta.removeFromLeft(std::max(48, meta.getWidth() - 74)), juce::Justification::centredLeft);
+
+        auto chipArea = meta.reduced(0, 3);
+        auto drawChip = [&](const juce::String& label, bool active, juce::Colour activeColour)
+        {
+            auto chip = chipArea.removeFromLeft(21).toFloat();
+            chipArea.removeFromLeft(2);
+            g.setColour(active ? activeColour : juce::Colour(0xff1b2a34));
+            g.fillRoundedRectangle(chip, 3.0f);
+            g.setColour(active ? juce::Colours::white : juce::Colour(0xff748794));
+            g.setFont(juce::FontOptions(9.0f, juce::Font::bold));
+            g.drawText(label, chip.toNearestInt(), juce::Justification::centred);
+        };
+        drawChip("M", tracks_[t].mute, juce::Colour(kDanger));
+        drawChip("S", tracks_[t].solo, juce::Colour(kGood));
+        drawChip("R", tracks_[t].armed, juce::Colour(kDanger));
     }
 
     for (const auto& clip : clips_)
@@ -495,62 +526,83 @@ void DawWorkspace::paint(juce::Graphics& g)
         g.fillPath(marker);
     }
 
-    g.setColour(juce::Colour(kMuted));
-    g.setFont(juce::FontOptions(10.5f));
-    g.drawText("ARRANGER · audio + MIDI/piano roll · doble clic en pista MIDI agrega nota · PATTERN 16 · Space Play/Stop · Ctrl+S · Ctrl+Z/Y · Delete",
-               8, getHeight() - 18, getWidth() - 16, 15, juce::Justification::centredLeft);
+    g.setColour(juce::Colour(0xff6f8492));
+    g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+    g.drawText("J3 ARRANGER  ·  AUDIO + MIDI  ·  SPACE PLAY/STOP  ·  CTRL+S  ·  CTRL+Z/Y",
+               std::max(8, getWidth() - 540), getHeight() - 18, std::min(532, getWidth() - 16), 15,
+               juce::Justification::centredRight);
 }
 
 void DawWorkspace::resized()
 {
     auto r = getLocalBounds();
-    auto toolbar = r.removeFromTop(toolbarHeight_).reduced(6, 7);
+    auto toolbar = r.removeFromTop(toolbarHeight_).reduced(8, 6);
+    auto topRow = toolbar.removeFromTop(28);
+    toolbar.removeFromTop(4);
+    auto bottomRow = toolbar.removeFromTop(28);
 
-    auto take = [&](juce::Component& c, int width)
+    auto takeLeft = [](juce::Rectangle<int>& row, juce::Component& c, int width)
     {
-        c.setBounds(toolbar.removeFromLeft(width));
-        toolbar.removeFromLeft(4);
+        const int w = std::min(width, std::max(0, row.getWidth()));
+        c.setBounds(row.removeFromLeft(w));
+        if (row.getWidth() > 0) row.removeFromLeft(std::min(4, row.getWidth()));
     };
-    take(newButton_, 58);
-    take(openButton_, 58);
-    take(saveButton_, 68);
-    take(importButton_, 106);
-    take(addTrackButton_, 66);
-    take(addMidiTrackButton_, 62);
-    take(patternButton_, 82);
-    toolbar.removeFromLeft(6);
-    take(stopButton_, 52);
-    take(playButton_, 58);
-    take(recordButton_, 46);
-    take(loopButton_, 58);
-    take(splitButton_, 64);
-    take(duplicateButton_, 72);
-    take(deleteButton_, 58);
-    toolbar.removeFromLeft(5);
-    take(bpmSlider_, 136);
-    take(snapBox_, 102);
-    take(zoomSlider_, std::max(0, toolbar.getWidth()));
+    auto takeRight = [](juce::Rectangle<int>& row, juce::Component& c, int width)
+    {
+        const int w = std::min(width, std::max(0, row.getWidth()));
+        c.setBounds(row.removeFromRight(w));
+        if (row.getWidth() > 0) row.removeFromRight(std::min(4, row.getWidth()));
+    };
 
-    auto inspector = r.removeFromBottom(inspectorHeight_).reduced(8, 7);
-    auto top = inspector.removeFromTop(30);
-    trackNameEditor_.setBounds(top.removeFromLeft(155));
+    takeLeft(topRow, newButton_, 56);
+    takeLeft(topRow, openButton_, 58);
+    takeLeft(topRow, saveButton_, 66);
+    takeLeft(topRow, importButton_, 104);
+    topRow.removeFromLeft(std::min(6, topRow.getWidth()));
+    takeLeft(topRow, addTrackButton_, 68);
+    takeLeft(topRow, addMidiTrackButton_, 64);
+    takeLeft(topRow, patternButton_, 84);
+
+    takeRight(topRow, iemViewButton_, 42);
+    takeRight(topRow, padsViewButton_, 50);
+    takeRight(topRow, pluginsViewButton_, 72);
+    takeRight(topRow, dspViewButton_, 48);
+    takeRight(topRow, mixerViewButton_, 62);
+
+    takeLeft(bottomRow, stopButton_, 54);
+    takeLeft(bottomRow, playButton_, 60);
+    takeLeft(bottomRow, recordButton_, 48);
+    takeLeft(bottomRow, loopButton_, 58);
+    bottomRow.removeFromLeft(std::min(8, bottomRow.getWidth()));
+    takeLeft(bottomRow, splitButton_, 66);
+    takeLeft(bottomRow, duplicateButton_, 74);
+    takeLeft(bottomRow, deleteButton_, 60);
+    bottomRow.removeFromLeft(std::min(8, bottomRow.getWidth()));
+    takeLeft(bottomRow, bpmSlider_, 142);
+    takeLeft(bottomRow, snapBox_, 106);
+    zoomSlider_.setBounds(bottomRow);
+
+    auto inspector = r.removeFromBottom(inspectorHeight_).reduced(8, 8);
+    auto top = inspector.removeFromTop(32);
+    trackNameEditor_.setBounds(top.removeFromLeft(170));
     top.removeFromLeft(6);
-    trackMuteButton_.setBounds(top.removeFromLeft(36));
-    trackSoloButton_.setBounds(top.removeFromLeft(36));
-    trackArmButton_.setBounds(top.removeFromLeft(46));
+    trackMuteButton_.setBounds(top.removeFromLeft(38));
+    trackSoloButton_.setBounds(top.removeFromLeft(38));
+    trackArmButton_.setBounds(top.removeFromLeft(48));
     top.removeFromLeft(8);
-    trackVolumeSlider_.setBounds(top.removeFromLeft(160));
-    trackPanSlider_.setBounds(top.removeFromLeft(135));
+    trackVolumeSlider_.setBounds(top.removeFromLeft(176));
+    trackPanSlider_.setBounds(top.removeFromLeft(144));
     top.removeFromLeft(8);
-    clipMuteButton_.setBounds(top.removeFromLeft(82));
-    clipLoopButton_.setBounds(top.removeFromLeft(82));
+    clipMuteButton_.setBounds(top.removeFromLeft(86));
+    clipLoopButton_.setBounds(top.removeFromLeft(86));
     statusLabel_.setBounds(top);
 
-    auto bottom = inspector.removeFromTop(30);
-    clipGainSlider_.setBounds(bottom.removeFromLeft(180));
-    bottom.removeFromLeft(6);
-    fadeInSlider_.setBounds(bottom.removeFromLeft(170));
-    fadeOutSlider_.setBounds(bottom.removeFromLeft(170));
+    inspector.removeFromTop(8);
+    auto bottom = inspector.removeFromTop(32);
+    clipGainSlider_.setBounds(bottom.removeFromLeft(190));
+    bottom.removeFromLeft(8);
+    fadeInSlider_.setBounds(bottom.removeFromLeft(180));
+    fadeOutSlider_.setBounds(bottom.removeFromLeft(180));
 
     repaint();
 }
@@ -1414,6 +1466,11 @@ void DawWorkspace::importRecordedTake()
 void DawWorkspace::syncInspector()
 {
     selectedTrack_ = juce::jlimit(0, std::max(0, trackCount_ - 1), selectedTrack_);
+    if (selectedTrack_ != lastNotifiedTrack_)
+    {
+        lastNotifiedTrack_ = selectedTrack_;
+        if (onSelectedTrackChanged) onSelectedTrackChanged(selectedTrack_);
+    }
     auto& t = tracks_[selectedTrack_];
     trackNameEditor_.setText(t.name, juce::dontSendNotification);
     trackVolumeSlider_.setValue(gainToDb(t.gain), juce::dontSendNotification);
