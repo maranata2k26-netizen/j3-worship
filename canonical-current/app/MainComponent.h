@@ -124,6 +124,7 @@ private:
     juce::String buildDeviceInventoryText() const;
     juce::String inputChannelName(int channel) const;
     void setLiveSection(const juce::String& name, j3::SectionKind kind, int bars = 4);
+    void stopLiveTransport();
     void refreshLiveLabels();
     void updateClickUi();
     void handleTapTempo();
@@ -294,6 +295,7 @@ private:
     juce::Label dashboardPluginsTitle_;
     juce::Label dashboardPluginsInfo_;
     juce::Label dashboardLiveTitle_;
+    juce::TextButton dashboardStopButton_ { "STOP" };
     juce::ToggleButton dashboardPadButton_ { "PAD" };
     juce::ToggleButton dashboardClickButton_ { "CLICK" };
     juce::Label dashboardTempoLabel_;
