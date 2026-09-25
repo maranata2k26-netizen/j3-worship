@@ -1,0 +1,83 @@
+diff -ruN J3Worship-base04/app/MainComponent.h J3Worship-work/app/MainComponent.h
+--- J3Worship-base04/app/MainComponent.h	2026-09-24 19:31:22.000000000 +0000
++++ J3Worship-work/app/MainComponent.h	2026-09-25 02:42:36.974506721 +0000
+@@ -3,6 +3,8 @@
+ #include <JuceHeader.h>
+ #include "j3/Dsp.h"
+ #include "j3/LiveEngine.h"
++#include "j3/ClickGenerator.h"
++#include "j3/Recording.h"
+ 
+ #include <array>
+ #include <atomic>
+@@ -33,6 +35,7 @@
+         void paint(juce::Graphics&) override;
+         void resized() override;
+         void timerTick();
++        void syncFromModel();
+ 
+     private:
+         int index_{};
+@@ -54,6 +57,13 @@
+     void saveAudioState();
+     juce::File getAudioStateFile() const;
+     void openAudioSettings();
++    void startStopRecording();
++    juce::File recordingsRoot() const;
++    juce::File getAppStateFile() const;
++    juce::File getRuntimeLockFile() const;
++    void loadAppState();
++    void saveAppState();
++    void updateRecordingUi();
+     void openDriverControlPanel();
+     void showAudioError(const juce::String&);
+     void updateDiagnostics();
+@@ -62,6 +72,8 @@
+     juce::String buildDeviceInventoryText() const;
+     void setLiveSection(const juce::String& name, j3::SectionKind kind, int bars = 4);
+     void refreshLiveLabels();
++    void updateClickUi();
++    void handleTapTempo();
+     bool routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept;
+     void scheduleReconnect();
+ 
+@@ -82,6 +94,13 @@
+     std::atomic<int> bufferSize_ { 0 };
+     std::atomic<bool> audioRunning_ { false };
+     std::atomic<bool> liveMonitorEnabled_ { false };
++    std::atomic<bool> transportRunning_ { false };
++    std::atomic<bool> clickAudible_ { false };
++    std::atomic<int> pendingBeatEvents_ { 0 };
++    j3::ClickGenerator clickGenerator_;
++    j3::MultiTrackRecorder recorder_;
++    std::atomic<bool> recordingEnabled_ { false };
++    std::atomic<int> recordChannelCount_ { 0 };
+     std::array<std::atomic<float>, kMaxChannels> channelGain_{};
+     std::array<std::atomic<float>, kMaxChannels> channelPan_{};
+     std::array<std::atomic<bool>, kMaxChannels> channelMute_{};
+@@ -115,6 +134,25 @@
+     juce::Component mixerPage_;
+     std::array<std::unique_ptr<MixerStrip>, kVisibleChannels> strips_;
+ 
++    juce::Component clickPage_;
++    juce::Label clickTitle_;
++    juce::ToggleButton clickEnabledButton_ { "CLICK ON" };
++    juce::Slider bpmSlider_;
++    juce::TextButton tapTempoButton_ { "TAP TEMPO" };
++    juce::ComboBox timeSignatureBox_;
++    juce::ComboBox subdivisionBox_;
++    juce::ToggleButton accentButton_ { "ACCENT" };
++    juce::Slider clickVolumeSlider_;
++    juce::Label clickRouteLabel_;
++    double lastTapMs_ { 0.0 };
++
++    juce::Component recordingPage_;
++    juce::Label recordingTitle_;
++    juce::TextButton recordButton_ { "RECORD SERVICE" };
++    juce::Label recordingStatusLabel_;
++    juce::TextButton openRecordingsButton_ { "OPEN RECORDINGS FOLDER" };
++    bool recoveredAfterUncleanExit_ { false };
++
+     juce::Component setupPage_;
+     juce::Label setupTitle_;
+     juce::Label setupDeviceLabel_;
