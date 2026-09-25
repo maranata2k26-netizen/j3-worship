@@ -689,6 +689,7 @@ double DawWorkspace::projectEndBeat() const noexcept
 {
     double end = 16.0;
     for (const auto& c : clips_) end = std::max(end, c.startBeat + c.lengthBeats);
+    for (const auto& n : midiNotes_) end = std::max(end, n.startBeat + n.lengthBeats);
     return end;
 }
 
@@ -716,8 +717,29 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    if (auto* n = midiNoteAt(e.getPosition()))
+    {
+        selectedMidiNoteId_ = n->id;
+        selectedClipId_ = -1;
+        selectedTrack_ = n->track;
+        dragStartPoint_ = e.getPosition();
+        dragStartBeat_ = n->startBeat;
+        dragStartLength_ = n->lengthBeats;
+        dragStartTrack_ = n->track;
+        dragStartMidiPitch_ = n->note;
+        dragUndoSnapshot_ = serializeProject();
+        dragChanged_ = false;
+        const auto nb = midiNoteBounds(*n);
+        dragMode_ = std::abs(static_cast<float>(e.x) - nb.getRight()) <= 6.0f
+            ? DragMode::midiResize : DragMode::midiMove;
+        syncInspector();
+        repaint();
+        return;
+    }
+
     if (auto* c = clipAt(e.getPosition()))
     {
+        selectedMidiNoteId_ = -1;
         selectedClipId_ = c->id;
         selectedTrack_ = c->track;
         dragStartPoint_ = e.getPosition();
@@ -741,6 +763,7 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
     }
 
     selectedClipId_ = -1;
+    selectedMidiNoteId_ = -1;
     const int t = trackAtY(e.y);
     if (t >= 0) selectedTrack_ = t;
     syncInspector();
@@ -749,31 +772,56 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
 
 void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
 {
-    auto* c = clipAt({ -1, -1 });
-    if (c == nullptr || dragMode_ == DragMode::none) return;
-
+    if (dragMode_ == DragMode::none) return;
     const double deltaBeat = static_cast<double>(e.x - dragStartPoint_.x) / pixelsPerBeat();
-    const int newTrack = trackAtY(e.y);
 
-    if (dragMode_ == DragMode::move)
+    if (dragMode_ == DragMode::midiMove || dragMode_ == DragMode::midiResize)
     {
-        c->startBeat = snapBeat(dragStartBeat_ + deltaBeat);
-        if (newTrack >= 0) c->track = newTrack;
+        for (auto& n : midiNotes_)
+        {
+            if (n.id != selectedMidiNoteId_) continue;
+            if (dragMode_ == DragMode::midiMove)
+            {
+                n.startBeat = snapBeat(dragStartBeat_ + deltaBeat);
+                const int newTrack = trackAtY(e.y);
+                if (newTrack >= 0 && tracks_[newTrack].midi)
+                    n.track = newTrack;
+                n.note = midiPitchAtY(n.track, e.y);
+            }
+            else
+            {
+                const double raw = dragStartLength_ + deltaBeat;
+                const double snapped = snapBeats_ > 0.0 ? snapBeat(raw) : raw;
+                n.lengthBeats = std::max(0.125, snapped);
+            }
+            break;
+        }
     }
-    else if (dragMode_ == DragMode::trimRight)
+    else
     {
-        c->lengthBeats = std::max(snapBeats_ > 0.0 ? snapBeats_ : 0.05,
-                                  snapBeat(dragStartLength_ + deltaBeat));
-    }
-    else if (dragMode_ == DragMode::trimLeft)
-    {
-        const double oldEnd = dragStartBeat_ + dragStartLength_;
-        double newStart = snapBeat(dragStartBeat_ + deltaBeat);
-        newStart = juce::jlimit(0.0, oldEnd - 0.05, newStart);
-        const double shiftedBeats = newStart - dragStartBeat_;
-        c->startBeat = newStart;
-        c->lengthBeats = oldEnd - newStart;
-        c->sourceOffsetSeconds = std::max(0.0, dragStartOffsetSeconds_ + shiftedBeats * 60.0 / bpm());
+        auto* c = clipAt({ -1, -1 });
+        if (c == nullptr) return;
+        const int newTrack = trackAtY(e.y);
+        if (dragMode_ == DragMode::move)
+        {
+            c->startBeat = snapBeat(dragStartBeat_ + deltaBeat);
+            if (newTrack >= 0 && !tracks_[newTrack].midi) c->track = newTrack;
+        }
+        else if (dragMode_ == DragMode::trimRight)
+        {
+            c->lengthBeats = std::max(snapBeats_ > 0.0 ? snapBeats_ : 0.05,
+                                      snapBeat(dragStartLength_ + deltaBeat));
+        }
+        else if (dragMode_ == DragMode::trimLeft)
+        {
+            const double oldEnd = dragStartBeat_ + dragStartLength_;
+            double newStart = snapBeat(dragStartBeat_ + deltaBeat);
+            newStart = juce::jlimit(0.0, oldEnd - 0.05, newStart);
+            const double shiftedBeats = newStart - dragStartBeat_;
+            c->startBeat = newStart;
+            c->lengthBeats = oldEnd - newStart;
+            c->sourceOffsetSeconds = std::max(0.0, dragStartOffsetSeconds_ + shiftedBeats * 60.0 / bpm());
+        }
     }
 
     dragChanged_ = true;
@@ -799,9 +847,17 @@ void DawWorkspace::mouseDoubleClick(const juce::MouseEvent& e)
         const int track = trackAtY(e.y);
         if (track >= 0)
         {
+            const double beat = snapBeat(beatAtX(static_cast<float>(e.x)));
+            if (tracks_[track].midi)
+            {
+                checkpointUndo();
+                addMidiNote(track, beat, midiPitchAtY(track, e.y),
+                            snapBeats_ > 0.0 ? std::max(0.25, snapBeats_) : 1.0);
+                return;
+            }
+
             chooser_ = std::make_unique<juce::FileChooser>(
                 "Importar audio", juce::File{}, "*.wav;*.mp3;*.flac;*.aif;*.aiff");
-            const double beat = snapBeat(beatAtX(static_cast<float>(e.x)));
             chooser_->launchAsync(juce::FileBrowserComponent::openMode
                                     | juce::FileBrowserComponent::canSelectMultipleItems,
                 [this, track, beat](const juce::FileChooser& c)
