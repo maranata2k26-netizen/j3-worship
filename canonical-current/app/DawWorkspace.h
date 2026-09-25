@@ -51,6 +51,7 @@ public:
     std::function<void()> onOpenPlugins;
     std::function<void()> onOpenPads;
     std::function<void()> onOpenIem;
+    std::function<void()> onOpenSetlist;
 
     bool validateLayoutForTesting(juce::String& report) const;
 
@@ -100,6 +101,7 @@ private:
         float gain { 1.0f };
         bool muted { false };
         bool loop { false };
+        bool reversed { false };
         double fadeInBeats { 0.0 };
         double fadeOutBeats { 0.0 };
         juce::Colour colour;
@@ -133,6 +135,7 @@ private:
         float gain { 1.0f };
         bool muted { false };
         bool loop { false };
+        bool reversed { false };
         std::int64_t fadeInSamples { 0 };
         std::int64_t fadeOutSamples { 0 };
     };
@@ -201,6 +204,8 @@ private:
     void deleteSelectedClip();
     void duplicateSelectedClip();
     void splitSelectedClipAtPlayhead();
+    void normalizeSelectedClip();
+    void reverseSelectedClip();
     void stopTransport(bool returnToStart);
     void togglePlay();
     void setTransportBeat(double beat) noexcept;
@@ -272,6 +277,7 @@ private:
     int mixerHeight_ { 138 };
     int splitterSize_ { 5 };
     int workspacePreset_ { 4 };
+    int selectedBrowserItem_ { 0 };
     double snapBeats_ { 0.25 };
 
     DragMode dragMode_ { DragMode::none };
