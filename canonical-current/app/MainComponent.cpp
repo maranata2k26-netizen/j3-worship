@@ -506,6 +506,80 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
 
+    padTitle_.setText("J3 PADS", juce::dontSendNotification);
+    padTitle_.setFont(juce::FontOptions(30.0f, juce::Font::bold));
+    padTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+    padPage_.addAndMakeVisible(padTitle_);
+
+    const std::array<juce::String, 12> padKeys { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    for (int i = 0; i < static_cast<int>(padKeys.size()); ++i)
+        padKeyBox_.addItem(padKeys[static_cast<std::size_t>(i)], i + 1);
+    padKeyBox_.setSelectedId(1, juce::dontSendNotification);
+    padKeyBox_.onChange = [this]
+    {
+        ambientPad_.setRootMidi(60 + juce::jlimit(0, 11, padKeyBox_.getSelectedId() - 1));
+        refreshPadUi();
+        saveAppState();
+    };
+    padPage_.addAndMakeVisible(padKeyBox_);
+
+    padMinorButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
+    padMinorButton_.onClick = [this]
+    {
+        ambientPad_.setMinor(padMinorButton_.getToggleState());
+        refreshPadUi();
+        saveAppState();
+    };
+    padPage_.addAndMakeVisible(padMinorButton_);
+
+    padEnabledButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
+    padEnabledButton_.onClick = [this]
+    {
+        if (padEnabledButton_.getToggleState() && !padToPa_.load(std::memory_order_relaxed))
+        {
+            padEnabledButton_.setToggleState(false, juce::dontSendNotification);
+            showAudioError("J3 PADS no tiene una ruta activa. Habilitá ROUTE TO PA.");
+            return;
+        }
+        ambientPad_.setEnabled(padEnabledButton_.getToggleState());
+        refreshPadUi();
+    };
+    padPage_.addAndMakeVisible(padEnabledButton_);
+
+    padToPaButton_.setToggleState(true, juce::dontSendNotification);
+    padToPaButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
+    padToPaButton_.onClick = [this]
+    {
+        padToPa_.store(padToPaButton_.getToggleState(), std::memory_order_release);
+        if (!padToPaButton_.getToggleState())
+        {
+            ambientPad_.setEnabled(false);
+            padEnabledButton_.setToggleState(false, juce::dontSendNotification);
+        }
+        refreshPadUi();
+        saveAppState();
+    };
+    padPage_.addAndMakeVisible(padToPaButton_);
+
+    padVolumeSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+    padVolumeSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 80, 26);
+    padVolumeSlider_.setRange(0.0, 1.0, 0.01);
+    padVolumeSlider_.setValue(0.18, juce::dontSendNotification);
+    padVolumeSlider_.setTextValueSuffix(" VOL");
+    padVolumeSlider_.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
+    padVolumeSlider_.onValueChange = [this]
+    {
+        ambientPad_.setVolume(static_cast<float>(padVolumeSlider_.getValue()));
+        refreshPadUi();
+    };
+    padPage_.addAndMakeVisible(padVolumeSlider_);
+
+    padInfoLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+    padInfoLabel_.setFont(juce::FontOptions(17.0f));
+    padInfoLabel_.setJustificationType(juce::Justification::topLeft);
+    padPage_.addAndMakeVisible(padInfoLabel_);
+    refreshPadUi();
+
     clickTitle_.setText("J3 CLICK", juce::dontSendNotification);
     clickTitle_.setFont(juce::FontOptions(28.0f, juce::Font::bold));
     clickTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
@@ -691,6 +765,7 @@ MainComponent::MainComponent()
     tabs_.addTab("CHANNEL DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GROUPS", juce::Colour(panel), &groupsPage_, false);
     tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
+    tabs_.addTab("PADS", juce::Colour(panel), &padPage_, false);
     tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
     tabs_.addTab("RECORD", juce::Colour(panel), &recordingPage_, false);
     tabs_.addTab("AUDIO / ROUTING", juce::Colour(panel), &setupPage_, false);
