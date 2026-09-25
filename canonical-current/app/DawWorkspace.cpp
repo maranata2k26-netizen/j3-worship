@@ -234,7 +234,7 @@ void DawWorkspace::configureControls()
     };
 
     for (auto* b : { &trackMuteButton_, &trackSoloButton_, &trackArmButton_,
-                     &trackMonitorButton_, &clipMuteButton_, &clipLoopButton_ })
+                     &clipMuteButton_, &clipLoopButton_ })
     {
         addAndMakeVisible(*b);
         b->setColour(juce::ToggleButton::textColourId, juce::Colour(kText));
@@ -252,11 +252,6 @@ void DawWorkspace::configureControls()
     {
         tracks_[selectedTrack_].armed = trackArmButton_.getToggleState(); projectDirty_ = true; repaint();
     };
-    trackMonitorButton_.onClick = [this]
-    {
-        tracks_[selectedTrack_].monitor = trackMonitorButton_.getToggleState(); projectDirty_ = true; repaint();
-    };
-
     clipGainSlider_.onValueChange = [this]
     {
         if (auto* c = clipAt({ -9999, -9999 }); c != nullptr) juce::ignoreUnused(c);
@@ -376,7 +371,6 @@ void DawWorkspace::paint(juce::Graphics& g)
         if (tracks_[t].mute) flags << "M ";
         if (tracks_[t].solo) flags << "S ";
         if (tracks_[t].armed) flags << "REC ";
-        if (tracks_[t].monitor) flags << "MON ";
         if (tracks_[t].midi) flags << "MIDI · PIANO ROLL ";
         flags << juce::String(gainToDb(tracks_[t].gain), 1) << " dB";
         g.drawText(flags, header.reduced(9, 7).withTrimmedTop(25), juce::Justification::centredLeft);
@@ -544,7 +538,6 @@ void DawWorkspace::resized()
     trackMuteButton_.setBounds(top.removeFromLeft(36));
     trackSoloButton_.setBounds(top.removeFromLeft(36));
     trackArmButton_.setBounds(top.removeFromLeft(46));
-    trackMonitorButton_.setBounds(top.removeFromLeft(52));
     top.removeFromLeft(8);
     trackVolumeSlider_.setBounds(top.removeFromLeft(160));
     trackPanSlider_.setBounds(top.removeFromLeft(135));
@@ -1428,7 +1421,6 @@ void DawWorkspace::syncInspector()
     trackMuteButton_.setToggleState(t.mute, juce::dontSendNotification);
     trackSoloButton_.setToggleState(t.solo, juce::dontSendNotification);
     trackArmButton_.setToggleState(t.armed, juce::dontSendNotification);
-    trackMonitorButton_.setToggleState(t.monitor, juce::dontSendNotification);
 
     const auto* c = clipAt({ -1, -1 });
     const bool clipSelected = c != nullptr;
@@ -1804,7 +1796,6 @@ juce::String DawWorkspace::serializeProject() const
         t->setAttribute("mute", tracks_[i].mute);
         t->setAttribute("solo", tracks_[i].solo);
         t->setAttribute("armed", tracks_[i].armed);
-        t->setAttribute("monitor", tracks_[i].monitor);
         t->setAttribute("midi", tracks_[i].midi);
     }
 
@@ -1873,7 +1864,6 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
             tracks_[i].mute = t->getBoolAttribute("mute", false);
             tracks_[i].solo = t->getBoolAttribute("solo", false);
             tracks_[i].armed = t->getBoolAttribute("armed", false);
-            tracks_[i].monitor = t->getBoolAttribute("monitor", false);
             tracks_[i].midi = t->getBoolAttribute("midi", false);
         }
     }
