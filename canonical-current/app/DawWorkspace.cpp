@@ -83,6 +83,8 @@ DawWorkspace::DawWorkspace()
 DawWorkspace::~DawWorkspace()
 {
     stopTimer();
+    if (trackRecording_.load(std::memory_order_acquire))
+        stopTrackRecording(false);
     autosaveRecovery();
 }
 
@@ -125,7 +127,7 @@ void DawWorkspace::configureControls()
     addTrackButton_.onClick = [this] { checkpointUndo(); addTrack(); };
     playButton_.onClick = [this] { togglePlay(); };
     stopButton_.onClick = [this] { stopTransport(true); };
-    recordButton_.onClick = [this] { if (onRecordToggle) onRecordToggle(); };
+    recordButton_.onClick = [this] { toggleTrackRecording(); };
     loopButton_.onClick = [this]
     {
         loopEnabled_.store(loopButton_.getToggleState(), std::memory_order_release);
@@ -999,6 +1001,178 @@ void DawWorkspace::setTransportBeat(double beat) noexcept
                             std::memory_order_relaxed);
 }
 
+juce::File DawWorkspace::trackRecordingRoot() const
+{
+    return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+        .getChildFile("J3 Worship")
+        .getChildFile("DAW Recordings");
+}
+
+void DawWorkspace::toggleTrackRecording()
+{
+    if (trackRecording_.load(std::memory_order_acquire))
+    {
+        stopTrackRecording(true);
+        return;
+    }
+
+    startTrackRecording();
+}
+
+bool DawWorkspace::startTrackRecording()
+{
+    if (trackRecording_.load(std::memory_order_acquire))
+        return true;
+
+    recordArmedCount_ = 0;
+    currentTakeFiles_.clear();
+
+    for (int t = 0; t < trackCount_ && recordArmedCount_ < kMaxTracks; ++t)
+    {
+        if (!tracks_[t].armed)
+            continue;
+        recordTrackMap_[recordArmedCount_] = t;
+        recordInputMap_[recordArmedCount_] = recordArmedCount_;
+        ++recordArmedCount_;
+    }
+
+    if (recordArmedCount_ == 0 && selectedTrack_ >= 0 && selectedTrack_ < trackCount_)
+    {
+        tracks_[selectedTrack_].armed = true;
+        recordTrackMap_[0] = selectedTrack_;
+        recordInputMap_[0] = 0;
+        recordArmedCount_ = 1;
+        syncInspector();
+    }
+
+    if (recordArmedCount_ <= 0)
+    {
+        refreshStatus("No hay pistas disponibles para grabar.");
+        return false;
+    }
+
+    const auto sr = std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed));
+    const auto now = juce::Time::getCurrentTime();
+    currentTakeDirectory_ = trackRecordingRoot()
+        .getChildFile(now.formatted("%Y-%m-%d"))
+        .getChildFile(now.formatted("%H%M%S-DAW"));
+    if (!currentTakeDirectory_.createDirectory())
+    {
+        refreshStatus("No se pudo crear la carpeta de grabación DAW.");
+        return false;
+    }
+
+    std::vector<std::string> names;
+    names.reserve(static_cast<std::size_t>(recordArmedCount_));
+    for (int i = 0; i < recordArmedCount_; ++i)
+    {
+        const int track = recordTrackMap_[i];
+        const auto base = "Track" + juce::String(track + 1).paddedLeft('0', 2);
+        names.push_back(base.toStdString());
+        currentTakeFiles_.add(currentTakeDirectory_.getChildFile(base + ".wav").getFullPathName());
+    }
+
+    std::string error;
+    if (!trackRecorder_.start(currentTakeDirectory_.getFullPathName().toStdString(),
+                              static_cast<std::uint32_t>(std::llround(sr)), names, error))
+    {
+        refreshStatus("No se pudo iniciar REC DAW: " + juce::String(error));
+        recordArmedCount_ = 0;
+        currentTakeFiles_.clear();
+        return false;
+    }
+
+    recordStartBeat_ = static_cast<double>(transportSamples_.load(std::memory_order_relaxed))
+        / sr * bpm() / 60.0;
+    trackRecording_.store(true, std::memory_order_release);
+    if (!playing_.load(std::memory_order_acquire))
+        togglePlay();
+
+    recordButton_.setButtonText("STOP REC");
+    refreshStatus("REC DAW activo · " + juce::String(recordArmedCount_)
+        + " pista(s) armada(s) · entradas activas en orden");
+    repaint();
+    return true;
+}
+
+void DawWorkspace::stopTrackRecording(bool importTake)
+{
+    if (!trackRecording_.exchange(false, std::memory_order_acq_rel))
+        return;
+
+    std::string error;
+    const bool ok = trackRecorder_.stop(error);
+    recordButton_.setButtonText("REC");
+
+    if (!ok)
+    {
+        refreshStatus("La grabación terminó con error: " + juce::String(error));
+        return;
+    }
+
+    if (importTake)
+        importRecordedTake();
+    else
+        refreshStatus("Grabación DAW detenida.");
+}
+
+void DawWorkspace::importRecordedTake()
+{
+    if (recordArmedCount_ <= 0 || currentTakeFiles_.isEmpty())
+        return;
+
+    checkpointUndo();
+    int imported = 0;
+    juce::String lastError;
+
+    const int count = std::min(recordArmedCount_, currentTakeFiles_.size());
+    for (int i = 0; i < count; ++i)
+    {
+        const juce::File file(currentTakeFiles_[i]);
+        juce::String error;
+        auto* data = loadAudioFile(file, error);
+        if (data == nullptr)
+        {
+            lastError = error;
+            continue;
+        }
+        if (static_cast<int>(clips_.size()) >= kMaxClips)
+        {
+            lastError = "Máximo de 128 clips alcanzado";
+            break;
+        }
+
+        const int track = juce::jlimit(0, trackCount_ - 1, recordTrackMap_[i]);
+        Clip clip;
+        clip.id = nextClipId_++;
+        clip.track = track;
+        clip.startBeat = std::max(0.0, recordStartBeat_);
+        clip.lengthBeats = std::max(0.25, data->durationSeconds * bpm() / 60.0);
+        clip.colour = tracks_[track].colour;
+        clip.audio = data;
+        clips_.push_back(clip);
+        selectedTrack_ = track;
+        selectedClipId_ = clip.id;
+        ++imported;
+    }
+
+    if (imported > 0)
+    {
+        projectDirty_ = true;
+        markRenderDirty();
+        rebuildRenderState();
+        syncInspector();
+        autosaveRecovery();
+        refreshStatus("Toma DAW importada · " + juce::String(imported) + " clip(s)");
+    }
+    else
+    {
+        refreshStatus(lastError.isNotEmpty() ? lastError : "No se pudo importar la toma grabada.");
+    }
+
+    repaint();
+}
+
 void DawWorkspace::syncInspector()
 {
     selectedTrack_ = juce::jlimit(0, std::max(0, trackCount_ - 1), selectedTrack_);
@@ -1042,6 +1216,37 @@ void DawWorkspace::prepare(double sampleRate, int maximumBlockSize)
     renderSampleRate_.store(std::max(1.0, sampleRate), std::memory_order_release);
     markRenderDirty();
     rebuildRenderState();
+}
+
+void DawWorkspace::captureInputBlock(const float* const* inputChannelData,
+                                     int numInputChannels,
+                                     int numSamples) noexcept
+{
+    if (!trackRecording_.load(std::memory_order_acquire)
+        || inputChannelData == nullptr || numInputChannels <= 0 || numSamples <= 0)
+        return;
+
+    std::array<const float*, kMaxTracks> activeInputs {};
+    int activeCount = 0;
+    for (int ch = 0; ch < numInputChannels && activeCount < kMaxTracks; ++ch)
+        if (inputChannelData[ch] != nullptr)
+            activeInputs[activeCount++] = inputChannelData[ch];
+
+    const int wanted = std::min(recordArmedCount_, activeCount);
+    if (wanted <= 0)
+        return;
+
+    int offset = 0;
+    while (offset < numSamples)
+    {
+        const int frames = std::min<int>(static_cast<int>(j3::kRecordMaxFrames), numSamples - offset);
+        std::array<const float*, kMaxTracks> block {};
+        for (int i = 0; i < wanted; ++i)
+            block[i] = activeInputs[i] + offset;
+        trackRecorder_.submit(block.data(), static_cast<std::size_t>(wanted),
+                              static_cast<std::size_t>(frames));
+        offset += frames;
+    }
 }
 
 void DawWorkspace::markRenderDirty()
@@ -1219,8 +1424,7 @@ void DawWorkspace::timerCallback()
         lastReportedPlaying_ = nowPlaying;
         if (onPlayStateChanged) onPlayStateChanged(nowPlaying);
     }
-    if (isRecording)
-        recordButton_.setButtonText(isRecording() ? "STOP REC" : "REC");
+    recordButton_.setButtonText(trackRecording_.load(std::memory_order_acquire) ? "STOP REC" : "REC");
     repaint();
 
     if (++autosaveTicks_ >= 300)
