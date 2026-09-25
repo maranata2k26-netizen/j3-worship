@@ -691,7 +691,7 @@ juce::Rectangle<int> DawWorkspace::mixerBounds() const
 juce::Rectangle<int> DawWorkspace::trackHeaderBounds(int track) const
 {
     const auto tl = timelineBounds();
-    return { 0, tl.getY() + (track - firstVisibleTrack_) * trackHeight_, headerWidth_, trackHeight_ };
+    return { tl.getX(), tl.getY() + (track - firstVisibleTrack_) * trackHeight_, headerWidth_, trackHeight_ };
 }
 
 juce::Rectangle<float> DawWorkspace::clipBounds(const Clip& clip) const
@@ -788,12 +788,14 @@ double DawWorkspace::pixelsPerBeat() const noexcept
 
 double DawWorkspace::beatAtX(float x) const noexcept
 {
-    return std::max(0.0, viewStartBeat_ + (static_cast<double>(x) - headerWidth_) / pixelsPerBeat());
+    const auto tl = timelineBounds();
+    return std::max(0.0, viewStartBeat_ + (static_cast<double>(x) - (tl.getX() + headerWidth_)) / pixelsPerBeat());
 }
 
 float DawWorkspace::xForBeat(double beat) const noexcept
 {
-    return static_cast<float>(headerWidth_ + (beat - viewStartBeat_) * pixelsPerBeat());
+    const auto tl = timelineBounds();
+    return static_cast<float>(tl.getX() + headerWidth_ + (beat - viewStartBeat_) * pixelsPerBeat());
 }
 
 double DawWorkspace::snapBeat(double beat) const noexcept
