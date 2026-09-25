@@ -24,7 +24,7 @@ private:
     std::uint32_t sampleRate_{0}; std::uint16_t channels_{0}; std::uint64_t framesWritten_{0};
 };
 
-constexpr std::size_t kRecordMaxChannels = 32;
+constexpr std::size_t kRecordMaxChannels = 48;
 constexpr std::size_t kRecordMaxFrames = 512;
 struct RecordingBlock {
     std::uint16_t channels{0};
