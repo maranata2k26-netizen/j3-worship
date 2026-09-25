@@ -1,0 +1,5 @@
+#include "j3/AutoSetup.h"
+#include <algorithm>
+namespace j3 {
+Mixer AutoSetup::create(const WorshipSetupRequest&r){Mixer m;if(r.drumMics==8)m.createDrumPreset(false);else for(int i=0;i<std::max(0,r.drumMics);++i){ChannelStrip c;c.name="Drum "+std::to_string(i+1);c.hpfHz=40;m.addChannel(c);} for(int i=0;i<std::max(0,r.bass);++i){ChannelStrip c;c.name=r.bass==1?"Bass":"Bass "+std::to_string(i+1);c.hpfHz=30;m.addChannel(c);} for(int i=0;i<std::max(0,r.guitars);++i){ChannelStrip c;c.name="Guitar "+std::to_string(i+1);c.hpfHz=70;m.addChannel(c);} for(int i=0;i<std::max(0,r.stereoKeys);++i){ChannelStrip l;l.name="Keys "+std::to_string(i+1)+" L";l.pan=-1;l.hpfHz=40;m.addChannel(l);ChannelStrip rr= l;rr.name="Keys "+std::to_string(i+1)+" R";rr.pan=1;m.addChannel(rr);} if(r.leadVocals||r.bgv)m.createVocalPreset(std::max(0,r.leadVocals),std::max(0,r.bgv)); for(int i=0;i<std::max(0,r.tracks);++i){ChannelStrip c;c.name="Track "+std::to_string(i+1);c.role=ChannelRole::Track;m.addChannel(c);} return m;}
+}
