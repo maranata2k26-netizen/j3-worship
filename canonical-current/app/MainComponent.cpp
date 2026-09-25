@@ -1505,6 +1505,25 @@ void MainComponent::handleTapTempo()
     lastTapMs_ = now;
 }
 
+void MainComponent::refreshPadUi()
+{
+    static const std::array<juce::String, 12> keys { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    const int note = ambientPad_.rootMidi();
+    const int keyIndex = juce::jlimit(0, 11, note - 60);
+    padKeyBox_.setSelectedId(keyIndex + 1, juce::dontSendNotification);
+    padMinorButton_.setToggleState(ambientPad_.minor(), juce::dontSendNotification);
+    padVolumeSlider_.setValue(ambientPad_.volume(), juce::dontSendNotification);
+    padToPaButton_.setToggleState(padToPa_.load(std::memory_order_relaxed), juce::dontSendNotification);
+    padEnabledButton_.setToggleState(ambientPad_.enabled(), juce::dontSendNotification);
+
+    juce::String info;
+    info << "Chord: " << keys[static_cast<std::size_t>(keyIndex)] << (ambientPad_.minor() ? " minor" : " major") << "\n";
+    info << "Stereo ambient generator · continuous sustain · click-free fade in/out\n";
+    info << "Route: " << (padToPa_.load(std::memory_order_relaxed) ? "PA master" : "OFF")
+         << " · Output protection remains active.";
+    padInfoLabel_.setText(info, juce::dontSendNotification);
+}
+
 void MainComponent::updateClickUi()
 {
     const int out = clickOutput_.load(std::memory_order_relaxed);
