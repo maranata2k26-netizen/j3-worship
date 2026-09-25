@@ -1477,6 +1477,22 @@ void MainComponent::loadAppState()
     clickGenerator_.setAccentEnabled(accentButton_.getToggleState());
     clickGenerator_.setLevel(static_cast<float>(clickVolumeSlider_.getValue()));
 
+    setlist_.clear();
+    forEachXmlChildElementWithTagName(*xml, songXml, "Song")
+    {
+        j3::SongRef song;
+        song.name = songXml->getStringAttribute("name").toStdString();
+        song.artist = songXml->getStringAttribute("artist").toStdString();
+        song.key = songXml->getStringAttribute("key").toStdString();
+        song.bpm = songXml->getDoubleAttribute("bpm", 120.0);
+        song.numerator = songXml->getIntAttribute("numerator", 4);
+        song.denominator = songXml->getIntAttribute("denominator", 4);
+        if (!song.name.empty()) setlist_.add(std::move(song));
+    }
+    if (setlist_.size() > 0)
+        setlist_.select(static_cast<std::size_t>(juce::jlimit(0, static_cast<int>(setlist_.size()) - 1,
+            xml->getIntAttribute("setlistIndex", 0))));
+
     forEachXmlChildElementWithTagName(*xml, ch, "Channel")
     {
         const int index = ch->getIntAttribute("index", -1);
@@ -1543,6 +1559,7 @@ void MainComponent::loadAppState()
     refreshIemUi();
     refreshDspUi();
     refreshPadUi();
+    refreshSetlistUi();
 }
 
 void MainComponent::saveAppState()
@@ -1561,6 +1578,19 @@ void MainComponent::saveAppState()
     xml.setAttribute("padMinor", ambientPad_.minor());
     xml.setAttribute("padVolume", static_cast<double>(ambientPad_.volume()));
     xml.setAttribute("padToPa", padToPa_.load(std::memory_order_relaxed));
+    xml.setAttribute("setlistIndex", setlist_.size() > 0 ? static_cast<int>(setlist_.currentIndex()) : 0);
+    for (std::size_t i = 0; i < setlist_.size(); ++i)
+    {
+        const auto* song = setlist_.song(i);
+        if (song == nullptr) continue;
+        auto* songXml = xml.createNewChildElement("Song");
+        songXml->setAttribute("name", juce::String(song->name));
+        songXml->setAttribute("artist", juce::String(song->artist));
+        songXml->setAttribute("key", juce::String(song->key));
+        songXml->setAttribute("bpm", song->bpm);
+        songXml->setAttribute("numerator", song->numerator);
+        songXml->setAttribute("denominator", song->denominator);
+    }
 
     for (int i = 0; i < kMaxChannels; ++i)
     {
