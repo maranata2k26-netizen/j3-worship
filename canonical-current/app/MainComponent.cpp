@@ -1517,7 +1517,8 @@ void MainComponent::refreshDashboard()
             chain << (pluginNames_[selectedPluginChannel][slot].isNotEmpty()
                 ? pluginNames_[selectedPluginChannel][slot] : plugin->getName());
             if (pluginBypass_[selectedPluginChannel][slot].load(std::memory_order_relaxed))
-                chain << " [BYP]";
+                chain << (pluginFaults_[selectedPluginChannel][slot].load(std::memory_order_relaxed) > 0
+                    ? " [SAFE BYP]" : " [BYP]");
         }
         ++loadedPlugins;
     }
@@ -3305,8 +3306,18 @@ void MainComponent::updateDiagnostics()
         const bool safeRouting = routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load());
         const auto outputFaults = outputSafetyEvents_.load(std::memory_order_relaxed);
         const auto recordingDrops = recorder_.overflowCount();
+        bool pluginProtectionActive = false;
+        for (int ch = 0; ch < kMaxChannels && !pluginProtectionActive; ++ch)
+            for (int slot = 0; slot < kPluginSlots; ++slot)
+                if (pluginFaults_[ch][slot].load(std::memory_order_relaxed) > 0)
+                {
+                    pluginProtectionActive = true;
+                    break;
+                }
+
         const bool hardUnsafe = !audioRunning_.load(std::memory_order_acquire) || !safeRouting;
-        const bool degraded = xruns > 0 || outputFaults > 0 || recordingDrops > 0 || recorder_.hasWorkerError();
+        const bool degraded = xruns > 0 || outputFaults > 0 || recordingDrops > 0
+            || recorder_.hasWorkerError() || pluginProtectionActive;
 
         if (hardUnsafe)
         {
@@ -3338,6 +3349,10 @@ void MainComponent::updateDiagnostics()
         report << "✓ REPORTED I/O LATENCY\n    Input " << juce::String(inLatencyMs, 2)
                << " ms  ·  Output " << juce::String(outLatencyMs, 2) << " ms\n\n";
         report << (xruns == 0 ? "✓" : "⚠") << " XRUNS / DROPOUTS\n    " << xruns << "\n\n";
+        report << (pluginProtectionActive ? "⚠" : "✓") << " PLUGIN PROTECTION\n    "
+               << (pluginProtectionActive ? "Uno o más VST3 fueron auto-bypasseados para proteger el audio."
+                                          : "Sin fallos de plugins detectados.")
+               << "\n\n";
         report << (routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load()) ? "✓" : "✕")
                << " SAFE ROUTING\n    PA L " << (paLeft_.load() + 1) << "  ·  PA R " << (paRight_.load() + 1)
                << "  ·  CLICK " << (clickOutput_.load() < 0 ? juce::String("OFF") : juce::String(clickOutput_.load() + 1)) << "\n\n";
