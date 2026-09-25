@@ -782,7 +782,7 @@ bool DawWorkspace::validateLayoutForTesting(juce::String& report) const
     if (browser.getWidth() < 140 || inspector.getWidth() < 220 || mixer.getHeight() < 96)
         return fail("browser, inspector or mixer fell below its professional minimum");
     if (browser.getRight() != timeline.getX() || inspector.getX() != timeline.getRight()
-        || mixer.getY() != timeline.getBottom() + rulerHeight_)
+        || mixer.getY() != timeline.getBottom())
         return fail("workspace regions overlap or leave an unintended gap");
 
     for (int i = 0; i < getNumChildComponents(); ++i)
