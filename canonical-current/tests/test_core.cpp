@@ -1,4 +1,5 @@
 #include "j3/AudioDevice.h"
+#include "j3/AmbientPad.h"
 #include "j3/AutoSetup.h"
 #include "j3/DiagnosticReport.h"
 #include "j3/MonitorMix.h"
@@ -106,7 +107,16 @@ int main() {
         ChannelDsp dsp; dsp.prepare(48000); dsp.setHpf(80); dsp.setLpf(16000); dsp.setEqBand(0,250,1.2,3); dsp.setGate(-70); dsp.setCompressor(-12,3); dsp.setDenoise(0.3,-55);
         double energy=0; for(int i=0;i<500000;++i){float x=0.2f*std::sin(2.0*3.141592653589793*440.0*i/48000.0); const float y=dsp.process(x); check(std::isfinite(y), "DSP finite output under stress"); energy += std::abs(y);} check(energy>1.0, "DSP produces audio");
 
-        PadEngine pad; PadSample ps; ps.key="G"; ps.crossfadeSamples=64; ps.mono.resize(4096); for(std::size_t i=0;i<ps.mono.size();++i) ps.mono[i]=static_cast<float>(std::sin(2*3.141592653589793*110.0*i/48000.0));
+        AmbientPad ambient; ambient.prepare(48000); ambient.setRootMidi(67); ambient.setMinor(false); ambient.setVolume(0.25f); ambient.setEnabled(true);
+        std::vector<float> ambientL(48000), ambientR(48000); ambient.process(ambientL.data(),ambientR.data(),static_cast<int>(ambientL.size()));
+        double ambientEnergy=0.0; for(std::size_t i=0;i<ambientL.size();++i){check(std::isfinite(ambientL[i])&&std::isfinite(ambientR[i]),"ambient pad finite");ambientEnergy+=std::abs(ambientL[i])+std::abs(ambientR[i]);}
+        check(ambientEnergy>10.0,"ambient pad produces sustained audio");
+        ambient.setEnabled(false); std::fill(ambientL.begin(),ambientL.end(),0.0f); std::fill(ambientR.begin(),ambientR.end(),0.0f);
+        for(int i=0;i<48000*2;++i){float l=0,r=0;ambient.process(&l,&r,1);} // let the safety fade reach silence
+        ambient.process(ambientL.data(),ambientR.data(),static_cast<int>(ambientL.size()));
+        double tailEnergy=0.0; for(float v:ambientL) tailEnergy+=std::abs(v); check(tailEnergy<0.05,"ambient pad fades safely to silence");
+
+                PadEngine pad; PadSample ps; ps.key="G"; ps.crossfadeSamples=64; ps.mono.resize(4096); for(std::size_t i=0;i<ps.mono.size();++i) ps.mono[i]=static_cast<float>(std::sin(2*3.141592653589793*110.0*i/48000.0));
         e.clear(); check(pad.load(std::move(ps),e), "pad load"); pad.play(); double padEnergy=0; for(int i=0;i<20000;++i){const float y=pad.next();check(std::isfinite(y),"pad finite looping");padEnergy+=std::abs(y);} check(padEnergy>10,"pad loops continuously");
 
         check(classifyStemName("01 CLICK.wav")==StemRole::Click, "stem click classification");
