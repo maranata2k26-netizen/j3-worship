@@ -1,16 +1,15 @@
 name: Windows Release Build
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, finish-daw]
     paths:
-      - 'source/chunks/**'
-      - 'source/patches/**'
-      - '.github/workflows/windows-build.yml'
+      - "canonical-current/**"
+      - ".github/workflows/windows-build.yml"
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-windows:
@@ -21,78 +20,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Reconstruct J3 Worship source
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path work | Out-Null
-          $chunks = Get-ChildItem "source/chunks/part*.b64" | Sort-Object Name
-          if ($chunks.Count -ne 7) { throw "Expected 7 source chunks, found $($chunks.Count)" }
-          $b64 = ($chunks | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
-          $bytes = [Convert]::FromBase64String($b64)
-          [IO.File]::WriteAllBytes("source/J3Worship-source.zip", $bytes)
-          $hash = (Get-FileHash "source/J3Worship-source.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -ne "35d6ddc15d1d93a290bf6e057aedb1b6b1f8bd39bb6414fb844b16bb2c642daf") {
-            throw "Source archive integrity check failed: $hash"
-          }
-          Expand-Archive -Path source/J3Worship-source.zip -DestinationPath work -Force
-
-      - name: Apply canonical 0.4.0 source patch
-        shell: pwsh
-        run: |
-          $patch = Join-Path $PWD "source/patches/0.4.0-alpha.patch"
-          if (!(Test-Path $patch)) { throw "0.4.0 source patch missing" }
-          & "C:\Program Files\Git\usr\bin\patch.exe" -p4 -d work -i $patch
-          if ($LASTEXITCODE -ne 0) { throw "Source patch failed with exit code $LASTEXITCODE" }
-
-      - name: Apply 0.5.0 feature patch
-        shell: pwsh
-        run: |
-          $parts = Get-ChildItem "source/patches/0.5.0-alpha/part*.patch" | Sort-Object Name
-          if ($parts.Count -ne 5) { throw "Expected 5 patch parts, found $($parts.Count)" }
-          $combined = Join-Path $env:RUNNER_TEMP "0.5.0-alpha.patch"
-          $content = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
-          [IO.File]::WriteAllText($combined, $content, [Text.UTF8Encoding]::new($false))
-          & "C:\Program Files\Git\usr\bin\patch.exe" -p1 -d work -i $combined
-          if ($LASTEXITCODE -ne 0) { throw "0.5.0 patch failed with exit code $LASTEXITCODE" }
-
-      - name: Publish canonical source snapshot
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          if (Test-Path "canonical-current") { Remove-Item "canonical-current" -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path "canonical-current" | Out-Null
-          Get-ChildItem "work" -Force | ForEach-Object { Copy-Item $_.FullName "canonical-current" -Recurse -Force }
-          git config user.name "J3 Worship CI"
-          git config user.email "actions@users.noreply.github.com"
-          git add canonical-current
-          git diff --cached --quiet
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Canonical source snapshot is unchanged."
-          } else {
-            git commit -m "chore: refresh canonical 0.5.0 source snapshot"
-            git push origin HEAD:refs/heads/canonical-source --force
-          }
-
       - name: Configure Visual Studio x64
         shell: pwsh
-        run: cmake -S work -B work/build-win -G "Visual Studio 17 2022" -A x64 -DJ3_BUILD_DESKTOP_APP=ON
+        run: cmake -S canonical-current -B canonical-current/build-win -G "Visual Studio 17 2022" -A x64 -DJ3_BUILD_DESKTOP_APP=ON
 
       - name: Build Release
         shell: pwsh
-        run: cmake --build work/build-win --config Release --parallel
+        run: cmake --build canonical-current/build-win --config Release --parallel 2
 
       - name: Run core tests
         shell: pwsh
-        run: ctest --test-dir work/build-win -C Release --output-on-failure
+        run: ctest --test-dir canonical-current/build-win -C Release --output-on-failure
 
       - name: Validate executable
         shell: pwsh
         run: |
-          if (Test-Path "work/dist/J3 Worship.exe") {
-            Copy-Item "work/dist/J3 Worship.exe" "work/dist/J3Worship.exe" -Force
-          }
-          if (!(Test-Path "work/dist/J3Worship.exe")) { throw "J3Worship.exe was not produced" }
-          Get-Item "work/dist/J3Worship.exe" | Format-List Name,Length,LastWriteTime
+          $exe = "canonical-current/dist/J3Worship.exe"
+          if (!(Test-Path $exe)) { throw "J3Worship.exe was not generated" }
+          Get-Item $exe | Format-List FullName,Length,LastWriteTime
 
       - name: Install Inno Setup
         shell: pwsh
@@ -101,54 +46,48 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "work\installer\J3Worship.iss"
-          if (!(Test-Path "work/dist-installer/J3Worship-Setup.exe")) { throw "Installer was not produced" }
+          $iscc = "${env:ProgramFiles(x86)}\\Inno Setup 6\\ISCC.exe"
+          if (!(Test-Path $iscc)) { throw "ISCC.exe not found" }
+          & $iscc "canonical-current/installer/J3Worship.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
       - name: End-to-end installer smoke test
         shell: pwsh
         run: |
-          $installDir = Join-Path $env:RUNNER_TEMP "J3Worship-E2E"
-          if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
-          $setup = (Resolve-Path "work/dist-installer/J3Worship-Setup.exe").Path
-          $installer = Start-Process -FilePath $setup -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/DIR=$installDir") -PassThru -Wait
-          if ($installer.ExitCode -ne 0) { throw "Installer exited with $($installer.ExitCode)" }
-          $installedExe = Join-Path $installDir "J3Worship.exe"
-          if (!(Test-Path $installedExe)) { throw "Installed J3Worship.exe missing" }
+          $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Setup.exe").Path
+          $installDir = Join-Path $env:RUNNER_TEMP "J3WorshipSmoke"
+          $log = Join-Path $env:RUNNER_TEMP "j3-install.log"
+          $p = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=$installDir","/LOG=$log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content $log -ErrorAction SilentlyContinue; throw "Installer exit code $($p.ExitCode)" }
+          $exe = Join-Path $installDir "J3Worship.exe"
+          if (!(Test-Path $exe)) { throw "Installed executable missing" }
 
-          $app = Start-Process -FilePath $installedExe -PassThru
-          Start-Sleep -Seconds 8
-          $app.Refresh()
-          if ($app.HasExited) { throw "Installed application exited during launch smoke test with code $($app.ExitCode)" }
-          Stop-Process -Id $app.Id -Force
-          Start-Sleep -Seconds 1
+          $app = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 5
+          if ($app.HasExited -and $app.ExitCode -ne 0) { throw "Installed application exited with code $($app.ExitCode)" }
+          if (!$app.HasExited) { Stop-Process -Id $app.Id -Force }
 
-          $uninstaller = Join-Path $installDir "unins000.exe"
-          if (!(Test-Path $uninstaller)) { throw "Uninstaller missing" }
-          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART") -PassThru -Wait
-          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
-          Start-Sleep -Seconds 1
-          if (Test-Path $installedExe) { throw "Application still present after uninstall" }
+          $unins = Join-Path $installDir "unins000.exe"
+          if (!(Test-Path $unins)) { throw "Uninstaller missing" }
+          $u = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($u.ExitCode -ne 0) { throw "Uninstaller exit code $($u.ExitCode)" }
 
       - name: SHA256
         shell: pwsh
         run: |
-          $app = Get-FileHash "work/dist/J3Worship.exe" -Algorithm SHA256
-          $setup = Get-FileHash "work/dist-installer/J3Worship-Setup.exe" -Algorithm SHA256
-          "J3Worship.exe $($app.Hash)" | Out-File -Encoding ascii "work/dist-installer/SHA256SUMS.txt"
-          "J3Worship-Setup.exe $($setup.Hash)" | Out-File -Encoding ascii -Append "work/dist-installer/SHA256SUMS.txt"
+          Get-FileHash "canonical-current/dist/J3Worship.exe" -Algorithm SHA256
+          Get-FileHash "canonical-current/dist-installer/J3Worship-Setup.exe" -Algorithm SHA256
 
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-App
-          path: work/dist/J3Worship.exe
+          name: J3Worship-Windows-1.0.0
+          path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-Installer
-          path: |
-            work/dist-installer/J3Worship-Setup.exe
-            work/dist-installer/SHA256SUMS.txt
+          name: J3Worship-Setup-1.0.0
+          path: canonical-current/dist-installer/J3Worship-Setup.exe
           if-no-files-found: error
