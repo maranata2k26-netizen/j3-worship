@@ -6,6 +6,8 @@
 #include "j3/LiveEngine.h"
 #include "j3/ClickGenerator.h"
 #include "j3/Recording.h"
+#include "j3/Setlist.h"
+#include "j3/PluginCatalog.h"
 
 #include <array>
 #include <atomic>
@@ -30,6 +32,7 @@ private:
     static constexpr int kBuses = 8;
     static constexpr int kDcas = 8;
     static constexpr int kIemMixes = 16;
+    static constexpr int kPluginSlots = 4;
 
     class MixerStrip final : public juce::Component
     {
@@ -107,7 +110,7 @@ private:
     juce::File getAppStateFile() const;
     juce::File getRuntimeLockFile() const;
     void loadAppState();
-    void saveAppState();
+    void saveAppState(bool capturePluginState = false);
     void updateRecordingUi();
     void openDriverControlPanel();
     void showAudioError(const juce::String&);
@@ -121,6 +124,18 @@ private:
     void updateClickUi();
     void handleTapTempo();
     void refreshPadUi();
+    void refreshSetlistUi();
+    void addSetlistSong();
+    void removeSetlistSong();
+    void loadSelectedSong();
+    void scanVst3Plugins();
+    void refreshPluginUi();
+    void loadSelectedPlugin();
+    void loadPluginPathIntoSlot(const juce::String& path, int channel, int slot);
+    void removeSelectedPlugin();
+    void openSelectedPluginEditor();
+    void restoreSavedPluginsAfterScan();
+    const float* processPluginChain(int channel, const float* input, int numSamples) noexcept;
     bool routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept;
     bool iemRouteIsSafe(int mix, int left, int right) const noexcept;
     void scheduleReconnect();
@@ -190,6 +205,17 @@ private:
     std::array<std::atomic<bool>, kDcas> dcaMute_{};
     juce::AudioBuffer<float> busScratch_;
 
+    j3::PluginCatalog pluginCatalog_;
+    juce::AudioPluginFormatManager pluginFormatManager_;
+    std::array<std::array<std::atomic<std::shared_ptr<juce::AudioPluginInstance>>, kPluginSlots>, kMaxChannels> channelPlugins_{};
+    std::array<std::array<std::atomic<bool>, kPluginSlots>, kMaxChannels> pluginBypass_{};
+    std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginPaths_{};
+    std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginNames_{};
+    std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginStateBase64_{};
+    juce::AudioBuffer<float> pluginScratch_;
+    juce::MidiBuffer pluginMidiScratch_;
+    bool pluginsScanned_ { false };
+
     std::array<std::array<std::atomic<float>, kMaxChannels>, kIemMixes> iemSendGain_{};
     std::array<std::array<std::atomic<float>, kMaxChannels>, kIemMixes> iemSendPan_{};
     std::array<std::atomic<float>, kIemMixes> iemMaster_{};
@@ -220,7 +246,20 @@ private:
     juce::Label liveHint_;
     std::array<std::unique_ptr<juce::TextButton>, 8> liveButtons_;
     j3::LiveEngine liveEngine_;
+    j3::Setlist setlist_ { "Worship Set" };
     bool liveStarted_ { false };
+
+    juce::Component setlistPage_;
+    juce::Label setlistTitle_;
+    juce::ComboBox setlistSongBox_;
+    juce::TextEditor songNameEditor_;
+    juce::TextEditor songArtistEditor_;
+    juce::TextEditor songKeyEditor_;
+    juce::Slider songBpmSlider_;
+    juce::TextButton addSongButton_ { "ADD SONG" };
+    juce::TextButton removeSongButton_ { "REMOVE" };
+    juce::TextButton loadSongButton_ { "LOAD INTO LIVE" };
+    juce::Label setlistInfoLabel_;
 
     juce::Component mixerPage_;
     juce::TextButton mixerPrevButton_ { "< 8 CH" };
@@ -269,6 +308,18 @@ private:
     int selectedIemMix_ { 0 };
     int iemBankStart_ { 0 };
     std::array<std::unique_ptr<IemSendStrip>, kVisibleChannels> iemStrips_;
+
+    juce::Component pluginsPage_;
+    juce::Label pluginsTitle_;
+    juce::ComboBox pluginChannelBox_;
+    juce::ComboBox pluginSlotBox_;
+    juce::ComboBox pluginCatalogBox_;
+    juce::TextButton scanPluginsButton_ { "SCAN VST3" };
+    juce::TextButton loadPluginButton_ { "LOAD INSERT" };
+    juce::TextButton removePluginButton_ { "REMOVE" };
+    juce::ToggleButton bypassPluginButton_ { "BYPASS" };
+    juce::TextButton openPluginEditorButton_ { "OPEN PARAMETERS" };
+    juce::Label pluginStatusLabel_;
 
     juce::Component padPage_;
     juce::Label padTitle_;

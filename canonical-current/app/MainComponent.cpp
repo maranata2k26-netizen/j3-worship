@@ -31,6 +31,24 @@ juce::String outputName(juce::AudioIODevice& device, int index)
         return names[index];
     return "OUT " + juce::String(index + 1);
 }
+
+class GenericPluginEditorHolder final : public juce::Component
+{
+public:
+    explicit GenericPluginEditorHolder(std::shared_ptr<juce::AudioPluginInstance> plugin)
+        : plugin_(std::move(plugin)), editor_(std::make_unique<juce::GenericAudioProcessorEditor>(*plugin_))
+    {
+        addAndMakeVisible(*editor_);
+        setSize(juce::jlimit(480, 980, editor_->getWidth()),
+                juce::jlimit(420, 760, editor_->getHeight()));
+    }
+
+    void resized() override { editor_->setBounds(getLocalBounds()); }
+
+private:
+    std::shared_ptr<juce::AudioPluginInstance> plugin_;
+    std::unique_ptr<juce::GenericAudioProcessorEditor> editor_;
+};
 }
 
 MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
@@ -228,6 +246,10 @@ void MainComponent::IemSendStrip::syncFromModel()
 MainComponent::MainComponent()
 {
     setOpaque(true);
+    pluginFormatManager_.addFormat(std::make_unique<juce::VST3PluginFormat>());
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+            pluginBypass_[ch][slot].store(false);
     for (int i = 0; i < kMaxChannels; ++i)
     {
         channelGain_[i].store(dbToGain(-6.0));
@@ -350,6 +372,54 @@ MainComponent::MainComponent()
         livePage_.addAndMakeVisible(*b);
         liveButtons_[i] = std::move(b);
     }
+
+    setlistTitle_.setText("WORSHIP SETLIST", juce::dontSendNotification);
+    setlistTitle_.setFont(juce::FontOptions(27.0f, juce::Font::bold));
+    setlistTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+    setlistPage_.addAndMakeVisible(setlistTitle_);
+
+    setlistSongBox_.onChange = [this]
+    {
+        const int index = setlistSongBox_.getSelectedId() - 1;
+        if (index >= 0 && setlist_.select(static_cast<std::size_t>(index)))
+            refreshSetlistUi();
+    };
+    setlistPage_.addAndMakeVisible(setlistSongBox_);
+
+    songNameEditor_.setTextToShowWhenEmpty("Song name", juce::Colour(mutedText));
+    songArtistEditor_.setTextToShowWhenEmpty("Artist (optional)", juce::Colour(mutedText));
+    songKeyEditor_.setTextToShowWhenEmpty("Key, e.g. G", juce::Colour(mutedText));
+    for (auto* e : { &songNameEditor_, &songArtistEditor_, &songKeyEditor_ })
+    {
+        e->setColour(juce::TextEditor::backgroundColourId, juce::Colour(panel2));
+        e->setColour(juce::TextEditor::textColourId, juce::Colour(text));
+        e->setColour(juce::TextEditor::outlineColourId, juce::Colour(0xff303946));
+        setlistPage_.addAndMakeVisible(*e);
+    }
+
+    songBpmSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+    songBpmSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 92, 26);
+    songBpmSlider_.setRange(40.0, 240.0, 0.1);
+    songBpmSlider_.setValue(120.0, juce::dontSendNotification);
+    songBpmSlider_.setTextValueSuffix(" BPM");
+    songBpmSlider_.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
+    setlistPage_.addAndMakeVisible(songBpmSlider_);
+
+    addSongButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
+    removeSongButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    loadSongButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
+    addSongButton_.onClick = [this] { addSetlistSong(); };
+    removeSongButton_.onClick = [this] { removeSetlistSong(); };
+    loadSongButton_.onClick = [this] { loadSelectedSong(); };
+    setlistPage_.addAndMakeVisible(addSongButton_);
+    setlistPage_.addAndMakeVisible(removeSongButton_);
+    setlistPage_.addAndMakeVisible(loadSongButton_);
+
+    setlistInfoLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd4dbe5));
+    setlistInfoLabel_.setFont(juce::FontOptions(18.0f));
+    setlistInfoLabel_.setJustificationType(juce::Justification::topLeft);
+    setlistPage_.addAndMakeVisible(setlistInfoLabel_);
+    refreshSetlistUi();
 
     mixerPrevButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     mixerNextButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
@@ -505,6 +575,53 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemNextButton_);
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
+
+    pluginsTitle_.setText("VST3 INSERTS · 4 SLOTS PER INPUT", juce::dontSendNotification);
+    pluginsTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
+    pluginsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+    pluginsPage_.addAndMakeVisible(pluginsTitle_);
+
+    for (int i = 0; i < kMaxChannels; ++i)
+        pluginChannelBox_.addItem("IN " + juce::String(i + 1), i + 1);
+    pluginChannelBox_.setSelectedId(1, juce::dontSendNotification);
+    pluginChannelBox_.onChange = [this] { refreshPluginUi(); };
+    pluginsPage_.addAndMakeVisible(pluginChannelBox_);
+
+    for (int i = 0; i < kPluginSlots; ++i)
+        pluginSlotBox_.addItem("INSERT " + juce::String(i + 1), i + 1);
+    pluginSlotBox_.setSelectedId(1, juce::dontSendNotification);
+    pluginSlotBox_.onChange = [this] { refreshPluginUi(); };
+    pluginsPage_.addAndMakeVisible(pluginSlotBox_);
+
+    pluginsPage_.addAndMakeVisible(pluginCatalogBox_);
+    scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    loadPluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
+    removePluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
+    bypassPluginButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
+    scanPluginsButton_.onClick = [this] { scanVst3Plugins(); };
+    loadPluginButton_.onClick = [this] { loadSelectedPlugin(); };
+    removePluginButton_.onClick = [this] { removeSelectedPlugin(); };
+    openPluginEditorButton_.onClick = [this] { openSelectedPluginEditor(); };
+    bypassPluginButton_.onClick = [this]
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+        const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+        pluginBypass_[ch][slot].store(bypassPluginButton_.getToggleState(), std::memory_order_release);
+        saveAppState();
+        refreshPluginUi();
+    };
+    pluginsPage_.addAndMakeVisible(scanPluginsButton_);
+    pluginsPage_.addAndMakeVisible(loadPluginButton_);
+    pluginsPage_.addAndMakeVisible(removePluginButton_);
+    pluginsPage_.addAndMakeVisible(bypassPluginButton_);
+    pluginsPage_.addAndMakeVisible(openPluginEditorButton_);
+
+    pluginStatusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd4dbe5));
+    pluginStatusLabel_.setFont(juce::FontOptions(16.5f));
+    pluginStatusLabel_.setJustificationType(juce::Justification::topLeft);
+    pluginsPage_.addAndMakeVisible(pluginStatusLabel_);
+    refreshPluginUi();
 
     padTitle_.setText("J3 PADS", juce::dontSendNotification);
     padTitle_.setFont(juce::FontOptions(30.0f, juce::Font::bold));
@@ -761,10 +878,12 @@ MainComponent::MainComponent()
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(46);
     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
+    tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
     tabs_.addTab("CHANNEL DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GROUPS", juce::Colour(panel), &groupsPage_, false);
     tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
+    tabs_.addTab("PLUGINS", juce::Colour(panel), &pluginsPage_, false);
     tabs_.addTab("PADS", juce::Colour(panel), &padPage_, false);
     tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
     tabs_.addTab("RECORD", juce::Colour(panel), &recordingPage_, false);
@@ -780,8 +899,13 @@ MainComponent::MainComponent()
     rebuildMixerBank();
     rebuildIemBank();
     refreshIemUi();
+    refreshPluginUi();
     updateClickUi();
     updateRecordingUi();
+    juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this)]
+    {
+        if (safe != nullptr) safe->scanVst3Plugins();
+    });
     startTimerHz(30);
     setSize(1440, 900);
 }
@@ -796,7 +920,7 @@ MainComponent::~MainComponent()
     deviceManager_.removeAudioCallback(this);
     std::string recordError;
     recorder_.stop(recordError);
-    saveAppState();
+    saveAppState(true);
     saveAudioState();
     deviceManager_.closeAudioDevice();
     getRuntimeLockFile().deleteFile();
@@ -919,6 +1043,120 @@ void MainComponent::applyDspPreset(int preset)
     }
     markDspDirty(ch);
     refreshDspUi();
+    saveAppState();
+}
+
+void MainComponent::refreshSetlistUi()
+{
+    const int previous = setlist_.size() > 0 ? static_cast<int>(setlist_.currentIndex()) : -1;
+    setlistSongBox_.clear(juce::dontSendNotification);
+    for (std::size_t i = 0; i < setlist_.size(); ++i)
+    {
+        const auto* song = setlist_.song(i);
+        if (song == nullptr) continue;
+        juce::String label = juce::String(static_cast<int>(i + 1)) + ". " + juce::String(song->name);
+        if (!song->key.empty()) label << " · " << juce::String(song->key);
+        label << " · " << juce::String(song->bpm, 1) << " BPM";
+        setlistSongBox_.addItem(label, static_cast<int>(i + 1));
+    }
+    if (previous >= 0 && previous < static_cast<int>(setlist_.size()))
+        setlistSongBox_.setSelectedId(previous + 1, juce::dontSendNotification);
+    else if (setlist_.size() > 0)
+    {
+        setlist_.select(0);
+        setlistSongBox_.setSelectedId(1, juce::dontSendNotification);
+    }
+
+    juce::String info;
+    if (const auto* song = setlist_.current())
+    {
+        info << "Selected: " << juce::String(song->name) << "\n";
+        if (!song->artist.empty()) info << "Artist: " << juce::String(song->artist) << "\n";
+        info << "Key: " << (song->key.empty() ? juce::String("—") : juce::String(song->key))
+             << " · " << juce::String(song->bpm, 1) << " BPM · "
+             << song->numerator << "/" << song->denominator << "\n";
+        info << "LOAD INTO LIVE transfers tempo/time signature to J3 CLICK and LIVE.";
+    }
+    else
+    {
+        info = "Setlist empty. Add songs with name, key and BPM.";
+    }
+    setlistInfoLabel_.setText(info, juce::dontSendNotification);
+    removeSongButton_.setEnabled(setlist_.size() > 0);
+    loadSongButton_.setEnabled(setlist_.size() > 0);
+}
+
+void MainComponent::addSetlistSong()
+{
+    const auto name = songNameEditor_.getText().trim();
+    if (name.isEmpty())
+    {
+        showAudioError("Escribí el nombre de la canción antes de agregarla al setlist.");
+        return;
+    }
+    j3::SongRef song;
+    song.name = name.toStdString();
+    song.artist = songArtistEditor_.getText().trim().toStdString();
+    song.key = songKeyEditor_.getText().trim().toStdString();
+    song.bpm = songBpmSlider_.getValue();
+    song.numerator = 4;
+    song.denominator = 4;
+    setlist_.add(std::move(song));
+    setlist_.select(setlist_.size() - 1);
+    songNameEditor_.clear();
+    songArtistEditor_.clear();
+    songKeyEditor_.clear();
+    refreshSetlistUi();
+    saveAppState();
+}
+
+void MainComponent::removeSetlistSong()
+{
+    const int selected = setlistSongBox_.getSelectedId() - 1;
+    if (selected < 0)
+        return;
+    setlist_.remove(static_cast<std::size_t>(selected));
+    refreshSetlistUi();
+    saveAppState();
+}
+
+void MainComponent::loadSelectedSong()
+{
+    const int selected = setlistSongBox_.getSelectedId() - 1;
+    if (selected >= 0)
+        setlist_.select(static_cast<std::size_t>(selected));
+    const auto* song = setlist_.current();
+    if (song == nullptr)
+        return;
+
+    bpmSlider_.setValue(song->bpm, juce::sendNotificationSync);
+    int signatureId = 1;
+    if (song->numerator == 3 && song->denominator == 4) signatureId = 2;
+    else if (song->numerator == 6 && song->denominator == 8) signatureId = 3;
+    else if (song->numerator == 2 && song->denominator == 4) signatureId = 4;
+    timeSignatureBox_.setSelectedId(signatureId, juce::sendNotificationSync);
+
+    liveHint_.setText("SONG: " + juce::String(song->name) + " · "
+        + (song->key.empty() ? juce::String("KEY —") : "KEY " + juce::String(song->key))
+        + " · " + juce::String(song->bpm, 1) + " BPM · section changes remain quantized",
+        juce::dontSendNotification);
+
+    // If the key is recognisable, make J3 PADS follow it without auto-enabling audio.
+    auto key = juce::String(song->key).trim().toUpperCase();
+    const bool minor = key.endsWithChar('M') && !key.endsWith("MAJ");
+    if (minor) key = key.dropLastCharacters(1);
+    static const std::array<juce::String, 12> keys { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    for (int i = 0; i < static_cast<int>(keys.size()); ++i)
+    {
+        if (key == keys[static_cast<std::size_t>(i)])
+        {
+            ambientPad_.setRootMidi(60 + i);
+            ambientPad_.setMinor(minor);
+            refreshPadUi();
+            break;
+        }
+    }
+    refreshSetlistUi();
     saveAppState();
 }
 
@@ -1071,6 +1309,31 @@ void MainComponent::resized()
                                   liveArea.getY() + r * (buttonH + gap), buttonW, buttonH);
     }
 
+    auto setArea = setlistPage_.getLocalBounds().reduced(30);
+    setlistTitle_.setBounds(setArea.removeFromTop(48));
+    setArea.removeFromTop(10);
+    setlistSongBox_.setBounds(setArea.removeFromTop(42).removeFromLeft(std::min(720, setArea.getWidth())));
+    setArea.removeFromTop(18);
+    auto songRow = setArea.removeFromTop(44);
+    const int songGap = 10;
+    const int songNameW = std::max(220, songRow.getWidth() * 35 / 100);
+    songNameEditor_.setBounds(songRow.removeFromLeft(songNameW));
+    songRow.removeFromLeft(songGap);
+    songArtistEditor_.setBounds(songRow.removeFromLeft(std::max(180, songRow.getWidth() * 40 / 100)));
+    songRow.removeFromLeft(songGap);
+    songKeyEditor_.setBounds(songRow.removeFromLeft(std::min(150, songRow.getWidth())));
+    setArea.removeFromTop(14);
+    songBpmSlider_.setBounds(setArea.removeFromTop(48).removeFromLeft(std::min(560, setArea.getWidth())));
+    setArea.removeFromTop(16);
+    auto songButtons = setArea.removeFromTop(44);
+    addSongButton_.setBounds(songButtons.removeFromLeft(160));
+    songButtons.removeFromLeft(10);
+    removeSongButton_.setBounds(songButtons.removeFromLeft(140));
+    songButtons.removeFromLeft(10);
+    loadSongButton_.setBounds(songButtons.removeFromLeft(190));
+    setArea.removeFromTop(20);
+    setlistInfoLabel_.setBounds(setArea.removeFromTop(170));
+
     auto mixerArea = mixerPage_.getLocalBounds().reduced(12);
     auto mixerNav = mixerArea.removeFromTop(40);
     mixerPrevButton_.setBounds(mixerNav.removeFromLeft(110));
@@ -1147,6 +1410,29 @@ void MainComponent::resized()
     const int iemW = std::max(1, iemArea.getWidth() / kVisibleChannels);
     for (int i = 0; i < kVisibleChannels; ++i)
         if (iemStrips_[i]) iemStrips_[i]->setBounds(iemArea.removeFromLeft(iemW).reduced(3));
+
+    auto pluginsArea = pluginsPage_.getLocalBounds().reduced(30);
+    pluginsTitle_.setBounds(pluginsArea.removeFromTop(48));
+    pluginsArea.removeFromTop(12);
+    auto pluginSelectRow = pluginsArea.removeFromTop(44);
+    pluginChannelBox_.setBounds(pluginSelectRow.removeFromLeft(170).reduced(3));
+    pluginSelectRow.removeFromLeft(10);
+    pluginSlotBox_.setBounds(pluginSelectRow.removeFromLeft(150).reduced(3));
+    pluginSelectRow.removeFromLeft(10);
+    pluginCatalogBox_.setBounds(pluginSelectRow.removeFromLeft(std::min(520, pluginSelectRow.getWidth() - 150)).reduced(3));
+    pluginSelectRow.removeFromLeft(10);
+    scanPluginsButton_.setBounds(pluginSelectRow.removeFromLeft(140).reduced(2));
+    pluginsArea.removeFromTop(18);
+    auto pluginActionRow = pluginsArea.removeFromTop(44);
+    loadPluginButton_.setBounds(pluginActionRow.removeFromLeft(160));
+    pluginActionRow.removeFromLeft(10);
+    removePluginButton_.setBounds(pluginActionRow.removeFromLeft(130));
+    pluginActionRow.removeFromLeft(10);
+    bypassPluginButton_.setBounds(pluginActionRow.removeFromLeft(130));
+    pluginActionRow.removeFromLeft(10);
+    openPluginEditorButton_.setBounds(pluginActionRow.removeFromLeft(210));
+    pluginsArea.removeFromTop(22);
+    pluginStatusLabel_.setBounds(pluginsArea.removeFromTop(190));
 
     auto padArea = padPage_.getLocalBounds().reduced(42);
     padTitle_.setBounds(padArea.removeFromTop(54));
@@ -1289,6 +1575,34 @@ void MainComponent::loadAppState()
     clickGenerator_.setAccentEnabled(accentButton_.getToggleState());
     clickGenerator_.setLevel(static_cast<float>(clickVolumeSlider_.getValue()));
 
+    setlist_.clear();
+    forEachXmlChildElementWithTagName(*xml, songXml, "Song")
+    {
+        j3::SongRef song;
+        song.name = songXml->getStringAttribute("name").toStdString();
+        song.artist = songXml->getStringAttribute("artist").toStdString();
+        song.key = songXml->getStringAttribute("key").toStdString();
+        song.bpm = songXml->getDoubleAttribute("bpm", 120.0);
+        song.numerator = songXml->getIntAttribute("numerator", 4);
+        song.denominator = songXml->getIntAttribute("denominator", 4);
+        if (!song.name.empty()) setlist_.add(std::move(song));
+    }
+    if (setlist_.size() > 0)
+        setlist_.select(static_cast<std::size_t>(juce::jlimit(0, static_cast<int>(setlist_.size()) - 1,
+            xml->getIntAttribute("setlistIndex", 0))));
+
+    forEachXmlChildElementWithTagName(*xml, vst, "Vst3")
+    {
+        const int channel = vst->getIntAttribute("channel", -1);
+        const int slot = vst->getIntAttribute("slot", -1);
+        if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots)
+            continue;
+        pluginPaths_[channel][slot] = vst->getStringAttribute("path");
+        pluginNames_[channel][slot] = vst->getStringAttribute("name");
+        pluginStateBase64_[channel][slot] = vst->getStringAttribute("state");
+        pluginBypass_[channel][slot].store(vst->getBoolAttribute("bypass", false), std::memory_order_relaxed);
+    }
+
     forEachXmlChildElementWithTagName(*xml, ch, "Channel")
     {
         const int index = ch->getIntAttribute("index", -1);
@@ -1355,9 +1669,10 @@ void MainComponent::loadAppState()
     refreshIemUi();
     refreshDspUi();
     refreshPadUi();
+    refreshSetlistUi();
 }
 
-void MainComponent::saveAppState()
+void MainComponent::saveAppState(bool capturePluginState)
 {
     juce::XmlElement xml("J3WorshipState");
     xml.setAttribute("version", "1.0.0");
@@ -1373,6 +1688,48 @@ void MainComponent::saveAppState()
     xml.setAttribute("padMinor", ambientPad_.minor());
     xml.setAttribute("padVolume", static_cast<double>(ambientPad_.volume()));
     xml.setAttribute("padToPa", padToPa_.load(std::memory_order_relaxed));
+    xml.setAttribute("setlistIndex", setlist_.size() > 0 ? static_cast<int>(setlist_.currentIndex()) : 0);
+    for (std::size_t i = 0; i < setlist_.size(); ++i)
+    {
+        const auto* song = setlist_.song(i);
+        if (song == nullptr) continue;
+        auto* songXml = xml.createNewChildElement("Song");
+        songXml->setAttribute("name", juce::String(song->name));
+        songXml->setAttribute("artist", juce::String(song->artist));
+        songXml->setAttribute("key", juce::String(song->key));
+        songXml->setAttribute("bpm", song->bpm);
+        songXml->setAttribute("numerator", song->numerator);
+        songXml->setAttribute("denominator", song->denominator);
+    }
+
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+    {
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+        {
+            auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
+            if (capturePluginState && plugin != nullptr)
+            {
+                try
+                {
+                    juce::MemoryBlock state;
+                    plugin->getStateInformation(state);
+                    pluginStateBase64_[ch][slot] = state.toBase64Encoding();
+                }
+                catch (...) {}
+            }
+
+            if (pluginPaths_[ch][slot].isEmpty())
+                continue;
+
+            auto* vst = xml.createNewChildElement("Vst3");
+            vst->setAttribute("channel", ch);
+            vst->setAttribute("slot", slot);
+            vst->setAttribute("path", pluginPaths_[ch][slot]);
+            vst->setAttribute("name", pluginNames_[ch][slot]);
+            vst->setAttribute("bypass", pluginBypass_[ch][slot].load(std::memory_order_relaxed));
+            vst->setAttribute("state", pluginStateBase64_[ch][slot]);
+        }
+    }
 
     for (int i = 0; i < kMaxChannels; ++i)
     {
@@ -1530,6 +1887,254 @@ void MainComponent::handleTapTempo()
             bpmSlider_.setValue(60000.0 / interval, juce::sendNotificationSync);
     }
     lastTapMs_ = now;
+}
+
+
+void MainComponent::scanVst3Plugins()
+{
+    auto* format = pluginFormatManager_.getFormat(0);
+    if (format == nullptr)
+    {
+        pluginStatusLabel_.setText("VST3 host format is unavailable in this build.", juce::dontSendNotification);
+        return;
+    }
+
+    const auto searchPath = format->getDefaultLocationsToSearch();
+    std::vector<std::filesystem::path> roots;
+    roots.reserve(static_cast<std::size_t>(searchPath.getNumPaths()));
+    for (int i = 0; i < searchPath.getNumPaths(); ++i)
+        roots.emplace_back(searchPath[i].getFullPathName().toStdWString());
+
+    pluginStatusLabel_.setText("Scanning VST3 folders without loading plug-ins...", juce::dontSendNotification);
+    pluginCatalog_.scan(roots);
+
+    pluginCatalogBox_.clear(juce::dontSendNotification);
+    const auto& plugins = pluginCatalog_.plugins();
+    for (std::size_t i = 0; i < plugins.size(); ++i)
+        pluginCatalogBox_.addItem(juce::String(plugins[i].name), static_cast<int>(i + 1));
+    if (!plugins.empty())
+        pluginCatalogBox_.setSelectedId(1, juce::dontSendNotification);
+
+    pluginsScanned_ = true;
+    restoreSavedPluginsAfterScan();
+    refreshPluginUi();
+}
+
+void MainComponent::restoreSavedPluginsAfterScan()
+{
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+            if (pluginPaths_[ch][slot].isNotEmpty()
+                && channelPlugins_[ch][slot].load(std::memory_order_acquire) == nullptr)
+                loadPluginPathIntoSlot(pluginPaths_[ch][slot], ch, slot);
+}
+
+void MainComponent::refreshPluginUi()
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
+
+    const bool loaded = plugin != nullptr;
+    bypassPluginButton_.setToggleState(pluginBypass_[ch][slot].load(std::memory_order_relaxed), juce::dontSendNotification);
+    bypassPluginButton_.setEnabled(loaded);
+    removePluginButton_.setEnabled(loaded || pluginPaths_[ch][slot].isNotEmpty());
+    openPluginEditorButton_.setEnabled(loaded);
+    loadPluginButton_.setEnabled(pluginsScanned_ && pluginCatalogBox_.getSelectedId() > 0);
+
+    juce::String status;
+    status << "Channel: " << inputChannelName(ch) << " · Insert " << (slot + 1) << "\n";
+    if (loaded)
+    {
+        status << "Loaded: " << (pluginNames_[ch][slot].isNotEmpty() ? pluginNames_[ch][slot] : plugin->getName()) << "\n";
+        status << "Latency: " << plugin->getLatencySamples() << " samples · "
+               << (pluginBypass_[ch][slot].load(std::memory_order_relaxed) ? "BYPASSED" : "ACTIVE") << "\n";
+        status << "Use OPEN PARAMETERS for the generic parameter editor.";
+    }
+    else if (pluginPaths_[ch][slot].isNotEmpty())
+    {
+        status << "Saved insert: " << pluginNames_[ch][slot] << "\n";
+        status << "Not loaded yet or unavailable at its previous path.";
+    }
+    else
+    {
+        status << "Empty insert.\n";
+        status << pluginCatalog_.plugins().size() << " VST3 module(s) discovered.";
+    }
+    pluginStatusLabel_.setText(status, juce::dontSendNotification);
+}
+
+void MainComponent::loadSelectedPlugin()
+{
+    const int selected = pluginCatalogBox_.getSelectedId() - 1;
+    const auto& plugins = pluginCatalog_.plugins();
+    if (selected < 0 || selected >= static_cast<int>(plugins.size()))
+    {
+        showAudioError("Seleccioná un VST3 del catálogo.");
+        return;
+    }
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    loadPluginPathIntoSlot(juce::String(plugins[static_cast<std::size_t>(selected)].path.wstring()), ch, slot);
+}
+
+void MainComponent::loadPluginPathIntoSlot(const juce::String& path, int channel, int slot)
+{
+    if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots || path.isEmpty())
+        return;
+
+    auto* format = pluginFormatManager_.getFormat(0);
+    if (format == nullptr)
+        return;
+
+    juce::OwnedArray<juce::PluginDescription> types;
+    format->findAllTypesForFile(types, path);
+    if (types.isEmpty())
+    {
+        pluginStatusLabel_.setText("Could not identify VST3: " + path, juce::dontSendNotification);
+        return;
+    }
+
+    const auto description = *types[0];
+    const double sr = std::max(8000.0, sampleRate_.load(std::memory_order_acquire));
+    const int bs = std::max(64, bufferSize_.load(std::memory_order_acquire));
+    const bool savedBypass = pluginBypass_[channel][slot].load(std::memory_order_relaxed);
+    const auto savedState = pluginStateBase64_[channel][slot];
+
+    pluginStatusLabel_.setText("Loading " + description.name + "...", juce::dontSendNotification);
+    pluginFormatManager_.createPluginInstanceAsync(
+        description, sr, bs,
+        [safe = juce::Component::SafePointer<MainComponent>(this), channel, slot, path, savedBypass, savedState]
+        (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
+        {
+            if (safe == nullptr)
+                return;
+
+            if (instance == nullptr)
+            {
+                safe->pluginStatusLabel_.setText("VST3 load failed: " + error, juce::dontSendNotification);
+                return;
+            }
+
+            const int inChannels = instance->getTotalNumInputChannels();
+            const int outChannels = instance->getTotalNumOutputChannels();
+            if (inChannels > 2 || outChannels > 2 || inChannels < 1 || outChannels < 1)
+            {
+                safe->pluginStatusLabel_.setText(
+                    "Insert rejected: this version supports mono/stereo audio-effect VST3 plug-ins only.",
+                    juce::dontSendNotification);
+                return;
+            }
+
+            instance->setRateAndBufferSizeDetails(
+                std::max(8000.0, safe->sampleRate_.load(std::memory_order_acquire)),
+                std::max(64, safe->bufferSize_.load(std::memory_order_acquire)));
+            instance->prepareToPlay(
+                std::max(8000.0, safe->sampleRate_.load(std::memory_order_acquire)),
+                std::max(64, safe->bufferSize_.load(std::memory_order_acquire)));
+
+            if (savedState.isNotEmpty())
+            {
+                juce::MemoryBlock state;
+                if (state.fromBase64Encoding(savedState))
+                    instance->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            }
+
+            auto shared = std::shared_ptr<juce::AudioPluginInstance>(std::move(instance));
+            safe->pluginPaths_[channel][slot] = path;
+            safe->pluginNames_[channel][slot] = shared->getName();
+            safe->pluginBypass_[channel][slot].store(savedBypass, std::memory_order_release);
+            safe->channelPlugins_[channel][slot].store(shared, std::memory_order_release);
+            safe->refreshPluginUi();
+            safe->saveAppState();
+        });
+}
+
+void MainComponent::removeSelectedPlugin()
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    channelPlugins_[ch][slot].store({}, std::memory_order_release);
+    pluginPaths_[ch][slot].clear();
+    pluginNames_[ch][slot].clear();
+    pluginStateBase64_[ch][slot].clear();
+    pluginBypass_[ch][slot].store(false, std::memory_order_release);
+    refreshPluginUi();
+    saveAppState();
+}
+
+void MainComponent::openSelectedPluginEditor()
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
+    if (plugin == nullptr)
+        return;
+
+    auto holder = std::make_unique<GenericPluginEditorHolder>(plugin);
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(holder.release());
+    options.dialogTitle = "J3 Worship · " + plugin->getName();
+    options.dialogBackgroundColour = juce::Colour(panel);
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = true;
+    options.launchAsync();
+}
+
+const float* MainComponent::processPluginChain(int channel, const float* input, int numSamples) noexcept
+{
+    if (channel < 0 || channel >= kMaxChannels || input == nullptr || numSamples <= 0
+        || pluginScratch_.getNumChannels() < 2 || pluginScratch_.getNumSamples() < numSamples)
+        return input;
+
+    bool hasPlugin = false;
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+        if (!pluginBypass_[channel][slot].load(std::memory_order_relaxed)
+            && channelPlugins_[channel][slot].load(std::memory_order_acquire) != nullptr)
+            hasPlugin = true;
+    if (!hasPlugin)
+        return input;
+
+    pluginScratch_.copyFrom(0, 0, input, numSamples);
+    pluginScratch_.copyFrom(1, 0, input, numSamples);
+
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+    {
+        if (pluginBypass_[channel][slot].load(std::memory_order_relaxed))
+            continue;
+
+        auto plugin = channelPlugins_[channel][slot].load(std::memory_order_acquire);
+        if (plugin == nullptr)
+            continue;
+
+        try
+        {
+            const int channels = juce::jlimit(1, 2,
+                std::max(plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels()));
+            if (channels == 2)
+                pluginScratch_.copyFrom(1, 0, pluginScratch_, 0, 0, numSamples);
+
+            juce::AudioBuffer<float> view(pluginScratch_.getArrayOfWritePointers(), channels, numSamples);
+            pluginMidiScratch_.clear();
+            plugin->processBlock(view, pluginMidiScratch_);
+
+            if (plugin->getTotalNumOutputChannels() >= 2)
+            {
+                auto* mono = pluginScratch_.getWritePointer(0);
+                const auto* right = pluginScratch_.getReadPointer(1);
+                for (int i = 0; i < numSamples; ++i)
+                    mono[i] = (mono[i] + right[i]) * 0.70710678f;
+            }
+            pluginScratch_.copyFrom(1, 0, pluginScratch_, 0, 0, numSamples);
+        }
+        catch (...)
+        {
+            pluginBypass_[channel][slot].store(true, std::memory_order_release);
+        }
+    }
+
+    return pluginScratch_.getReadPointer(0);
 }
 
 void MainComponent::refreshPadUi()
@@ -1929,6 +2534,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             if (in == nullptr)
                 continue;
 
+            const auto* processedInput = processPluginChain(ch, in, numSamples);
             applyDspParameters(ch);
             const bool muted = channelMute_[ch].load(std::memory_order_relaxed);
             const int dca = channelDca_[ch].load(std::memory_order_relaxed);
@@ -1944,7 +2550,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
 
             for (int i = 0; i < numSamples; ++i)
             {
-                const float x = channelDsp_[ch].process(in[i]);
+                const float x = channelDsp_[ch].process(processedInput[i]);
                 peak = std::max(peak, std::abs(x));
                 if (muted)
                     continue;
@@ -2087,8 +2693,30 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     const auto sr = device->getCurrentSampleRate();
     sampleRate_.store(sr, std::memory_order_release);
     bufferSize_.store(device->getCurrentBufferSizeSamples(), std::memory_order_release);
-    busScratch_.setSize(kBuses * 2, std::max(2048, device->getCurrentBufferSizeSamples()), false, true, false);
+    const int preparedBlock = std::max(2048, device->getCurrentBufferSizeSamples());
+    busScratch_.setSize(kBuses * 2, preparedBlock, false, true, false);
     busScratch_.clear();
+    pluginScratch_.setSize(2, preparedBlock, false, true, false);
+    pluginScratch_.clear();
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+    {
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+        {
+            if (auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire))
+            {
+                try
+                {
+                    plugin->releaseResources();
+                    plugin->setRateAndBufferSizeDetails(sr, device->getCurrentBufferSizeSamples());
+                    plugin->prepareToPlay(sr, device->getCurrentBufferSizeSamples());
+                }
+                catch (...)
+                {
+                    pluginBypass_[ch][slot].store(true, std::memory_order_release);
+                }
+            }
+        }
+    }
     for (int ch = 0; ch < kMaxChannels; ++ch)
     {
         channelDsp_[ch].prepare(sr);

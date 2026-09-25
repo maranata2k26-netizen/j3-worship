@@ -125,7 +125,10 @@ int main() {
 
         Setlist set("Sunday 20:00"); set.add({"Song A","Artist","G",72}); set.add({"Song B","Artist","A",76}); set.add({"Song C","Artist","B",80});
         check(set.current() && set.current()->name=="Song A", "setlist current"); check(set.next() && set.next()->name=="Song B", "setlist next");
-        check(set.move(2,1), "setlist drag reorder model"); check(set.next() && set.next()->name=="Song C", "setlist reordered"); check(set.advance(), "setlist advance");
+        check(set.move(2,1), "setlist drag reorder model"); check(set.next() && set.next()->name=="Song C", "setlist reordered");
+        check(set.select(1) && set.current() && set.current()->name=="Song C", "setlist direct select");
+        check(set.remove(0) && set.size()==2, "setlist remove"); check(set.current() && set.current()->name=="Song C", "setlist index remains stable after earlier removal");
+        check(set.advance(), "setlist advance");
 
         MidiMap midi; midi.assign({1,64,127,true},"CHORUS"); auto action=midi.actionFor({1,64,1,true}); check(action && *action=="CHORUS", "MIDI mapping ignores value for key ordering semantics");
 

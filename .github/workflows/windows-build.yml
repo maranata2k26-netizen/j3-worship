@@ -2,7 +2,7 @@ name: Windows Release Build
 
 on:
   push:
-    branches: [main, finish-daw]
+    branches: [main, finish-daw, finish-daw-polish]
     paths:
       - "canonical-current/**"
       - ".github/workflows/windows-build.yml"
