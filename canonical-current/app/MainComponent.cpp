@@ -1534,48 +1534,124 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     const int click = clickOutput_.load(std::memory_order_relaxed);
     const bool safePa = left >= 0 && right >= 0 && left < numOutputChannels && right < numOutputChannels
         && routeIsSafe(left, right, click) && outputChannelData[left] != nullptr && outputChannelData[right] != nullptr;
+    const bool monitoring = liveMonitorEnabled_.load(std::memory_order_acquire);
+    const bool busAvailable = busScratch_.getNumChannels() >= kBuses * 2 && busScratch_.getNumSamples() >= numSamples;
 
-    if (liveMonitorEnabled_.load(std::memory_order_acquire) && safePa)
+    if (monitoring)
     {
-        auto* outL = outputChannelData[left];
-        auto* outR = outputChannelData[right];
-        const bool mono = left == right;
+        if (busAvailable)
+            busScratch_.clear(0, numSamples);
+
+        auto* outL = safePa ? outputChannelData[left] : nullptr;
+        auto* outR = safePa ? outputChannelData[right] : nullptr;
+        const bool monoPa = safePa && left == right;
         const auto master = masterGain_.load(std::memory_order_relaxed);
-        const int channels = std::min({ numInputChannels, kMaxChannels, kVisibleChannels });
+        const int channels = std::min(numInputChannels, kMaxChannels);
+
         for (int ch = 0; ch < channels; ++ch)
         {
             const auto* in = inputChannelData[ch];
-            if (in == nullptr || channelMute_[ch].load(std::memory_order_relaxed))
+            if (in == nullptr)
                 continue;
 
-            const auto gain = channelGain_[ch].load(std::memory_order_relaxed) * master;
+            const bool muted = channelMute_[ch].load(std::memory_order_relaxed);
+            const int dca = channelDca_[ch].load(std::memory_order_relaxed);
+            const bool dcaMuted = dca >= 0 && dca < kDcas && dcaMute_[dca].load(std::memory_order_relaxed);
+            const float dcaGain = dca >= 0 && dca < kDcas ? dcaGain_[dca].load(std::memory_order_relaxed) : 1.0f;
+            const float channelGain = channelGain_[ch].load(std::memory_order_relaxed);
             const auto pan = juce::jlimit(-1.0f, 1.0f, channelPan_[ch].load(std::memory_order_relaxed));
             const auto angle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
-            const auto gl = gain * std::cos(angle);
-            const auto gr = gain * std::sin(angle);
+            const float panL = std::cos(angle);
+            const float panR = std::sin(angle);
+            const int bus = channelBus_[ch].load(std::memory_order_relaxed);
             float peak = 0.0f;
 
             for (int i = 0; i < numSamples; ++i)
             {
-                auto x = channelDsp_[ch].process(in[i]);
+                const float x = channelDsp_[ch].process(in[i]);
                 peak = std::max(peak, std::abs(x));
-                if (mono)
-                    outL[i] += x * gain;
+                if (muted)
+                    continue;
+
+                // IEM sends are post-channel DSP but pre-fader/DCA, so monitor balances stay independent.
+                for (int m = 0; m < kIemMixes; ++m)
+                {
+                    if (iemMute_[m].load(std::memory_order_relaxed))
+                        continue;
+                    const int il = iemOutLeft_[m].load(std::memory_order_relaxed);
+                    const int ir = iemOutRight_[m].load(std::memory_order_relaxed);
+                    if (il < 0 || ir < 0 || il >= numOutputChannels || ir >= numOutputChannels || il == ir)
+                        continue;
+                    if (il == left || il == right || ir == left || ir == right || il == click || ir == click)
+                        continue;
+                    auto* iemL = outputChannelData[il];
+                    auto* iemR = outputChannelData[ir];
+                    if (iemL == nullptr || iemR == nullptr)
+                        continue;
+                    const float send = iemSendGain_[m][ch].load(std::memory_order_relaxed)
+                        * iemMaster_[m].load(std::memory_order_relaxed);
+                    if (send <= 1.0e-8f)
+                        continue;
+                    const float iemPan = juce::jlimit(-1.0f, 1.0f, iemSendPan_[m][ch].load(std::memory_order_relaxed));
+                    const float iemAngle = (iemPan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+                    iemL[i] += x * send * std::cos(iemAngle);
+                    iemR[i] += x * send * std::sin(iemAngle);
+                }
+
+                if (!safePa || dcaMuted)
+                    continue;
+
+                const float post = x * channelGain * dcaGain;
+                if (bus >= 0 && bus < kBuses && busAvailable)
+                {
+                    busScratch_.getWritePointer(bus * 2)[i] += post * panL;
+                    busScratch_.getWritePointer(bus * 2 + 1)[i] += post * panR;
+                }
+                else if (monoPa)
+                {
+                    outL[i] += post * master;
+                }
                 else
                 {
-                    outL[i] += x * gl;
-                    outR[i] += x * gr;
+                    outL[i] += post * panL * master;
+                    outR[i] += post * panR * master;
                 }
             }
+
             auto previous = channelMeter_[ch].load(std::memory_order_relaxed);
             while (peak > previous && !channelMeter_[ch].compare_exchange_weak(previous, peak, std::memory_order_relaxed)) {}
         }
 
-        for (int i = 0; i < numSamples; ++i)
+        if (safePa && busAvailable)
         {
-            outL[i] = std::tanh(outL[i]);
-            if (!mono)
-                outR[i] = std::tanh(outR[i]);
+            for (int bus = 0; bus < kBuses; ++bus)
+            {
+                if (busMute_[bus].load(std::memory_order_relaxed))
+                    continue;
+                const float gain = busGain_[bus].load(std::memory_order_relaxed) * master;
+                const auto* busL = busScratch_.getReadPointer(bus * 2);
+                const auto* busR = busScratch_.getReadPointer(bus * 2 + 1);
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    if (monoPa)
+                        outL[i] += (busL[i] + busR[i]) * 0.70710678f * gain;
+                    else
+                    {
+                        outL[i] += busL[i] * gain;
+                        outR[i] += busR[i] * gain;
+                    }
+                }
+            }
+        }
+
+        // Soft protection on every live-routed output. CLICK is added afterwards and has its own conservative level.
+        for (int o = 0; o < numOutputChannels; ++o)
+        {
+            auto* out = outputChannelData[o];
+            if (out == nullptr || o == click)
+                continue;
+            for (int i = 0; i < numSamples; ++i)
+                out[i] = std::tanh(out[i]);
         }
     }
 
@@ -1593,8 +1669,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     if (recordingEnabled_.load(std::memory_order_acquire))
     {
         const int wanted = recordChannelCount_.load(std::memory_order_relaxed);
-        const int channels = std::min({ wanted, numInputChannels, static_cast<int>(j3::kRecordMaxChannels) });
-        if (channels == wanted && channels > 0)
+        if (wanted > 0 && wanted <= static_cast<int>(j3::kRecordMaxChannels))
         {
             int offset = 0;
             while (offset < numSamples)
@@ -1602,13 +1677,18 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
                 const int frames = std::min<int>(static_cast<int>(j3::kRecordMaxFrames), numSamples - offset);
                 std::array<const float*, j3::kRecordMaxChannels> ptrs {};
                 bool valid = true;
-                for (int ch = 0; ch < channels; ++ch)
+                for (int rec = 0; rec < wanted; ++rec)
                 {
-                    if (inputChannelData[ch] == nullptr) { valid = false; break; }
-                    ptrs[static_cast<std::size_t>(ch)] = inputChannelData[ch] + offset;
+                    const int input = recordInputIndices_[static_cast<std::size_t>(rec)];
+                    if (input < 0 || input >= numInputChannels || inputChannelData[input] == nullptr)
+                    {
+                        valid = false;
+                        break;
+                    }
+                    ptrs[static_cast<std::size_t>(rec)] = inputChannelData[input] + offset;
                 }
                 if (valid)
-                    recorder_.submit(ptrs.data(), static_cast<std::size_t>(channels), static_cast<std::size_t>(frames));
+                    recorder_.submit(ptrs.data(), static_cast<std::size_t>(wanted), static_cast<std::size_t>(frames));
                 offset += frames;
             }
         }
