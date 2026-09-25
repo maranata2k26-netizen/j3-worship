@@ -1,0 +1,175 @@
++    openRecordingsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
++    openRecordingsButton_.onClick = [this] { recordingsRoot().revealToUser(); };
++    recordingPage_.addAndMakeVisible(openRecordingsButton_);
++    updateRecordingUi();
++
+     setupTitle_.setText("AUDIO & ROUTING", juce::dontSendNotification);
+     setupTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
+     setupTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+@@ -261,11 +384,19 @@
+     tabs_.setTabBarDepth(46);
+     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
+     tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
++    tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
++    tabs_.addTab("RECORD", juce::Colour(panel), &recordingPage_, false);
+     tabs_.addTab("AUDIO / ROUTING", juce::Colour(panel), &setupPage_, false);
+     tabs_.addTab("SYSTEM CHECK", juce::Colour(panel), &diagnosticsPage_, false);
+     addAndMakeVisible(tabs_);
+ 
++    recoveredAfterUncleanExit_ = getRuntimeLockFile().existsAsFile();
++    getRuntimeLockFile().getParentDirectory().createDirectory();
++    getRuntimeLockFile().replaceWithText("running");
+     configureAudio();
++    loadAppState();
++    updateClickUi();
++    updateRecordingUi();
+     startTimerHz(30);
+     setSize(1440, 900);
+ }
+@@ -275,10 +406,15 @@
+     shuttingDown_.store(true, std::memory_order_release);
+     stopTimer();
+     liveMonitorEnabled_.store(false, std::memory_order_release);
+-    saveAudioState();
++    recordingEnabled_.store(false, std::memory_order_release);
+     deviceManager_.removeChangeListener(this);
+     deviceManager_.removeAudioCallback(this);
++    std::string recordError;
++    recorder_.stop(recordError);
++    saveAppState();
++    saveAudioState();
+     deviceManager_.closeAudioDevice();
++    getRuntimeLockFile().deleteFile();
+ }
+ 
+ void MainComponent::paint(juce::Graphics& g)
+@@ -327,6 +463,36 @@
+     for (int i = 0; i < kVisibleChannels; ++i)
+         strips_[i]->setBounds(mixerArea.removeFromLeft(stripW).reduced(3));
+ 
++    auto clickArea = clickPage_.getLocalBounds().reduced(36);
++    clickTitle_.setBounds(clickArea.removeFromTop(48));
++    clickArea.removeFromTop(18);
++    clickEnabledButton_.setBounds(clickArea.removeFromTop(40).removeFromLeft(180));
++    clickArea.removeFromTop(18);
++    auto tempoRow = clickArea.removeFromTop(58);
++    bpmSlider_.setBounds(tempoRow.removeFromLeft(std::min(560, tempoRow.getWidth() - 180)));
++    tempoRow.removeFromLeft(16);
++    tapTempoButton_.setBounds(tempoRow.removeFromLeft(160));
++    clickArea.removeFromTop(18);
++    auto optionRow = clickArea.removeFromTop(48);
++    timeSignatureBox_.setBounds(optionRow.removeFromLeft(180));
++    optionRow.removeFromLeft(16);
++    subdivisionBox_.setBounds(optionRow.removeFromLeft(180));
++    optionRow.removeFromLeft(16);
++    accentButton_.setBounds(optionRow.removeFromLeft(140));
++    clickArea.removeFromTop(18);
++    clickVolumeSlider_.setBounds(clickArea.removeFromTop(48).removeFromLeft(520));
++    clickArea.removeFromTop(20);
++    clickRouteLabel_.setBounds(clickArea.removeFromTop(120));
++
++    auto recordArea = recordingPage_.getLocalBounds().reduced(36);
++    recordingTitle_.setBounds(recordArea.removeFromTop(48));
++    recordArea.removeFromTop(20);
++    recordButton_.setBounds(recordArea.removeFromTop(58).removeFromLeft(220));
++    recordArea.removeFromTop(18);
++    openRecordingsButton_.setBounds(recordArea.removeFromTop(44).removeFromLeft(260));
++    recordArea.removeFromTop(18);
++    recordingStatusLabel_.setBounds(recordArea);
++
+     auto setup = setupPage_.getLocalBounds().reduced(32);
+     setupTitle_.setBounds(setup.removeFromTop(42));
+     setupDeviceLabel_.setBounds(setup.removeFromTop(160));
+@@ -367,6 +533,176 @@
+         .getChildFile("audio-device.xml");
+ }
+ 
++juce::File MainComponent::getAppStateFile() const
++{
++    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
++        .getChildFile("J3 Worship")
++        .getChildFile("app-state.xml");
++}
++
++juce::File MainComponent::getRuntimeLockFile() const
++{
++    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
++        .getChildFile("J3 Worship")
++        .getChildFile("runtime.lock");
++}
++
++juce::File MainComponent::recordingsRoot() const
++{
++    return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
++        .getChildFile("J3 Worship")
++        .getChildFile("Recordings");
++}
++
++void MainComponent::loadAppState()
++{
++    const auto file = getAppStateFile();
++    if (!file.existsAsFile())
++        return;
++    auto xml = juce::XmlDocument::parse(file);
++    if (xml == nullptr || !xml->hasTagName("J3WorshipState"))
++        return;
++
++    paLeft_.store(xml->getIntAttribute("paLeft", 0));
++    paRight_.store(xml->getIntAttribute("paRight", 1));
++    clickOutput_.store(xml->getIntAttribute("clickOutput", -1));
++    bpmSlider_.setValue(xml->getDoubleAttribute("bpm", 120.0), juce::dontSendNotification);
++    timeSignatureBox_.setSelectedId(xml->getIntAttribute("timeSignatureId", 1), juce::dontSendNotification);
++    subdivisionBox_.setSelectedId(xml->getIntAttribute("subdivisionId", 1), juce::dontSendNotification);
++    accentButton_.setToggleState(xml->getBoolAttribute("accent", true), juce::dontSendNotification);
++    clickVolumeSlider_.setValue(xml->getDoubleAttribute("clickVolume", 0.35), juce::dontSendNotification);
++    clickAudible_.store(false, std::memory_order_release);
++    clickEnabledButton_.setToggleState(false, juce::dontSendNotification);
++
++    clickGenerator_.setTempo(bpmSlider_.getValue());
++    const int sig = timeSignatureBox_.getSelectedId();
++    clickGenerator_.setTimeSignature(sig == 2 ? 3 : (sig == 3 ? 6 : (sig == 4 ? 2 : 4)), sig == 3 ? 8 : 4);
++    const int sub = subdivisionBox_.getSelectedId();
++    clickGenerator_.setSubdivision(sub == 3 ? 4 : (sub == 2 ? 2 : 1));
++    clickGenerator_.setAccentEnabled(accentButton_.getToggleState());
++    clickGenerator_.setLevel(static_cast<float>(clickVolumeSlider_.getValue()));
++
++    int index = 0;
++    forEachXmlChildElementWithTagName(*xml, ch, "Channel")
++    {
++        if (index >= kVisibleChannels) break;
++        channelGain_[index].store(static_cast<float>(ch->getDoubleAttribute("gain", dbToGain(-6.0))), std::memory_order_relaxed);
++        channelPan_[index].store(static_cast<float>(ch->getDoubleAttribute("pan", 0.0)), std::memory_order_relaxed);
++        channelMute_[index].store(ch->getBoolAttribute("mute", false), std::memory_order_relaxed);
++        ++index;
++    }
++    for (auto& strip : strips_)
++        if (strip) strip->syncFromModel();
++    refreshRoutingControls();
++}
++
++void MainComponent::saveAppState()
++{
++    juce::XmlElement xml("J3WorshipState");
++    xml.setAttribute("version", "0.5.0");
++    xml.setAttribute("paLeft", paLeft_.load());
++    xml.setAttribute("paRight", paRight_.load());
++    xml.setAttribute("clickOutput", clickOutput_.load());
++    xml.setAttribute("bpm", bpmSlider_.getValue());
++    xml.setAttribute("timeSignatureId", timeSignatureBox_.getSelectedId());
++    xml.setAttribute("subdivisionId", subdivisionBox_.getSelectedId());
++    xml.setAttribute("accent", accentButton_.getToggleState());
++    xml.setAttribute("clickVolume", clickVolumeSlider_.getValue());
++    for (int i = 0; i < kVisibleChannels; ++i)
++    {
++        auto* ch = xml.createNewChildElement("Channel");
++        ch->setAttribute("index", i);
++        ch->setAttribute("gain", static_cast<double>(channelGain_[i].load(std::memory_order_relaxed)));
++        ch->setAttribute("pan", static_cast<double>(channelPan_[i].load(std::memory_order_relaxed)));
++        ch->setAttribute("mute", channelMute_[i].load(std::memory_order_relaxed));
++    }
++    const auto file = getAppStateFile();
++    file.getParentDirectory().createDirectory();
++    file.replaceWithText(xml.toString(), false, false, "\n");
++}
++
++void MainComponent::startStopRecording()
