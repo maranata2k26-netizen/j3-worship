@@ -1422,8 +1422,11 @@ void DawWorkspace::syncInspector()
     fadeInSlider_.setEnabled(clipSelected);
     fadeOutSlider_.setEnabled(clipSelected);
     splitButton_.setEnabled(clipSelected);
-    duplicateButton_.setEnabled(clipSelected);
-    deleteButton_.setEnabled(clipSelected);
+    const bool midiSelected = selectedMidiNoteId_ >= 0;
+    duplicateButton_.setEnabled(clipSelected || midiSelected);
+    deleteButton_.setEnabled(clipSelected || midiSelected);
+    splitButton_.setEnabled(clipSelected);
+    patternButton_.setEnabled(t.midi);
     if (c != nullptr)
     {
         clipGainSlider_.setValue(gainToDb(c->gain), juce::dontSendNotification);
@@ -1532,6 +1535,20 @@ void DawWorkspace::rebuildRenderState()
         state.endSample = std::max(state.endSample, rc.startSample + rc.lengthSamples);
     }
 
+    for (const auto& n : midiNotes_)
+    {
+        if (state.midiNoteCount >= kMaxMidiNotes) break;
+        if (n.track < 0 || n.track >= trackCount_ || !tracks_[n.track].midi) continue;
+        auto& rn = state.midiNotes[state.midiNoteCount++];
+        rn.track = n.track;
+        rn.startSample = static_cast<std::int64_t>(std::llround(n.startBeat * secondsPerBeat * state.sampleRate));
+        rn.lengthSamples = std::max<std::int64_t>(1, static_cast<std::int64_t>(
+            std::llround(n.lengthBeats * secondsPerBeat * state.sampleRate)));
+        rn.note = juce::jlimit(0, 127, n.note);
+        rn.velocity = juce::jlimit(0.0f, 1.0f, n.velocity);
+        state.endSample = std::max(state.endSample, rn.startSample + rn.lengthSamples);
+    }
+
     activeRenderState_.store(target, std::memory_order_release);
     renderDirty_.store(false, std::memory_order_release);
 }
@@ -1623,6 +1640,48 @@ void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noe
                 if (left == right) left[dst] += (l + r) * 0.70710678f;
                 else { left[dst] += l; right[dst] += r; }
             }
+        }
+    }
+
+    for (int ni = 0; ni < state.midiNoteCount; ++ni)
+    {
+        const auto& note = state.midiNotes[ni];
+        if (note.track < 0 || note.track >= state.trackCount) continue;
+        const auto& track = state.tracks[note.track];
+        if (track.mute || (state.anySolo && !track.solo)) continue;
+
+        const std::int64_t noteStart = note.startSample;
+        const std::int64_t noteEnd = note.startSample + note.lengthSamples;
+        const std::int64_t ovStart = std::max(blockStart, noteStart);
+        const std::int64_t ovEnd = std::min(blockEnd, noteEnd);
+        if (ovStart >= ovEnd) continue;
+
+        const double frequency = 440.0 * std::pow(2.0, (static_cast<double>(note.note) - 69.0) / 12.0);
+        const double twoPiF = juce::MathConstants<double>::twoPi * frequency;
+        const float pan = juce::jlimit(-1.0f, 1.0f, track.pan);
+        const float angle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+        const float panL = std::cos(angle);
+        const float panR = std::sin(angle);
+        const std::int64_t attack = std::max<std::int64_t>(1, static_cast<std::int64_t>(state.sampleRate * 0.006));
+        const std::int64_t release = std::max<std::int64_t>(1, static_cast<std::int64_t>(state.sampleRate * 0.018));
+        const float gain = 0.16f * note.velocity * track.gain;
+
+        for (std::int64_t global = ovStart; global < ovEnd; ++global)
+        {
+            const auto local = global - noteStart;
+            const auto remain = note.lengthSamples - local;
+            float env = 1.0f;
+            if (local < attack) env = static_cast<float>(local) / static_cast<float>(attack);
+            if (remain < release) env = std::min(env, static_cast<float>(remain) / static_cast<float>(release));
+            env = juce::jlimit(0.0f, 1.0f, env);
+
+            const double t = static_cast<double>(local) / state.sampleRate;
+            const float fundamental = static_cast<float>(std::sin(twoPiF * t));
+            const float harmonic = static_cast<float>(std::sin(twoPiF * 2.0 * t)) * 0.22f;
+            const float v = (fundamental + harmonic) * gain * env;
+            const int dst = static_cast<int>(global - blockStart);
+            if (left == right) left[dst] += v * 0.70710678f;
+            else { left[dst] += v * panL; right[dst] += v * panR; }
         }
     }
 
