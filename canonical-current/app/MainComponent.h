@@ -8,11 +8,14 @@
 #include "j3/Recording.h"
 #include "j3/Setlist.h"
 #include "j3/PluginCatalog.h"
+#include "J3Theme.h"
+#include "UpdateService.h"
 
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 class MainComponent final : public juce::Component,
                             private juce::AudioIODeviceCallback,
@@ -62,6 +65,7 @@ private:
         juce::ComboBox dcaBox_;
         double meterValue_ { 0.0 };
         juce::ProgressBar meterBar_;
+        std::array<float, 32> meterHistory_ {};
     };
 
     class GroupStrip final : public juce::Component
@@ -139,6 +143,10 @@ private:
     bool routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept;
     bool iemRouteIsSafe(int mix, int left, int right) const noexcept;
     void scheduleReconnect();
+    void applyTheme(int themeId, bool persist = true);
+    void refreshDashboard();
+    void checkForUpdatesAsync();
+    void beginUpdateInstall();
 
     void rebuildMixerBank();
     void setMixerBank(int firstChannel);
@@ -233,9 +241,16 @@ private:
     juce::String lastAudioError_;
     juce::String deviceInventory_;
 
+    std::unique_ptr<j3ui::LookAndFeel> lookAndFeel_;
+    int themeId_ { 1 };
+    std::optional<j3ui::AvailableUpdate> availableUpdate_;
+    std::atomic<bool> updateBusy_ { false };
+
     juce::Label brandLabel_;
     juce::Label versionLabel_;
     juce::Label statusLabel_;
+    juce::ComboBox themeBox_;
+    juce::TextButton updateButton_ { "ACTUALIZAR" };
     juce::TextButton audioSettingsButton_ { "AUDIO / MIDI" };
     juce::ToggleButton liveMonitorButton_ { "LIVE INPUTS" };
     juce::TabbedComponent tabs_ { juce::TabbedButtonBar::TabsAtTop };
@@ -262,6 +277,27 @@ private:
     juce::Label setlistInfoLabel_;
 
     juce::Component mixerPage_;
+    std::unique_ptr<juce::Component> dashboardLeftCard_;
+    std::unique_ptr<juce::Component> dashboardRightCard_;
+    std::unique_ptr<juce::Component> dashboardBottomCard_;
+    juce::Label dashboardSetlistTitle_;
+    juce::ComboBox dashboardSongBox_;
+    juce::TextButton dashboardLoadSongButton_ { "CARGAR EN LIVE" };
+    juce::Label dashboardSongInfo_;
+    juce::Label dashboardIemTitle_;
+    juce::ComboBox dashboardIemMixBox_;
+    juce::Slider dashboardIemMasterSlider_;
+    juce::Label dashboardRecordTitle_;
+    juce::TextButton dashboardRecordButton_ { "GRABAR" };
+    juce::Label dashboardRecordInfo_;
+    juce::Label dashboardPluginsTitle_;
+    juce::Label dashboardPluginsInfo_;
+    juce::Label dashboardLiveTitle_;
+    juce::ToggleButton dashboardPadButton_ { "PAD" };
+    juce::ToggleButton dashboardClickButton_ { "CLICK" };
+    juce::Label dashboardTempoLabel_;
+    std::array<std::unique_ptr<juce::TextButton>, 8> dashboardSectionButtons_;
+
     juce::TextButton mixerPrevButton_ { "< 8 CH" };
     juce::TextButton mixerNextButton_ { "8 CH >" };
     juce::Label mixerBankLabel_;
