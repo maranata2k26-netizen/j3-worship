@@ -931,6 +931,70 @@ void DawWorkspace::addTrack()
     repaint();
 }
 
+void DawWorkspace::addMidiTrack()
+{
+    if (trackCount_ >= kMaxTracks)
+    {
+        refreshStatus("Máximo de 32 pistas alcanzado");
+        return;
+    }
+    const int i = trackCount_++;
+    tracks_[i] = {};
+    tracks_[i].midi = true;
+    tracks_[i].name = "MIDI " + juce::String(i + 1);
+    tracks_[i].colour = trackColour(i);
+    selectedTrack_ = i;
+    selectedClipId_ = -1;
+    selectedMidiNoteId_ = -1;
+    projectDirty_ = true;
+    markRenderDirty();
+    syncInspector();
+    repaint();
+    refreshStatus("Pista MIDI creada · doble clic para dibujar notas");
+}
+
+void DawWorkspace::addMidiNote(int track, double startBeat, int note, double lengthBeats, float velocity)
+{
+    if (static_cast<int>(midiNotes_.size()) >= kMaxMidiNotes || track < 0 || track >= trackCount_)
+        return;
+    MidiNote n;
+    n.id = nextMidiNoteId_++;
+    n.track = track;
+    n.startBeat = std::max(0.0, startBeat);
+    n.lengthBeats = std::max(0.125, lengthBeats);
+    n.note = juce::jlimit(0, 127, note);
+    n.velocity = juce::jlimit(0.01f, 1.0f, velocity);
+    midiNotes_.push_back(n);
+    selectedTrack_ = track;
+    selectedClipId_ = -1;
+    selectedMidiNoteId_ = n.id;
+    projectDirty_ = true;
+    markRenderDirty();
+    syncInspector();
+    repaint();
+}
+
+void DawWorkspace::addPattern16()
+{
+    if (selectedTrack_ < 0 || selectedTrack_ >= trackCount_ || !tracks_[selectedTrack_].midi)
+    {
+        checkpointUndo();
+        addMidiTrack();
+    }
+    if (selectedTrack_ < 0 || selectedTrack_ >= trackCount_ || !tracks_[selectedTrack_].midi)
+        return;
+
+    checkpointUndo();
+    const double start = snapBeat((static_cast<double>(transportSamples_.load(std::memory_order_relaxed))
+        / std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed))) * bpm() / 60.0);
+    constexpr std::array<int, 16> pattern { 60, 64, 67, 72, 67, 64, 60, 67,
+                                            60, 64, 67, 74, 72, 67, 64, 67 };
+    for (int step = 0; step < 16; ++step)
+        addMidiNote(selectedTrack_, start + step * 0.25, pattern[static_cast<std::size_t>(step)],
+                    0.22, step % 4 == 0 ? 0.92f : 0.70f);
+    refreshStatus("Pattern MIDI de 16 pasos creado · editable en el piano roll");
+}
+
 DawWorkspace::ClipAudioData* DawWorkspace::audioForPath(const juce::String& path) const
 {
     for (const auto& item : audioPool_)
@@ -1033,6 +1097,23 @@ void DawWorkspace::importFiles(const juce::StringArray& files, int targetTrack, 
 
 void DawWorkspace::deleteSelectedClip()
 {
+    if (selectedMidiNoteId_ >= 0)
+    {
+        checkpointUndo();
+        const auto before = midiNotes_.size();
+        midiNotes_.erase(std::remove_if(midiNotes_.begin(), midiNotes_.end(),
+            [this](const MidiNote& n) { return n.id == selectedMidiNoteId_; }), midiNotes_.end());
+        if (midiNotes_.size() != before)
+        {
+            selectedMidiNoteId_ = -1;
+            projectDirty_ = true;
+            markRenderDirty();
+            syncInspector();
+            repaint();
+        }
+        return;
+    }
+
     if (selectedClipId_ < 0) return;
     checkpointUndo();
     const auto before = clips_.size();
@@ -1050,6 +1131,25 @@ void DawWorkspace::deleteSelectedClip()
 
 void DawWorkspace::duplicateSelectedClip()
 {
+    if (selectedMidiNoteId_ >= 0)
+    {
+        for (const auto& source : midiNotes_)
+        {
+            if (source.id != selectedMidiNoteId_) continue;
+            if (static_cast<int>(midiNotes_.size()) >= kMaxMidiNotes) return;
+            checkpointUndo();
+            MidiNote copy = source;
+            copy.id = nextMidiNoteId_++;
+            copy.startBeat = snapBeat(source.startBeat + source.lengthBeats);
+            midiNotes_.push_back(copy);
+            selectedMidiNoteId_ = copy.id;
+            projectDirty_ = true;
+            markRenderDirty();
+            repaint();
+            return;
+        }
+    }
+
     for (const auto& source : clips_)
     {
         if (source.id != selectedClipId_) continue;
