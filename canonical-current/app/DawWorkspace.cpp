@@ -354,20 +354,80 @@ void DawWorkspace::paint(juce::Graphics& g)
     g.fillRect(toolbar);
     g.setColour(juce::Colour(kBorder));
     g.drawHorizontalLine(toolbar.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
-    g.setColour(juce::Colour(0xff355064).withAlpha(0.7f));
-    g.drawVerticalLine(535, 8.0f, static_cast<float>(toolbar.getBottom() - 8));
-    g.drawVerticalLine(std::max(0, getWidth() - 292), 8.0f, static_cast<float>(toolbar.getBottom() - 8));
 
-    auto inspector = bounds.removeFromBottom(inspectorHeight_);
-    juce::ColourGradient inspectorGradient(juce::Colour(0xff0d1a24), 0.0f, static_cast<float>(inspector.getY()),
-                                           juce::Colour(0xff081119), 0.0f, static_cast<float>(inspector.getBottom()), false);
-    g.setGradientFill(inspectorGradient);
-    g.fillRect(inspector);
-    g.setColour(juce::Colour(kBorder));
-    g.drawHorizontalLine(inspector.getY(), 0.0f, static_cast<float>(getWidth()));
-
+    const auto browser = browserBounds();
+    const auto inspector = inspectorBounds();
+    const auto mixer = mixerBounds();
     const auto tl = timelineBounds();
     const auto ruler = rulerBounds();
+
+    g.setColour(juce::Colour(0xff0a141c));
+    g.fillRect(browser);
+    g.setColour(juce::Colour(0xff0d1922));
+    g.fillRect(inspector);
+    g.setColour(juce::Colour(0xff09131b));
+    g.fillRect(mixer);
+
+    g.setColour(juce::Colour(kBorder));
+    g.drawVerticalLine(browser.getRight() - 1, static_cast<float>(browser.getY()), static_cast<float>(browser.getBottom()));
+    g.drawVerticalLine(inspector.getX(), static_cast<float>(inspector.getY()), static_cast<float>(inspector.getBottom()));
+    g.drawHorizontalLine(mixer.getY(), 0.0f, static_cast<float>(getWidth()));
+
+    g.setColour(juce::Colour(kText));
+    g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    g.drawText("BROWSER", browser.reduced(10, 7).removeFromTop(18), juce::Justification::centredLeft);
+    static const std::array<juce::String, 7> browserItems {
+        "Canciones", "Setlists", "Pads", "Samples", "Plugins", "Favoritos", "Proyectos"
+    };
+    int browserY = browser.getY() + 70;
+    for (std::size_t i = 0; i < browserItems.size(); ++i)
+    {
+        juce::Rectangle<int> item(browser.getX() + 8, browserY, std::max(0, browser.getWidth() - 16), 27);
+        g.setColour(juce::Colour(i == 4 ? 0xff132a38 : 0xff0e1b24));
+        g.fillRoundedRectangle(item.toFloat(), 4.0f);
+        g.setColour(juce::Colour(i == 4 ? kText : kMuted));
+        g.setFont(juce::FontOptions(11.0f, i == 4 ? juce::Font::bold : juce::Font::plain));
+        g.drawText(browserItems[i], item.reduced(8, 0), juce::Justification::centredLeft);
+        browserY += 31;
+    }
+
+    g.setColour(juce::Colour(kText));
+    g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    g.drawText("INSPECTOR", inspector.reduced(10, 7).removeFromTop(18), juce::Justification::centredLeft);
+    g.setColour(juce::Colour(kMuted));
+    g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+    g.drawText(selectedClipId_ >= 0 ? "CLIP · AUDIO" : (tracks_[selectedTrack_].midi ? "TRACK · MIDI" : "TRACK · AUDIO"),
+               inspector.getX() + 10, inspector.getY() + 23, std::max(0, inspector.getWidth() - 20), 14,
+               juce::Justification::centredLeft);
+
+    g.setColour(juce::Colour(kText));
+    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+    g.drawText("MIXER · QUICK VIEW", mixer.getX() + 10, mixer.getY() + 5, 180, 18, juce::Justification::centredLeft);
+    auto mixerContent = mixer.reduced(8, 25);
+    const int visibleMixerTracks = std::min(8, trackCount_);
+    const int mixerStripWidth = visibleMixerTracks > 0 ? std::max(1, mixerContent.getWidth() / visibleMixerTracks) : mixerContent.getWidth();
+    for (int i = 0; i < visibleMixerTracks; ++i)
+    {
+        auto strip = mixerContent.removeFromLeft(mixerStripWidth).reduced(2);
+        const bool selected = i == selectedTrack_;
+        g.setColour(juce::Colour(selected ? 0xff152a38 : 0xff0d1a23));
+        g.fillRoundedRectangle(strip.toFloat(), 4.0f);
+        g.setColour(tracks_[i].colour);
+        g.fillRect(strip.removeFromTop(3));
+        g.setColour(juce::Colour(kText));
+        g.setFont(juce::FontOptions(10.0f, selected ? juce::Font::bold : juce::Font::plain));
+        g.drawFittedText(tracks_[i].name, strip.removeFromTop(20).reduced(4, 0), juce::Justification::centred, 1);
+        const float normGain = juce::jlimit(0.0f, 1.0f, (gainToDb(tracks_[i].gain) + 60.0f) / 72.0f);
+        auto meter = strip.reduced(6, 5);
+        g.setColour(juce::Colour(0xff1a2b35));
+        g.fillRoundedRectangle(meter.toFloat(), 2.0f);
+        auto level = meter;
+        level.setY(meter.getBottom() - static_cast<int>(meter.getHeight() * normGain));
+        level.setHeight(meter.getBottom() - level.getY());
+        g.setColour(tracks_[i].mute ? juce::Colour(kDanger).withAlpha(0.45f) : tracks_[i].colour.withAlpha(0.75f));
+        g.fillRoundedRectangle(level.toFloat(), 2.0f);
+    }
+
     g.setColour(juce::Colour(0xff09131b));
     g.fillRect(tl);
     g.setColour(juce::Colour(0xff101e28));
@@ -380,7 +440,7 @@ void DawWorkspace::paint(juce::Graphics& g)
     for (int beat = firstBeat; beat <= lastBeat; ++beat)
     {
         const float x = xForBeat(static_cast<double>(beat));
-        if (x < headerWidth_ || x > getWidth()) continue;
+        if (x < tl.getX() + headerWidth_ || x > tl.getRight()) continue;
         const bool bar = beat % 4 == 0;
         g.setColour(juce::Colour(bar ? 0xff365064 : 0xff1c2e3a));
         g.drawVerticalLine(static_cast<int>(x), static_cast<float>(ruler.getY()), static_cast<float>(tl.getBottom()));
@@ -395,17 +455,17 @@ void DawWorkspace::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff0b1720));
     g.fillRect(tl.withWidth(headerWidth_));
     g.setColour(juce::Colour(kBorder));
-    g.drawVerticalLine(headerWidth_ - 1, static_cast<float>(tl.getY()), static_cast<float>(tl.getBottom()));
+    g.drawVerticalLine(tl.getX() + headerWidth_ - 1, static_cast<float>(tl.getY()), static_cast<float>(tl.getBottom()));
 
     for (int t = 0; t < trackCount_; ++t)
     {
         auto header = trackHeaderBounds(t);
-        auto row = header.withX(headerWidth_).withWidth(std::max(0, getWidth() - headerWidth_));
+        auto row = header.withX(tl.getX() + headerWidth_).withWidth(std::max(0, tl.getWidth() - headerWidth_));
         const bool selected = t == selectedTrack_;
         g.setColour(juce::Colour(selected ? 0xff142a38 : (t % 2 == 0 ? 0xff0b151e : 0xff0d1821)));
         g.fillRect(row);
         g.setColour(juce::Colour(kBorder).withAlpha(0.55f));
-        g.drawHorizontalLine(row.getBottom() - 1, static_cast<float>(headerWidth_), static_cast<float>(getWidth()));
+        g.drawHorizontalLine(row.getBottom() - 1, static_cast<float>(tl.getX() + headerWidth_), static_cast<float>(tl.getRight()));
 
         g.setColour(juce::Colour(selected ? 0xff172a37 : 0xff101d27));
         g.fillRect(header);
@@ -546,7 +606,7 @@ void DawWorkspace::paint(juce::Graphics& g)
     const double posBeat = (static_cast<double>(transportSamples_.load(std::memory_order_relaxed))
         / std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed))) * bpm() / 60.0;
     const float playX = xForBeat(posBeat);
-    if (playX >= headerWidth_ && playX <= getWidth())
+    if (playX >= tl.getX() + headerWidth_ && playX <= tl.getRight())
     {
         g.setColour(juce::Colour(kAccent));
         g.drawVerticalLine(static_cast<int>(playX), static_cast<float>(ruler.getY()), static_cast<float>(tl.getBottom()));
@@ -560,7 +620,7 @@ void DawWorkspace::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff6f8492));
     g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
     g.drawText("J3 ARRANGER  ·  AUDIO + MIDI  ·  SPACE PLAY/STOP  ·  CTRL+S  ·  CTRL+Z/Y",
-               std::max(8, getWidth() - 540), getHeight() - 18, std::min(532, getWidth() - 16), 15,
+               std::max(8, getWidth() - 540), mixer.getBottom() - 18, std::min(532, getWidth() - 16), 15,
                juce::Justification::centredRight);
 }
 
