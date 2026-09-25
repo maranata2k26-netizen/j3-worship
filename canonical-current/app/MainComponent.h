@@ -244,6 +244,7 @@ private:
     std::unique_ptr<j3ui::LookAndFeel> lookAndFeel_;
     int themeId_ { 1 };
     std::optional<j3ui::AvailableUpdate> availableUpdate_;
+    juce::File downloadedUpdateInstaller_;
     std::atomic<bool> updateBusy_ { false };
 
     juce::Label brandLabel_;
