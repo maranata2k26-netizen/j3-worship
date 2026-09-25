@@ -102,6 +102,125 @@ public:
         g.drawRoundedRectangle(r, 7.0f, 1.0f);
     }
 };
+
+class SessionGrid final : public juce::Component
+{
+public:
+    SessionGrid(std::function<void(int)> sceneCallback,
+                std::function<void(int)> trackCallback)
+        : onScene_(std::move(sceneCallback)), onTrack_(std::move(trackCallback))
+    {
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        static constexpr const char* trackNames[8] {
+            "Voz Líder", "Coros", "Guitarra", "Bajo",
+            "Teclado", "Batería", "Secuencias", "Click"
+        };
+        static constexpr const char* cells[8][8] {
+            { "Intro", "Verse 1", "Pre-Chorus", "Chorus", "Verse 2", "Bridge", "Instrumental", "Ending" },
+            { "Pad 1", "Pad 2", "Pad 3", "Pad 4", "Ambiente", "Drone", "Shimmer", "—" },
+            { "Clean", "Drive", "Ambient", "Solo", "—", "—", "—", "—" },
+            { "Intro", "Verse", "Chorus", "Bridge", "—", "—", "—", "—" },
+            { "Piano", "Pad", "Strings", "Synth", "Ambient", "—", "—", "—" },
+            { "Kit 1", "Kit 2", "Loop", "Percusión", "Shaker", "—", "—", "—" },
+            { "FX 1", "FX 2", "Drone", "Risers", "Impactos", "—", "—", "—" },
+            { "Click", "Guía", "Metron", "—", "—", "—", "—", "—" }
+        };
+        static constexpr std::uint32_t trackColours[8] {
+            0xff168cff, 0xff9a4cf3, 0xff1bcf7a, 0xffffc52f,
+            0xffff4dad, 0xffff5353, 0xff13bfe7, 0xff87929c
+        };
+
+        auto area = getLocalBounds();
+        g.setColour(juce::Colour(0xff101820));
+        g.fillRoundedRectangle(area.toFloat(), 5.0f);
+        g.setColour(juce::Colour(0xff35434f));
+        g.drawRoundedRectangle(area.toFloat().reduced(0.5f), 5.0f, 1.0f);
+
+        constexpr int columns = 8;
+        constexpr int rows = 8;
+        const int headerH = 30;
+        const int colW = std::max(1, area.getWidth() / columns);
+        const int rowH = std::max(18, (area.getHeight() - headerH) / rows);
+
+        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        for (int col = 0; col < columns; ++col)
+        {
+            const int x = col * colW;
+            auto colour = juce::Colour(trackColours[col]);
+            auto header = juce::Rectangle<int>(x, 0,
+                col == columns - 1 ? area.getWidth() - x : colW, headerH).reduced(1);
+            g.setColour(colour.withMultipliedBrightness(col == selectedTrack_ ? 1.15f : 0.9f));
+            g.fillRoundedRectangle(header.toFloat(), 3.5f);
+            g.setColour(col <= 4 ? juce::Colour(0xff071018) : juce::Colours::white);
+            g.drawText(juce::String(col + 1) + "  " + trackNames[col], header.reduced(5, 0),
+                       juce::Justification::centredLeft, true);
+
+            for (int row = 0; row < rows; ++row)
+            {
+                const int y = headerH + row * rowH;
+                auto cell = juce::Rectangle<int>(x, y,
+                    col == columns - 1 ? area.getWidth() - x : colW,
+                    row == rows - 1 ? area.getHeight() - y : rowH).reduced(1);
+
+                const bool populated = juce::String(cells[col][row]) != "—";
+                auto base = populated ? colour.withAlpha(0.28f) : juce::Colour(0xff182129);
+                if (row == selectedScene_)
+                    base = populated ? colour.withAlpha(0.58f) : juce::Colour(0xff22303b);
+
+                g.setColour(base);
+                g.fillRoundedRectangle(cell.toFloat(), 2.0f);
+                g.setColour(juce::Colour(0xff41515e).withAlpha(0.75f));
+                g.drawRoundedRectangle(cell.toFloat(), 2.0f, 0.7f);
+
+                if (populated)
+                {
+                    auto textArea = cell.reduced(5, 0);
+                    g.setColour(row == selectedScene_ ? juce::Colours::white : juce::Colour(0xffd9e4ec));
+                    g.setFont(juce::FontOptions(10.5f));
+                    g.drawText("▶", textArea.removeFromLeft(14), juce::Justification::centred);
+                    g.drawText(cells[col][row], textArea, juce::Justification::centredLeft, true);
+                }
+            }
+        }
+
+        const int y = headerH + selectedScene_ * rowH;
+        g.setColour(juce::Colour(0xffeaf5ff).withAlpha(0.78f));
+        g.drawHorizontalLine(y, 1.0f, static_cast<float>(getWidth() - 1));
+        g.drawHorizontalLine(std::min(getHeight() - 1, y + rowH), 1.0f, static_cast<float>(getWidth() - 1));
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (getWidth() <= 0 || getHeight() <= 0)
+            return;
+        constexpr int columns = 8;
+        constexpr int rows = 8;
+        const int headerH = 30;
+        const int colW = std::max(1, getWidth() / columns);
+        const int col = juce::jlimit(0, columns - 1, e.x / colW);
+        selectedTrack_ = col;
+        if (onTrack_) onTrack_(col);
+
+        if (e.y >= headerH)
+        {
+            const int rowH = std::max(18, (getHeight() - headerH) / rows);
+            const int row = juce::jlimit(0, rows - 1, (e.y - headerH) / rowH);
+            selectedScene_ = row;
+            if (onScene_) onScene_(row);
+        }
+        repaint();
+    }
+
+private:
+    std::function<void(int)> onScene_;
+    std::function<void(int)> onTrack_;
+    int selectedScene_ { 1 };
+    int selectedTrack_ { 0 };
+};
 }
 
 MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
@@ -536,7 +655,28 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(*dashboardRightCard_);
     mixerPage_.addAndMakeVisible(*dashboardBottomCard_);
 
-    dashboardSetlistTitle_.setText("SETLIST", juce::dontSendNotification);
+    sessionGrid_ = std::make_unique<SessionGrid>(
+        [this, names, kinds](int scene)
+        {
+            const int index = juce::jlimit(0, static_cast<int>(names.size()) - 1, scene);
+            setLiveSection(names[static_cast<std::size_t>(index)],
+                           kinds[static_cast<std::size_t>(index)],
+                           kinds[static_cast<std::size_t>(index)] == j3::SectionKind::FreePad ? 1 : 4);
+            refreshDashboard();
+        },
+        [this](int channel)
+        {
+            const int ch = juce::jlimit(0, kMaxChannels - 1, channel);
+            setMixerBank((ch / kVisibleChannels) * kVisibleChannels);
+            pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+            dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+            selectedDspChannel_ = ch;
+            refreshPluginUi();
+            refreshDspUi();
+        });
+    mixerPage_.addAndMakeVisible(*sessionGrid_);
+
+    dashboardSetlistTitle_.setText("BIBLIOTECA · SETLIST", juce::dontSendNotification);
     dashboardSetlistTitle_.setFont(juce::FontOptions(17.0f, juce::Font::bold));
     dashboardSongInfo_.setFont(juce::FontOptions(14.0f));
     dashboardSongInfo_.setJustificationType(juce::Justification::topLeft);
@@ -1117,28 +1257,27 @@ MainComponent::MainComponent()
         refreshPluginUi();
         refreshDspUi();
     };
-    dawWorkspace_.onOpenMixer = [this] { tabs_.setCurrentTabIndex(1); };
+    dawWorkspace_.onOpenMixer = [this] { tabs_.setCurrentTabIndex(0); };
     dawWorkspace_.onOpenDsp = [this]
     {
-        tabs_.setCurrentTabIndex(4);
+        tabs_.setCurrentTabIndex(3);
         refreshDspUi();
     };
     dawWorkspace_.onOpenPlugins = [this]
     {
-        tabs_.setCurrentTabIndex(7);
+        tabs_.setCurrentTabIndex(6);
         refreshPluginUi();
     };
-    dawWorkspace_.onOpenPads = [this] { tabs_.setCurrentTabIndex(6); };
+    dawWorkspace_.onOpenPads = [this] { tabs_.setCurrentTabIndex(5); };
     dawWorkspace_.onOpenIem = [this]
     {
-        tabs_.setCurrentTabIndex(8);
+        tabs_.setCurrentTabIndex(7);
         refreshIemUi();
     };
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(42);
+    tabs_.addTab("LIVE", juce::Colour(panel), &mixerPage_, false);
     tabs_.addTab("ARRANGER", juce::Colour(panel), &dawWorkspace_, false);
-    tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
-    tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GRUPOS", juce::Colour(panel), &groupsPage_, false);
@@ -1201,6 +1340,10 @@ void MainComponent::paint(juce::Graphics& g)
     g.drawHorizontalLine(73, 0.0f, static_cast<float>(getWidth()));
     if (brandLogo_.isValid())
         g.drawImageWithin(brandLogo_, 14, 7, 58, 58, juce::RectanglePlacement::centred);
+    g.setColour(juce::Colour(0xffaebdc8));
+    g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+    g.drawText("LIVE · MIX · IEM · RECORD · WORSHIP", 80, 48, 220, 14,
+               juce::Justification::centredLeft, false);
 }
 
 void MainComponent::applyTheme(int themeId, bool persist)
@@ -1889,13 +2032,13 @@ void MainComponent::resized()
     setlistInfoLabel_.setBounds(setArea.removeFromTop(170));
 
     auto mixerArea = mixerPage_.getLocalBounds().reduced(9);
-    const int leftWidth = juce::jlimit(190, 248, mixerArea.getWidth() * 16 / 100);
-    const int rightWidth = juce::jlimit(218, 278, mixerArea.getWidth() * 18 / 100);
+    const int leftWidth = juce::jlimit(205, 252, mixerArea.getWidth() * 16 / 100);
+    const int rightWidth = juce::jlimit(238, 302, mixerArea.getWidth() * 19 / 100);
     auto dashboardLeft = mixerArea.removeFromLeft(leftWidth);
     mixerArea.removeFromLeft(8);
     auto dashboardRight = mixerArea.removeFromRight(rightWidth);
     mixerArea.removeFromRight(8);
-    auto dashboardBottom = mixerArea.removeFromBottom(118);
+    auto dashboardBottom = mixerArea.removeFromBottom(126);
     mixerArea.removeFromBottom(8);
 
     if (dashboardLeftCard_) dashboardLeftCard_->setBounds(dashboardLeft);
@@ -1927,9 +2070,14 @@ void MainComponent::resized()
     dashboardPluginsTitle_.setBounds(rightContent.removeFromTop(24));
     dashboardPluginsInfo_.setBounds(rightContent.removeFromTop(62));
 
-    auto mixerNav = mixerArea.removeFromTop(34);
-    mixerPrevButton_.setBounds(mixerNav.removeFromLeft(86).reduced(1));
-    mixerNextButton_.setBounds(mixerNav.removeFromRight(86).reduced(1));
+    const int sessionHeight = juce::jlimit(180, 250, mixerArea.getHeight() * 34 / 100);
+    if (sessionGrid_)
+        sessionGrid_->setBounds(mixerArea.removeFromTop(sessionHeight));
+    mixerArea.removeFromTop(6);
+
+    auto mixerNav = mixerArea.removeFromTop(32);
+    mixerPrevButton_.setBounds(mixerNav.removeFromLeft(82).reduced(1));
+    mixerNextButton_.setBounds(mixerNav.removeFromRight(82).reduced(1));
     mixerBankLabel_.setBounds(mixerNav);
     mixerArea.removeFromTop(4);
     const int stripW = std::max(1, mixerArea.getWidth() / kVisibleChannels);
