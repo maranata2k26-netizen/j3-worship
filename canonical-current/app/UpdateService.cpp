@@ -18,8 +18,9 @@ std::wstring utf8ToWide(const juce::String& text)
     const int needed = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
     if (needed <= 1)
         return {};
-    std::wstring wide(static_cast<std::size_t>(needed - 1), L'\0');
+    std::wstring wide(static_cast<std::size_t>(needed), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide.data(), needed);
+    if (!wide.empty() && wide.back() == L'\0') wide.pop_back();
     return wide;
 }
 
