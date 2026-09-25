@@ -1,0 +1,29 @@
+diff -ruN J3Worship-base04/CMakeLists.txt J3Worship-work/CMakeLists.txt
+--- J3Worship-base04/CMakeLists.txt	2026-09-24 19:33:52.000000000 +0000
++++ J3Worship-work/CMakeLists.txt	2026-09-25 02:42:38.069711736 +0000
+@@ -2,7 +2,7 @@
+ if(POLICY CMP0091)
+   cmake_policy(SET CMP0091 NEW)
+ endif()
+-project(J3Worship VERSION 0.4.0 LANGUAGES C CXX)
++project(J3Worship VERSION 0.5.0 LANGUAGES C CXX)
+ 
+ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+@@ -28,6 +28,7 @@
+   src/Routing.cpp
+   src/LiveEngine.cpp
+   src/ClickEngine.cpp
++  src/ClickGenerator.cpp
+   src/Session.cpp
+   src/Diagnostics.cpp
+   src/Updater.cpp
+@@ -63,7 +64,7 @@
+     PRODUCT_NAME "J3 Worship"
+     COMPANY_NAME "J3 Worship"
+     BUNDLE_ID "com.j3worship.desktop"
+-    VERSION "0.4.0"
++    VERSION "0.5.0"
+     NEEDS_CURL FALSE
+     NEEDS_WEB_BROWSER FALSE
+   )
