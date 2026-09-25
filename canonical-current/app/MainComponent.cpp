@@ -1234,6 +1234,31 @@ void MainComponent::resized()
                                   liveArea.getY() + r * (buttonH + gap), buttonW, buttonH);
     }
 
+    auto setArea = setlistPage_.getLocalBounds().reduced(30);
+    setlistTitle_.setBounds(setArea.removeFromTop(48));
+    setArea.removeFromTop(10);
+    setlistSongBox_.setBounds(setArea.removeFromTop(42).removeFromLeft(std::min(720, setArea.getWidth())));
+    setArea.removeFromTop(18);
+    auto songRow = setArea.removeFromTop(44);
+    const int songGap = 10;
+    const int songNameW = std::max(220, songRow.getWidth() * 35 / 100);
+    songNameEditor_.setBounds(songRow.removeFromLeft(songNameW));
+    songRow.removeFromLeft(songGap);
+    songArtistEditor_.setBounds(songRow.removeFromLeft(std::max(180, songRow.getWidth() * 40 / 100)));
+    songRow.removeFromLeft(songGap);
+    songKeyEditor_.setBounds(songRow.removeFromLeft(std::min(150, songRow.getWidth())));
+    setArea.removeFromTop(14);
+    songBpmSlider_.setBounds(setArea.removeFromTop(48).removeFromLeft(std::min(560, setArea.getWidth())));
+    setArea.removeFromTop(16);
+    auto songButtons = setArea.removeFromTop(44);
+    addSongButton_.setBounds(songButtons.removeFromLeft(160));
+    songButtons.removeFromLeft(10);
+    removeSongButton_.setBounds(songButtons.removeFromLeft(140));
+    songButtons.removeFromLeft(10);
+    loadSongButton_.setBounds(songButtons.removeFromLeft(190));
+    setArea.removeFromTop(20);
+    setlistInfoLabel_.setBounds(setArea.removeFromTop(170));
+
     auto mixerArea = mixerPage_.getLocalBounds().reduced(12);
     auto mixerNav = mixerArea.removeFromTop(40);
     mixerPrevButton_.setBounds(mixerNav.removeFromLeft(110));
