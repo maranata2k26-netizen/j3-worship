@@ -42,6 +42,7 @@ public:
     bool recording() const noexcept { return running_.load(std::memory_order_acquire); }
     std::uint64_t overflowCount() const noexcept { return overflows_.load(std::memory_order_relaxed); }
     std::uint64_t blocksWritten() const noexcept { return blocksWritten_.load(std::memory_order_relaxed); }
+    bool hasWorkerError() const noexcept { return workerError_.load(std::memory_order_relaxed); }
 private:
     void workerMain();
     static std::string safeName(std::string name);
