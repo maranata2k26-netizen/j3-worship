@@ -233,6 +233,30 @@ MainComponent::MainComponent()
         channelPan_[i].store(0.0f);
         channelMute_[i].store(false);
         channelMeter_[i].store(0.0f);
+        channelBus_[i].store(-1);
+        channelDca_[i].store(-1);
+    }
+    for (int i = 0; i < kBuses; ++i)
+    {
+        busGain_[i].store(1.0f);
+        busMute_[i].store(false);
+    }
+    for (int i = 0; i < kDcas; ++i)
+    {
+        dcaGain_[i].store(1.0f);
+        dcaMute_[i].store(false);
+    }
+    for (int m = 0; m < kIemMixes; ++m)
+    {
+        iemMaster_[m].store(1.0f);
+        iemMute_[m].store(false);
+        iemOutLeft_[m].store(-1);
+        iemOutRight_[m].store(-1);
+        for (int ch = 0; ch < kMaxChannels; ++ch)
+        {
+            iemSendGain_[m][ch].store(0.0f);
+            iemSendPan_[m][ch].store(0.0f);
+        }
     }
 
     brandLabel_.setText("J3 WORSHIP", juce::dontSendNotification);
@@ -240,7 +264,7 @@ MainComponent::MainComponent()
     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(brandLabel_);
 
-    versionLabel_.setText("0.5.0 ALPHA", juce::dontSendNotification);
+    versionLabel_.setText("1.0.0", juce::dontSendNotification);
     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
     addAndMakeVisible(versionLabel_);
@@ -310,11 +334,87 @@ MainComponent::MainComponent()
         liveButtons_[i] = std::move(b);
     }
 
-    for (int i = 0; i < kVisibleChannels; ++i)
+    mixerPrevButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    mixerNextButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    mixerPrevButton_.onClick = [this] { setMixerBank(mixerBankStart_ - kVisibleChannels); };
+    mixerNextButton_.onClick = [this] { setMixerBank(mixerBankStart_ + kVisibleChannels); };
+    mixerBankLabel_.setJustificationType(juce::Justification::centred);
+    mixerBankLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
+    mixerBankLabel_.setFont(juce::FontOptions(15.0f, juce::Font::bold));
+    mixerPage_.addAndMakeVisible(mixerPrevButton_);
+    mixerPage_.addAndMakeVisible(mixerNextButton_);
+    mixerPage_.addAndMakeVisible(mixerBankLabel_);
+    rebuildMixerBank();
+
+    groupsTitle_.setText("8 SUBGROUPS + 8 DCA", juce::dontSendNotification);
+    groupsTitle_.setFont(juce::FontOptions(24.0f, juce::Font::bold));
+    groupsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+    groupsPage_.addAndMakeVisible(groupsTitle_);
+    for (int i = 0; i < kBuses; ++i)
     {
-        strips_[i] = std::make_unique<MixerStrip>(i, channelGain_[i], channelPan_[i], channelMute_[i], channelMeter_[i]);
-        mixerPage_.addAndMakeVisible(*strips_[i]);
+        busStrips_[i] = std::make_unique<GroupStrip>("BUS " + juce::String(i + 1), busGain_[i], busMute_[i]);
+        groupsPage_.addAndMakeVisible(*busStrips_[i]);
     }
+    for (int i = 0; i < kDcas; ++i)
+    {
+        dcaStrips_[i] = std::make_unique<GroupStrip>("DCA " + juce::String(i + 1), dcaGain_[i], dcaMute_[i]);
+        groupsPage_.addAndMakeVisible(*dcaStrips_[i]);
+    }
+
+    iemTitle_.setText("16 STEREO IEM MIXES", juce::dontSendNotification);
+    iemTitle_.setFont(juce::FontOptions(24.0f, juce::Font::bold));
+    iemTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+    iemPage_.addAndMakeVisible(iemTitle_);
+    for (int i = 0; i < kIemMixes; ++i)
+        iemMixBox_.addItem("IEM " + juce::String(i + 1), i + 1);
+    iemMixBox_.setSelectedId(1, juce::dontSendNotification);
+    iemMixBox_.onChange = [this]
+    {
+        selectedIemMix_ = juce::jlimit(0, kIemMixes - 1, iemMixBox_.getSelectedId() - 1);
+        rebuildIemBank();
+        refreshIemUi();
+    };
+    iemPage_.addAndMakeVisible(iemMixBox_);
+
+    iemRouteLabel_.setText("PHYSICAL OUTPUT PAIR", juce::dontSendNotification);
+    iemRouteLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+    iemPage_.addAndMakeVisible(iemRouteLabel_);
+    iemOutLeftBox_.onChange = [this] { applyIemRoutingFromControls(); };
+    iemOutRightBox_.onChange = [this] { applyIemRoutingFromControls(); };
+    iemPage_.addAndMakeVisible(iemOutLeftBox_);
+    iemPage_.addAndMakeVisible(iemOutRightBox_);
+
+    iemMasterSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+    iemMasterSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 76, 24);
+    iemMasterSlider_.setRange(-60.0, 12.0, 0.1);
+    iemMasterSlider_.setTextValueSuffix(" dB");
+    iemMasterSlider_.onValueChange = [this]
+    {
+        iemMaster_[selectedIemMix_].store(dbToGain(iemMasterSlider_.getValue()), std::memory_order_relaxed);
+    };
+    iemPage_.addAndMakeVisible(iemMasterSlider_);
+    iemMuteButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(mutedText));
+    iemMuteButton_.onClick = [this] { iemMute_[selectedIemMix_].store(iemMuteButton_.getToggleState(), std::memory_order_relaxed); };
+    iemPage_.addAndMakeVisible(iemMuteButton_);
+
+    iemPrevButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    iemNextButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    iemPrevButton_.onClick = [this]
+    {
+        iemBankStart_ = juce::jlimit(0, kMaxChannels - kVisibleChannels, iemBankStart_ - kVisibleChannels);
+        rebuildIemBank();
+    };
+    iemNextButton_.onClick = [this]
+    {
+        iemBankStart_ = juce::jlimit(0, kMaxChannels - kVisibleChannels, iemBankStart_ + kVisibleChannels);
+        rebuildIemBank();
+    };
+    iemBankLabel_.setJustificationType(juce::Justification::centred);
+    iemBankLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
+    iemPage_.addAndMakeVisible(iemPrevButton_);
+    iemPage_.addAndMakeVisible(iemNextButton_);
+    iemPage_.addAndMakeVisible(iemBankLabel_);
+    rebuildIemBank();
 
     clickTitle_.setText("J3 CLICK", juce::dontSendNotification);
     clickTitle_.setFont(juce::FontOptions(28.0f, juce::Font::bold));
@@ -426,7 +526,7 @@ MainComponent::MainComponent()
     recordingStatusLabel_.setFont(juce::FontOptions(17.0f));
     recordingStatusLabel_.setJustificationType(juce::Justification::topLeft);
     recordingPage_.addAndMakeVisible(recordingStatusLabel_);
-+    openRecordingsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    openRecordingsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     openRecordingsButton_.onClick = [this] { recordingsRoot().revealToUser(); };
     recordingPage_.addAndMakeVisible(openRecordingsButton_);
     updateRecordingUi();
@@ -498,6 +598,8 @@ MainComponent::MainComponent()
     tabs_.setTabBarDepth(46);
     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
     tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
+    tabs_.addTab("GROUPS", juce::Colour(panel), &groupsPage_, false);
+    tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
     tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
     tabs_.addTab("RECORD", juce::Colour(panel), &recordingPage_, false);
     tabs_.addTab("AUDIO / ROUTING", juce::Colour(panel), &setupPage_, false);
@@ -509,6 +611,9 @@ MainComponent::MainComponent()
     getRuntimeLockFile().replaceWithText("running");
     configureAudio();
     loadAppState();
+    rebuildMixerBank();
+    rebuildIemBank();
+    refreshIemUi();
     updateClickUi();
     updateRecordingUi();
     startTimerHz(30);
