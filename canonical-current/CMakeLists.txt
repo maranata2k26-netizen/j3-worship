@@ -74,6 +74,10 @@ if(J3_BUILD_DESKTOP_APP)
     app/Main.cpp
     app/MainComponent.cpp
     app/MainComponent.h
+    app/J3Theme.cpp
+    app/J3Theme.h
+    app/UpdateService.cpp
+    app/UpdateService.h
   )
   target_include_directories(J3Worship PRIVATE include)
   target_compile_definitions(J3Worship PRIVATE
@@ -92,7 +96,7 @@ if(J3_BUILD_DESKTOP_APP)
     juce::juce_dsp
     juce::juce_gui_extra
     juce::juce_cryptography
-    urlmon
+    winhttp
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
