@@ -10,7 +10,7 @@ on:
       - '.github/workflows/windows-build.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
@@ -54,6 +54,24 @@ jobs:
           [IO.File]::WriteAllText($combined, $content, [Text.UTF8Encoding]::new($false))
           & "C:\Program Files\Git\usr\bin\patch.exe" -p1 -d work -i $combined
           if ($LASTEXITCODE -ne 0) { throw "0.5.0 patch failed with exit code $LASTEXITCODE" }
+
+      - name: Publish canonical source snapshot
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          if (Test-Path "canonical-current") { Remove-Item "canonical-current" -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path "canonical-current" | Out-Null
+          Get-ChildItem "work" -Force | ForEach-Object { Copy-Item $_.FullName "canonical-current" -Recurse -Force }
+          git config user.name "J3 Worship CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add canonical-current
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Canonical source snapshot is unchanged."
+          } else {
+            git commit -m "chore: refresh canonical 0.5.0 source snapshot"
+            git push origin HEAD:refs/heads/canonical-source --force
+          }
 
       - name: Configure Visual Studio x64
         shell: pwsh
