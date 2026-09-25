@@ -599,11 +599,7 @@ DawWorkspace::PluginEditorHolder::PluginEditorHolder(std::shared_ptr<juce::Audio
     }
 }
 
-DawWorkspace::PluginEditorHolder::~PluginEditorHolder()
-{
-    if (plugin_ != nullptr && editor_ != nullptr)
-        plugin_->editorBeingDeleted(editor_.get());
-}
+DawWorkspace::PluginEditorHolder::~PluginEditorHolder() = default;
 
 void DawWorkspace::PluginEditorHolder::resized()
 {
@@ -760,6 +756,8 @@ void DawWorkspace::initialiseUi()
         const int id = patternLengthBox_.getSelectedId();
         patternLength_.store(id == 32 ? 32 : (id == 64 ? 64 : 16));
         lastPatternStep_ = -1;
+        const int w = std::max(patternViewport_.getWidth(), 130 + patternLength_.load() * 24);
+        patternView_.setSize(w, std::max(500, patternViewport_.getHeight()));
         patternView_.repaint();
         markDirty();
     };
@@ -876,7 +874,7 @@ void DawWorkspace::resized()
     patternLengthBox_.setBounds(p.removeFromTop(32).removeFromLeft(140));
     p.removeFromTop(4);
     patternViewport_.setBounds(p);
-    patternView_.setSize(std::max(1100, p.getWidth()), std::max(500, p.getHeight()));
+    patternView_.setSize(std::max(p.getWidth(), 130 + patternLength_.load() * 24), std::max(500, p.getHeight()));
 
     auto pr = pianoPage_.getLocalBounds().reduced(6);
     auto instr = pr.removeFromTop(38);
@@ -1572,13 +1570,6 @@ void DawWorkspace::processAudio(float* left, float* right, int numSamples) noexc
         processInstrument(left, right, numSamples, start, sr);
     else
         mixInternalMidi(left, right, numSamples, start, sr);
-
-    const float master = masterGain_.load(std::memory_order_relaxed);
-    for (int i = 0; i < numSamples; ++i)
-    {
-        left[i] *= master;
-        right[i] *= master;
-    }
 
     double next = start + static_cast<double>(numSamples) / sr;
     if (loopEnabled_.load(std::memory_order_relaxed))
