@@ -236,6 +236,22 @@ MainComponent::MainComponent()
         channelMeter_[i].store(0.0f);
         channelBus_[i].store(-1);
         channelDca_[i].store(-1);
+        channelHpf_[i].store(20.0f);
+        channelLpf_[i].store(20000.0f);
+        channelGate_[i].store(-60.0f);
+        channelCompThreshold_[i].store(-18.0f);
+        channelCompRatio_[i].store(3.0f);
+        channelDenoise_[i].store(0.0f);
+        channelDenoiseThreshold_[i].store(-60.0f);
+        const float defaultEqFreq[4] { 200.0f, 600.0f, 1800.0f, 5400.0f };
+        for (int band = 0; band < 4; ++band)
+        {
+            channelEqFreq_[i][band].store(defaultEqFreq[band]);
+            channelEqGain_[i][band].store(0.0f);
+            channelEqQ_[i][band].store(1.0f);
+        }
+        dspRevision_[i].store(1);
+        dspAppliedRevision_[i] = 0;
     }
     for (int i = 0; i < kBuses; ++i)
     {
@@ -346,6 +362,79 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(mixerNextButton_);
     mixerPage_.addAndMakeVisible(mixerBankLabel_);
     rebuildMixerBank();
+
+    dspTitle_.setText("J3 CHANNEL DSP · EQ · GATE · COMP · DENOISE", juce::dontSendNotification);
+    dspTitle_.setFont(juce::FontOptions(23.0f, juce::Font::bold));
+    dspTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+    dspPage_.addAndMakeVisible(dspTitle_);
+
+    for (int i = 0; i < kMaxChannels; ++i)
+        dspChannelBox_.addItem("IN " + juce::String(i + 1), i + 1);
+    dspChannelBox_.setSelectedId(1, juce::dontSendNotification);
+    dspChannelBox_.onChange = [this]
+    {
+        selectedDspChannel_ = juce::jlimit(0, kMaxChannels - 1, dspChannelBox_.getSelectedId() - 1);
+        refreshDspUi();
+    };
+    dspPage_.addAndMakeVisible(dspChannelBox_);
+
+    auto setupHorizontal = [this](juce::Slider& s, double lo, double hi, double step, const juce::String& suffix)
+    {
+        s.setSliderStyle(juce::Slider::LinearHorizontal);
+        s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 82, 24);
+        s.setRange(lo, hi, step);
+        s.setTextValueSuffix(suffix);
+        s.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
+        dspPage_.addAndMakeVisible(s);
+    };
+    setupHorizontal(hpfSlider_, 20.0, 500.0, 1.0, " Hz HPF");
+    setupHorizontal(lpfSlider_, 2000.0, 20000.0, 10.0, " Hz LPF");
+    setupHorizontal(gateSlider_, -80.0, -20.0, 0.5, " dB GATE");
+    setupHorizontal(compThresholdSlider_, -40.0, 0.0, 0.5, " dB COMP");
+    setupHorizontal(compRatioSlider_, 1.0, 10.0, 0.1, ":1");
+    setupHorizontal(denoiseSlider_, 0.0, 1.0, 0.01, " DENOISE");
+    setupHorizontal(denoiseThresholdSlider_, -80.0, -30.0, 0.5, " dB NOISE");
+
+    hpfSlider_.onValueChange = [this] { channelHpf_[selectedDspChannel_].store(static_cast<float>(hpfSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    lpfSlider_.onValueChange = [this] { channelLpf_[selectedDspChannel_].store(static_cast<float>(lpfSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    gateSlider_.onValueChange = [this] { channelGate_[selectedDspChannel_].store(static_cast<float>(gateSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    compThresholdSlider_.onValueChange = [this] { channelCompThreshold_[selectedDspChannel_].store(static_cast<float>(compThresholdSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    compRatioSlider_.onValueChange = [this] { channelCompRatio_[selectedDspChannel_].store(static_cast<float>(compRatioSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    denoiseSlider_.onValueChange = [this] { channelDenoise_[selectedDspChannel_].store(static_cast<float>(denoiseSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    denoiseThresholdSlider_.onValueChange = [this] { channelDenoiseThreshold_[selectedDspChannel_].store(static_cast<float>(denoiseThresholdSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+
+    for (int band = 0; band < 4; ++band)
+    {
+        eqBandLabels_[band].setText("EQ " + juce::String(band + 1), juce::dontSendNotification);
+        eqBandLabels_[band].setJustificationType(juce::Justification::centred);
+        eqBandLabels_[band].setColour(juce::Label::textColourId, juce::Colour(text));
+        dspPage_.addAndMakeVisible(eqBandLabels_[band]);
+        setupHorizontal(eqFreqSliders_[band], 40.0, 18000.0, 1.0, " Hz");
+        setupHorizontal(eqGainSliders_[band], -18.0, 18.0, 0.1, " dB");
+        eqFreqSliders_[band].onValueChange = [this, band]
+        {
+            channelEqFreq_[selectedDspChannel_][band].store(static_cast<float>(eqFreqSliders_[band].getValue()));
+            markDspDirty(selectedDspChannel_);
+        };
+        eqGainSliders_[band].onValueChange = [this, band]
+        {
+            channelEqGain_[selectedDspChannel_][band].store(static_cast<float>(eqGainSliders_[band].getValue()));
+            markDspDirty(selectedDspChannel_);
+        };
+    }
+
+    for (auto* b : { &vocalPresetButton_, &kickPresetButton_, &snarePresetButton_, &guitarPresetButton_, &bassPresetButton_, &resetDspButton_ })
+    {
+        b->setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+        dspPage_.addAndMakeVisible(*b);
+    }
+    vocalPresetButton_.onClick = [this] { applyDspPreset(1); };
+    kickPresetButton_.onClick = [this] { applyDspPreset(2); };
+    snarePresetButton_.onClick = [this] { applyDspPreset(3); };
+    guitarPresetButton_.onClick = [this] { applyDspPreset(4); };
+    bassPresetButton_.onClick = [this] { applyDspPreset(5); };
+    resetDspButton_.onClick = [this] { applyDspPreset(0); };
+    refreshDspUi();
 
     groupsTitle_.setText("8 SUBGROUPS + 8 DCA", juce::dontSendNotification);
     groupsTitle_.setFont(juce::FontOptions(24.0f, juce::Font::bold));
@@ -599,6 +688,7 @@ MainComponent::MainComponent()
     tabs_.setTabBarDepth(46);
     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
     tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
+    tabs_.addTab("CHANNEL DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GROUPS", juce::Colour(panel), &groupsPage_, false);
     tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
     tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
