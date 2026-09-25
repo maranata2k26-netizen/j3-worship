@@ -160,6 +160,9 @@ int main() {
 
         UpdateManifest um{{1,1,0},"https://updates.example.com/J3Worship-1.1.0.exe",std::string(64,'a'),"Fixes"};
         check(Updater::updateAvailable({1,0,0},um), "semantic update available"); check(Updater::manifestLooksSafe(um), "HTTPS/hash update manifest");
+        const auto parsedV = Updater::parseVersion("v1.2.3");
+        check(parsedV.has_value() && parsedV->major==1 && parsedV->minor==2 && parsedV->patch==3, "parse GitHub release semantic version");
+        check(!Updater::parseVersion("v1.2").has_value(), "reject incomplete release version");
         check(!Updater::safeToInstall(true,false,false), "no update during live"); check(!Updater::safeToInstall(false,true,false), "no update during recording"); check(Updater::safeToInstall(false,false,false), "update safe while idle");
 
         const auto diag=Diagnostics::runCoreChecks(audio); check(!diag.empty(),"diagnostics produced results");
