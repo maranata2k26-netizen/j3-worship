@@ -391,10 +391,11 @@ void DawWorkspace::paint(juce::Graphics& g)
     for (std::size_t i = 0; i < browserItems.size(); ++i)
     {
         juce::Rectangle<int> item(browser.getX() + 8, browserY, std::max(0, browser.getWidth() - 16), 27);
-        g.setColour(juce::Colour(i == 4 ? 0xff132a38 : 0xff0e1b24));
+        const bool active = static_cast<int>(i) == selectedBrowserItem_;
+        g.setColour(juce::Colour(active ? 0xff132a38 : 0xff0e1b24));
         g.fillRoundedRectangle(item.toFloat(), 4.0f);
-        g.setColour(juce::Colour(i == 4 ? kText : kMuted));
-        g.setFont(juce::FontOptions(11.0f, i == 4 ? juce::Font::bold : juce::Font::plain));
+        g.setColour(juce::Colour(active ? kText : kMuted));
+        g.setFont(juce::FontOptions(11.0f, active ? juce::Font::bold : juce::Font::plain));
         g.drawText(browserItems[i], item.reduced(8, 0), juce::Justification::centredLeft);
         browserY += 31;
     }
@@ -546,6 +547,7 @@ void DawWorkspace::paint(juce::Graphics& g)
                     double u1 = static_cast<double>(px + 1) / columns;
                     auto sampleFor = [&](double u)
                     {
+                        if (clip.reversed) u = 1.0 - u;
                         double raw = sourceStart + u * wantedSource;
                         if (clip.loop && sourceSamples > 0)
                             raw = std::fmod(std::max(0.0, raw), static_cast<double>(sourceSamples));
@@ -570,6 +572,16 @@ void DawWorkspace::paint(juce::Graphics& g)
                     g.drawVerticalLine(static_cast<int>(x), wave.getCentreY() - h, wave.getCentreY() + h);
                 }
             }
+        }
+
+        if (clip.reversed)
+        {
+            g.setColour(juce::Colour(0xff071018).withAlpha(0.78f));
+            auto rev = juce::Rectangle<float>(cb.getRight() - 36.0f, cb.getY() + 4.0f, 30.0f, 15.0f);
+            g.fillRoundedRectangle(rev, 3.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.9f));
+            g.setFont(juce::FontOptions(8.5f, juce::Font::bold));
+            g.drawText("REV", rev.toNearestInt(), juce::Justification::centred);
         }
 
         if (clip.fadeInBeats > 0.0 || clip.fadeOutBeats > 0.0)
@@ -1052,6 +1064,8 @@ void DawWorkspace::showContextMenu(juce::Point<int> point)
         menu.addItem(3, "Mute / Unmute");
         menu.addItem(4, "Loop / No Loop");
         menu.addSeparator();
+        menu.addItem(7, "Normalize");
+        menu.addItem(8, "Reverse");
         menu.addItem(5, "Fit Selection");
         menu.addSeparator();
         menu.addItem(6, "Eliminar");
@@ -1098,6 +1112,8 @@ void DawWorkspace::showContextMenu(juce::Point<int> point)
                     break;
                 case 5: safe->fitSelection(); break;
                 case 6: safe->deleteSelectedClip(); break;
+                case 7: safe->normalizeSelectedClip(); break;
+                case 8: safe->reverseSelectedClip(); break;
                 case 10: safe->trackNameEditor_.grabKeyboardFocus(); safe->trackNameEditor_.selectAll(); break;
                 case 11: safe->checkpointUndo(); safe->addTrack(); break;
                 case 12: safe->checkpointUndo(); safe->addMidiTrack(); break;
@@ -1113,6 +1129,11 @@ void DawWorkspace::mouseMove(const juce::MouseEvent& e)
     const auto browser = browserBounds();
     const auto inspector = inspectorBounds();
     const auto mixer = mixerBounds();
+    if (browser.contains(e.getPosition()) && e.y >= browser.getY() + 70 && e.y < browser.getY() + 70 + 7 * 31)
+    {
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
+        return;
+    }
     if (std::abs(e.x - browser.getRight()) <= splitterSize_
         || std::abs(e.x - inspector.getX()) <= splitterSize_)
     {
@@ -1172,6 +1193,39 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
         dragMode_ = DragMode::resizeMixer;
         dragStartPoint_ = e.getPosition();
         dragStartMixerHeight_ = mixerHeight_;
+        return;
+    }
+
+    if (browser.contains(e.getPosition()))
+    {
+        const int item = (e.y - (browser.getY() + 70)) / 31;
+        if (item >= 0 && item < 7)
+        {
+            selectedBrowserItem_ = item;
+            repaint();
+            switch (item)
+            {
+                case 0:
+                case 1:
+                    if (onOpenSetlist) onOpenSetlist();
+                    break;
+                case 2:
+                    if (onOpenPads) onOpenPads();
+                    break;
+                case 3:
+                    importButton_.triggerClick();
+                    break;
+                case 4:
+                case 5:
+                    if (onOpenPlugins) onOpenPlugins();
+                    break;
+                case 6:
+                    openProjectInteractive();
+                    break;
+                default:
+                    break;
+            }
+        }
         return;
     }
 
@@ -2155,6 +2209,7 @@ void DawWorkspace::rebuildRenderState()
         rc.gain = c.gain;
         rc.muted = c.muted;
         rc.loop = c.loop;
+        rc.reversed = c.reversed;
         rc.fadeInSamples = static_cast<std::int64_t>(std::llround(c.fadeInBeats * secondsPerBeat * state.sampleRate));
         rc.fadeOutSamples = static_cast<std::int64_t>(std::llround(c.fadeOutBeats * secondsPerBeat * state.sampleRate));
         state.endSample = std::max(state.endSample, rc.startSample + rc.lengthSamples);
@@ -2221,7 +2276,8 @@ void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noe
         for (std::int64_t global = ovStart; global < ovEnd; ++global)
         {
             const std::int64_t local = global - clipStart;
-            double srcPos = sourceOffset + static_cast<double>(local) * ratio;
+            const std::int64_t mappedLocal = clip.reversed ? (clip.lengthSamples - 1 - local) : local;
+            double srcPos = sourceOffset + static_cast<double>(mappedLocal) * ratio;
             if (clip.loop)
             {
                 srcPos = std::fmod(srcPos, static_cast<double>(srcSamples));
@@ -2448,6 +2504,7 @@ juce::String DawWorkspace::serializeProject() const
         x->setAttribute("gain", c.gain);
         x->setAttribute("muted", c.muted);
         x->setAttribute("loop", c.loop);
+        x->setAttribute("reversed", c.reversed);
         x->setAttribute("fadeInBeats", c.fadeInBeats);
         x->setAttribute("fadeOutBeats", c.fadeOutBeats);
         x->setAttribute("colour", static_cast<int>(c.colour.getARGB()));
@@ -2532,6 +2589,7 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
             c.gain = static_cast<float>(x->getDoubleAttribute("gain", 1.0));
             c.muted = x->getBoolAttribute("muted", false);
             c.loop = x->getBoolAttribute("loop", false);
+            c.reversed = x->getBoolAttribute("reversed", false);
             c.fadeInBeats = std::max(0.0, x->getDoubleAttribute("fadeInBeats", 0.0));
             c.fadeOutBeats = std::max(0.0, x->getDoubleAttribute("fadeOutBeats", 0.0));
             c.colour = juce::Colour(static_cast<juce::uint32>(x->getIntAttribute("colour", static_cast<int>(tracks_[c.track].colour.getARGB()))));
