@@ -66,7 +66,6 @@ private:
         bool mute { false };
         bool solo { false };
         bool armed { false };
-        bool monitor { false };
         bool midi { false };
     };
 
@@ -287,7 +286,6 @@ private:
     juce::ToggleButton trackMuteButton_ { "M" };
     juce::ToggleButton trackSoloButton_ { "S" };
     juce::ToggleButton trackArmButton_ { "REC" };
-    juce::ToggleButton trackMonitorButton_ { "MON" };
     juce::Slider clipGainSlider_;
     juce::ToggleButton clipMuteButton_ { "CLIP MUTE" };
     juce::ToggleButton clipLoopButton_ { "CLIP LOOP" };
