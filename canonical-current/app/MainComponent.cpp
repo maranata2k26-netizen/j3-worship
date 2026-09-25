@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "BinaryData.h"
 
 #include <algorithm>
 #include <cmath>
@@ -310,6 +311,8 @@ MainComponent::MainComponent()
     setLookAndFeel(lookAndFeel_.get());
     syncPaletteGlobals(lookAndFeel_->palette());
     setOpaque(true);
+    brandLogo_ = juce::ImageFileFormat::loadFrom(BinaryData::J3WorshipLogo_png,
+                                                  BinaryData::J3WorshipLogo_pngSize);
     pluginFormatManager_.addFormat(std::make_unique<juce::VST3PluginFormat>());
     for (int ch = 0; ch < kMaxChannels; ++ch)
         for (int slot = 0; slot < kPluginSlots; ++slot)
@@ -1158,6 +1161,8 @@ void MainComponent::paint(juce::Graphics& g)
     g.fillRect(top);
     g.setColour(juce::Colour(border));
     g.drawHorizontalLine(73, 0.0f, static_cast<float>(getWidth()));
+    if (brandLogo_.isValid())
+        g.drawImageWithin(brandLogo_, 14, 7, 58, 58, juce::RectanglePlacement::centred);
 }
 
 void MainComponent::applyTheme(int themeId, bool persist)
@@ -1307,7 +1312,7 @@ void MainComponent::refreshDashboard()
         for (int slot = 0; slot < kPluginSlots; ++slot)
             if (channelPlugins_[ch][slot].load(std::memory_order_acquire) != nullptr)
                 ++loadedPlugins;
-    dashboardPluginsInfo_.setText(juce::String(loadedPlugins) + " inserts activos\n4 slots VST3 por canal",
+    dashboardPluginsInfo_.setText(juce::String(loadedPlugins) + " inserts activos\n8 slots VST3 por canal",
                                   juce::dontSendNotification);
 
     dashboardPadButton_.setToggleState(padEnabledButton_.getToggleState(), juce::dontSendNotification);
@@ -1778,6 +1783,7 @@ void MainComponent::resized()
 {
     auto area = getLocalBounds();
     auto top = area.removeFromTop(74).reduced(14, 8);
+    top.removeFromLeft(64);
     brandLabel_.setBounds(top.removeFromLeft(190));
     versionLabel_.setBounds(top.removeFromLeft(62).reduced(0, 11));
 
