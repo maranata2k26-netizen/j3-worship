@@ -1272,6 +1272,12 @@ void MainComponent::loadAppState()
     subdivisionBox_.setSelectedId(xml->getIntAttribute("subdivisionId", 1), juce::dontSendNotification);
     accentButton_.setToggleState(xml->getBoolAttribute("accent", true), juce::dontSendNotification);
     clickVolumeSlider_.setValue(xml->getDoubleAttribute("clickVolume", 0.35), juce::dontSendNotification);
+    ambientPad_.setRootMidi(xml->getIntAttribute("padRootMidi", 60));
+    ambientPad_.setMinor(xml->getBoolAttribute("padMinor", false));
+    ambientPad_.setVolume(static_cast<float>(xml->getDoubleAttribute("padVolume", 0.18)));
+    padToPa_.store(xml->getBoolAttribute("padToPa", true), std::memory_order_release);
+    ambientPad_.setEnabled(false);
+    padEnabledButton_.setToggleState(false, juce::dontSendNotification);
     clickAudible_.store(false, std::memory_order_release);
     clickEnabledButton_.setToggleState(false, juce::dontSendNotification);
 
@@ -1348,6 +1354,7 @@ void MainComponent::loadAppState()
     refreshRoutingControls();
     refreshIemUi();
     refreshDspUi();
+    refreshPadUi();
 }
 
 void MainComponent::saveAppState()
@@ -1362,6 +1369,10 @@ void MainComponent::saveAppState()
     xml.setAttribute("subdivisionId", subdivisionBox_.getSelectedId());
     xml.setAttribute("accent", accentButton_.getToggleState());
     xml.setAttribute("clickVolume", clickVolumeSlider_.getValue());
+    xml.setAttribute("padRootMidi", ambientPad_.rootMidi());
+    xml.setAttribute("padMinor", ambientPad_.minor());
+    xml.setAttribute("padVolume", static_cast<double>(ambientPad_.volume()));
+    xml.setAttribute("padToPa", padToPa_.load(std::memory_order_relaxed));
 
     for (int i = 0; i < kMaxChannels; ++i)
     {
