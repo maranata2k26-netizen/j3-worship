@@ -1113,6 +1113,7 @@ MainComponent::~MainComponent()
     saveAudioState();
     deviceManager_.closeAudioDevice();
     getRuntimeLockFile().deleteFile();
+    setLookAndFeel(nullptr);
 }
 
 void MainComponent::paint(juce::Graphics& g)
@@ -2080,6 +2081,10 @@ void MainComponent::loadAppState()
     if (xml == nullptr || !xml->hasTagName("J3WorshipState"))
         return;
 
+    themeId_ = juce::jlimit(1, 5, xml->getIntAttribute("themeId", 1));
+    themeBox_.setSelectedId(themeId_, juce::dontSendNotification);
+    applyTheme(themeId_, false);
+
     paLeft_.store(xml->getIntAttribute("paLeft", 0));
     paRight_.store(xml->getIntAttribute("paRight", 1));
     clickOutput_.store(xml->getIntAttribute("clickOutput", -1));
@@ -2200,12 +2205,14 @@ void MainComponent::loadAppState()
     refreshDspUi();
     refreshPadUi();
     refreshSetlistUi();
+    refreshDashboard();
 }
 
 void MainComponent::saveAppState(bool capturePluginState)
 {
     juce::XmlElement xml("J3WorshipState");
-    xml.setAttribute("version", "1.0.0");
+    xml.setAttribute("version", "1.1.0");
+    xml.setAttribute("themeId", themeId_);
     xml.setAttribute("paLeft", paLeft_.load());
     xml.setAttribute("paRight", paRight_.load());
     xml.setAttribute("clickOutput", clickOutput_.load());
@@ -3354,6 +3361,7 @@ void MainComponent::timerCallback()
         updateDiagnostics();
         updateClickUi();
         updateRecordingUi();
+        refreshDashboard();
     }
     if (ticks % 150 == 0)
         saveAppState();
