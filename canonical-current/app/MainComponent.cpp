@@ -1201,6 +1201,21 @@ void MainComponent::loadAppState()
         channelMute_[index].store(ch->getBoolAttribute("mute", false), std::memory_order_relaxed);
         channelBus_[index].store(juce::jlimit(-1, kBuses - 1, ch->getIntAttribute("bus", -1)), std::memory_order_relaxed);
         channelDca_[index].store(juce::jlimit(-1, kDcas - 1, ch->getIntAttribute("dca", -1)), std::memory_order_relaxed);
+        channelHpf_[index].store(static_cast<float>(ch->getDoubleAttribute("hpf", 20.0)));
+        channelLpf_[index].store(static_cast<float>(ch->getDoubleAttribute("lpf", 20000.0)));
+        channelGate_[index].store(static_cast<float>(ch->getDoubleAttribute("gate", -60.0)));
+        channelCompThreshold_[index].store(static_cast<float>(ch->getDoubleAttribute("compThreshold", -18.0)));
+        channelCompRatio_[index].store(static_cast<float>(ch->getDoubleAttribute("compRatio", 3.0)));
+        channelDenoise_[index].store(static_cast<float>(ch->getDoubleAttribute("denoise", 0.0)));
+        channelDenoiseThreshold_[index].store(static_cast<float>(ch->getDoubleAttribute("denoiseThreshold", -60.0)));
+        for (int band = 0; band < 4; ++band)
+        {
+            const auto b = juce::String(band);
+            channelEqFreq_[index][band].store(static_cast<float>(ch->getDoubleAttribute("eq" + b + "Freq", channelEqFreq_[index][band].load())));
+            channelEqGain_[index][band].store(static_cast<float>(ch->getDoubleAttribute("eq" + b + "Gain", 0.0)));
+            channelEqQ_[index][band].store(static_cast<float>(ch->getDoubleAttribute("eq" + b + "Q", 1.0)));
+        }
+        markDspDirty(index);
     }
 
     forEachXmlChildElementWithTagName(*xml, bus, "Bus")
@@ -1241,6 +1256,7 @@ void MainComponent::loadAppState()
     rebuildIemBank();
     refreshRoutingControls();
     refreshIemUi();
+    refreshDspUi();
 }
 
 void MainComponent::saveAppState()
@@ -1265,6 +1281,20 @@ void MainComponent::saveAppState()
         ch->setAttribute("mute", channelMute_[i].load(std::memory_order_relaxed));
         ch->setAttribute("bus", channelBus_[i].load(std::memory_order_relaxed));
         ch->setAttribute("dca", channelDca_[i].load(std::memory_order_relaxed));
+        ch->setAttribute("hpf", static_cast<double>(channelHpf_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("lpf", static_cast<double>(channelLpf_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("gate", static_cast<double>(channelGate_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("compThreshold", static_cast<double>(channelCompThreshold_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("compRatio", static_cast<double>(channelCompRatio_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("denoise", static_cast<double>(channelDenoise_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("denoiseThreshold", static_cast<double>(channelDenoiseThreshold_[i].load(std::memory_order_relaxed)));
+        for (int band = 0; band < 4; ++band)
+        {
+            const auto b = juce::String(band);
+            ch->setAttribute("eq" + b + "Freq", static_cast<double>(channelEqFreq_[i][band].load(std::memory_order_relaxed)));
+            ch->setAttribute("eq" + b + "Gain", static_cast<double>(channelEqGain_[i][band].load(std::memory_order_relaxed)));
+            ch->setAttribute("eq" + b + "Q", static_cast<double>(channelEqQ_[i][band].load(std::memory_order_relaxed)));
+        }
     }
     for (int i = 0; i < kBuses; ++i)
     {
