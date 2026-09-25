@@ -42,6 +42,12 @@ public:
 
     std::function<void(double)> onBpmChanged;
     std::function<void(bool)> onPlayStateChanged;
+    std::function<void(int)> onSelectedTrackChanged;
+    std::function<void()> onOpenMixer;
+    std::function<void()> onOpenDsp;
+    std::function<void()> onOpenPlugins;
+    std::function<void()> onOpenPads;
+    std::function<void()> onOpenIem;
 
 private:
     static constexpr int kMaxTracks = 48;
@@ -236,12 +242,12 @@ private:
 
     double viewStartBeat_ { 0.0 };
     double zoom_ { 1.0 };
-    int trackHeight_ { 82 };
+    int trackHeight_ { 76 };
     int firstVisibleTrack_ { 0 };
     int headerWidth_ { 190 };
     int rulerHeight_ { 30 };
-    int toolbarHeight_ { 48 };
-    int inspectorHeight_ { 76 };
+    int toolbarHeight_ { 70 };
+    int inspectorHeight_ { 98 };
     double snapBeats_ { 0.25 };
 
     DragMode dragMode_ { DragMode::none };
@@ -262,6 +268,7 @@ private:
     bool projectDirty_ { false };
     int autosaveTicks_ { 0 };
     bool lastReportedPlaying_ { false };
+    int lastNotifiedTrack_ { -1 };
 
     juce::TextButton newButton_ { "NUEVO" };
     juce::TextButton openButton_ { "ABRIR" };
@@ -277,6 +284,11 @@ private:
     juce::TextButton splitButton_ { "DIVIDIR" };
     juce::TextButton duplicateButton_ { "DUPLICAR" };
     juce::TextButton deleteButton_ { "BORRAR" };
+    juce::TextButton mixerViewButton_ { "MIXER" };
+    juce::TextButton dspViewButton_ { "DSP" };
+    juce::TextButton pluginsViewButton_ { "PLUGINS" };
+    juce::TextButton padsViewButton_ { "PADS" };
+    juce::TextButton iemViewButton_ { "IEM" };
     juce::Slider bpmSlider_;
     juce::Slider zoomSlider_;
     juce::ComboBox snapBox_;
