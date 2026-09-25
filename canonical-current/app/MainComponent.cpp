@@ -971,6 +971,120 @@ void MainComponent::applyDspPreset(int preset)
     saveAppState();
 }
 
+void MainComponent::refreshSetlistUi()
+{
+    const int previous = setlist_.size() > 0 ? static_cast<int>(setlist_.currentIndex()) : -1;
+    setlistSongBox_.clear(juce::dontSendNotification);
+    for (std::size_t i = 0; i < setlist_.size(); ++i)
+    {
+        const auto* song = setlist_.song(i);
+        if (song == nullptr) continue;
+        juce::String label = juce::String(static_cast<int>(i + 1)) + ". " + juce::String(song->name);
+        if (!song->key.empty()) label << " · " << juce::String(song->key);
+        label << " · " << juce::String(song->bpm, 1) << " BPM";
+        setlistSongBox_.addItem(label, static_cast<int>(i + 1));
+    }
+    if (previous >= 0 && previous < static_cast<int>(setlist_.size()))
+        setlistSongBox_.setSelectedId(previous + 1, juce::dontSendNotification);
+    else if (setlist_.size() > 0)
+    {
+        setlist_.select(0);
+        setlistSongBox_.setSelectedId(1, juce::dontSendNotification);
+    }
+
+    juce::String info;
+    if (const auto* song = setlist_.current())
+    {
+        info << "Selected: " << juce::String(song->name) << "\n";
+        if (!song->artist.empty()) info << "Artist: " << juce::String(song->artist) << "\n";
+        info << "Key: " << (song->key.empty() ? juce::String("—") : juce::String(song->key))
+             << " · " << juce::String(song->bpm, 1) << " BPM · "
+             << song->numerator << "/" << song->denominator << "\n";
+        info << "LOAD INTO LIVE transfers tempo/time signature to J3 CLICK and LIVE.";
+    }
+    else
+    {
+        info = "Setlist empty. Add songs with name, key and BPM.";
+    }
+    setlistInfoLabel_.setText(info, juce::dontSendNotification);
+    removeSongButton_.setEnabled(setlist_.size() > 0);
+    loadSongButton_.setEnabled(setlist_.size() > 0);
+}
+
+void MainComponent::addSetlistSong()
+{
+    const auto name = songNameEditor_.getText().trim();
+    if (name.isEmpty())
+    {
+        showAudioError("Escribí el nombre de la canción antes de agregarla al setlist.");
+        return;
+    }
+    j3::SongRef song;
+    song.name = name.toStdString();
+    song.artist = songArtistEditor_.getText().trim().toStdString();
+    song.key = songKeyEditor_.getText().trim().toStdString();
+    song.bpm = songBpmSlider_.getValue();
+    song.numerator = 4;
+    song.denominator = 4;
+    setlist_.add(std::move(song));
+    setlist_.select(setlist_.size() - 1);
+    songNameEditor_.clear();
+    songArtistEditor_.clear();
+    songKeyEditor_.clear();
+    refreshSetlistUi();
+    saveAppState();
+}
+
+void MainComponent::removeSetlistSong()
+{
+    const int selected = setlistSongBox_.getSelectedId() - 1;
+    if (selected < 0)
+        return;
+    setlist_.remove(static_cast<std::size_t>(selected));
+    refreshSetlistUi();
+    saveAppState();
+}
+
+void MainComponent::loadSelectedSong()
+{
+    const int selected = setlistSongBox_.getSelectedId() - 1;
+    if (selected >= 0)
+        setlist_.select(static_cast<std::size_t>(selected));
+    const auto* song = setlist_.current();
+    if (song == nullptr)
+        return;
+
+    bpmSlider_.setValue(song->bpm, juce::sendNotificationSync);
+    int signatureId = 1;
+    if (song->numerator == 3 && song->denominator == 4) signatureId = 2;
+    else if (song->numerator == 6 && song->denominator == 8) signatureId = 3;
+    else if (song->numerator == 2 && song->denominator == 4) signatureId = 4;
+    timeSignatureBox_.setSelectedId(signatureId, juce::sendNotificationSync);
+
+    liveHint_.setText("SONG: " + juce::String(song->name) + " · "
+        + (song->key.empty() ? juce::String("KEY —") : "KEY " + juce::String(song->key))
+        + " · " + juce::String(song->bpm, 1) + " BPM · section changes remain quantized",
+        juce::dontSendNotification);
+
+    // If the key is recognisable, make J3 PADS follow it without auto-enabling audio.
+    auto key = juce::String(song->key).trim().toUpperCase();
+    const bool minor = key.endsWithChar('M') && !key.endsWith("MAJ");
+    if (minor) key = key.dropLastCharacters(1);
+    static const std::array<juce::String, 12> keys { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    for (int i = 0; i < static_cast<int>(keys.size()); ++i)
+    {
+        if (key == keys[static_cast<std::size_t>(i)])
+        {
+            ambientPad_.setRootMidi(60 + i);
+            ambientPad_.setMinor(minor);
+            refreshPadUi();
+            break;
+        }
+    }
+    refreshSetlistUi();
+    saveAppState();
+}
+
 void MainComponent::setMixerBank(int firstChannel)
 {
     const int maxStart = std::max(0, kMaxChannels - kVisibleChannels);
