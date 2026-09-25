@@ -1703,6 +1703,8 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     const auto sr = device->getCurrentSampleRate();
     sampleRate_.store(sr, std::memory_order_release);
     bufferSize_.store(device->getCurrentBufferSizeSamples(), std::memory_order_release);
+    busScratch_.setSize(kBuses * 2, std::max(2048, device->getCurrentBufferSizeSamples()), false, true, false);
+    busScratch_.clear();
     for (auto& dsp : channelDsp_)
         dsp.prepare(sr);
     clickGenerator_.prepare(sr);
@@ -1733,6 +1735,7 @@ void MainComponent::audioDeviceStopped()
         if (safe != nullptr)
         {
             safe->liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
+            safe->stopRecordingAfterDeviceLoss("La interfaz de audio se detuvo. La grabación fue finalizada de forma segura.");
             safe->updateDiagnostics();
         }
     });
@@ -1740,6 +1743,7 @@ void MainComponent::audioDeviceStopped()
 
 void MainComponent::audioDeviceError(const juce::String& errorMessage)
 {
+    recordingEnabled_.store(false, std::memory_order_release);
     juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this), errorMessage]
     {
         if (safe == nullptr)
@@ -1747,6 +1751,7 @@ void MainComponent::audioDeviceError(const juce::String& errorMessage)
         safe->lastAudioError_ = errorMessage;
         safe->liveMonitorEnabled_.store(false, std::memory_order_release);
         safe->liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
+        safe->stopRecordingAfterDeviceLoss("Error de interfaz: " + errorMessage);
         safe->statusLabel_.setText("Audio error · intentando recuperar", juce::dontSendNotification);
         safe->statusLabel_.setColour(juce::Label::textColourId, juce::Colour(danger));
         safe->scheduleReconnect();
