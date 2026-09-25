@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <thread>
 #include <vector>
 
@@ -1115,11 +1116,283 @@ MainComponent::~MainComponent()
 void MainComponent::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(background));
-    auto top = getLocalBounds().removeFromTop(66);
+    auto top = getLocalBounds().removeFromTop(74);
     g.setColour(juce::Colour(topBar));
     g.fillRect(top);
-    g.setColour(juce::Colour(0xff2a3340));
-    g.drawHorizontalLine(65, 0.0f, static_cast<float>(getWidth()));
+    g.setColour(juce::Colour(border));
+    g.drawHorizontalLine(73, 0.0f, static_cast<float>(getWidth()));
+}
+
+void MainComponent::applyTheme(int themeId, bool persist)
+{
+    themeId_ = juce::jlimit(1, 5, themeId);
+    if (lookAndFeel_ == nullptr)
+        lookAndFeel_ = std::make_unique<j3ui::LookAndFeel>();
+
+    lookAndFeel_->setTheme(themeId_);
+    syncPaletteGlobals(lookAndFeel_->palette());
+    setLookAndFeel(lookAndFeel_.get());
+    themeBox_.setSelectedId(themeId_, juce::dontSendNotification);
+    const auto& p = lookAndFeel_->palette();
+
+    std::function<void(juce::Component&)> styleComponent;
+    styleComponent = [&](juce::Component& component)
+    {
+        if (auto* label = dynamic_cast<juce::Label*>(&component))
+        {
+            if (label != &statusLabel_)
+                label->setColour(juce::Label::textColourId, p.text);
+        }
+        if (auto* button = dynamic_cast<juce::TextButton*>(&component))
+        {
+            button->setColour(juce::TextButton::buttonColourId, p.panel3);
+            button->setColour(juce::TextButton::buttonOnColourId, p.accent);
+            button->setColour(juce::TextButton::textColourOffId, p.text);
+            button->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        }
+        if (auto* toggle = dynamic_cast<juce::ToggleButton*>(&component))
+            toggle->setColour(juce::ToggleButton::textColourId, p.text);
+        if (auto* slider = dynamic_cast<juce::Slider*>(&component))
+        {
+            slider->setColour(juce::Slider::thumbColourId, p.accent);
+            slider->setColour(juce::Slider::trackColourId, p.accent.withAlpha(0.72f));
+            slider->setColour(juce::Slider::rotarySliderFillColourId, p.accent);
+            slider->setColour(juce::Slider::rotarySliderOutlineColourId, p.border);
+            slider->setColour(juce::Slider::textBoxTextColourId, p.text);
+            slider->setColour(juce::Slider::textBoxBackgroundColourId, p.panel);
+            slider->setColour(juce::Slider::textBoxOutlineColourId, p.border);
+        }
+        if (auto* combo = dynamic_cast<juce::ComboBox*>(&component))
+        {
+            combo->setColour(juce::ComboBox::backgroundColourId, p.panel2);
+            combo->setColour(juce::ComboBox::textColourId, p.text);
+            combo->setColour(juce::ComboBox::outlineColourId, p.border);
+            combo->setColour(juce::ComboBox::arrowColourId, p.mutedText);
+        }
+        if (auto* editor = dynamic_cast<juce::TextEditor*>(&component))
+        {
+            editor->setColour(juce::TextEditor::backgroundColourId, p.panel2);
+            editor->setColour(juce::TextEditor::textColourId, p.text);
+            editor->setColour(juce::TextEditor::outlineColourId, p.border);
+        }
+        if (auto* progress = dynamic_cast<juce::ProgressBar*>(&component))
+        {
+            progress->setColour(juce::ProgressBar::backgroundColourId, p.background);
+            progress->setColour(juce::ProgressBar::foregroundColourId, p.good);
+        }
+
+        for (int i = 0; i < component.getNumChildComponents(); ++i)
+            if (auto* child = component.getChildComponent(i))
+                styleComponent(*child);
+    };
+    styleComponent(*this);
+
+    versionLabel_.setColour(juce::Label::textColourId, p.mutedText);
+    liveHint_.setColour(juce::Label::textColourId, p.mutedText);
+    dashboardSongInfo_.setColour(juce::Label::textColourId, p.mutedText);
+    dashboardRecordInfo_.setColour(juce::Label::textColourId, p.mutedText);
+    dashboardPluginsInfo_.setColour(juce::Label::textColourId, p.mutedText);
+    updateButton_.setColour(juce::TextButton::buttonColourId, p.accent.darker(0.2f));
+    recordButton_.setColour(juce::TextButton::buttonColourId, p.danger.darker(0.35f));
+    dashboardRecordButton_.setColour(juce::TextButton::buttonColourId, p.danger.darker(0.35f));
+    dashboardStopButton_.setColour(juce::TextButton::buttonColourId, p.danger.darker(0.45f));
+    loadPluginButton_.setColour(juce::TextButton::buttonColourId, p.accent.darker(0.25f));
+    openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, p.good.darker(0.45f));
+
+    const std::array<juce::Colour, 8> sectionColours {
+        p.accent.darker(0.28f), p.good.darker(0.42f), p.warning.darker(0.42f), p.danger.darker(0.32f),
+        p.accent2.darker(0.42f), p.accent.darker(0.5f), juce::Colour(0xff684494), p.mutedText.darker(0.42f)
+    };
+    for (std::size_t i = 0; i < sectionColours.size(); ++i)
+    {
+        if (liveButtons_[i])
+            liveButtons_[i]->setColour(juce::TextButton::buttonColourId, sectionColours[i]);
+        if (dashboardSectionButtons_[i])
+            dashboardSectionButtons_[i]->setColour(juce::TextButton::buttonColourId, sectionColours[i]);
+    }
+
+    tabs_.setColour(juce::TabbedComponent::backgroundColourId, p.background);
+    for (int i = 0; i < tabs_.getNumTabs(); ++i)
+        tabs_.setTabBackgroundColour(i, p.panel);
+
+    if (dashboardLeftCard_) dashboardLeftCard_->repaint();
+    if (dashboardRightCard_) dashboardRightCard_->repaint();
+    if (dashboardBottomCard_) dashboardBottomCard_->repaint();
+    sendLookAndFeelChange();
+    repaint();
+
+    if (persist)
+        saveAppState();
+}
+
+void MainComponent::refreshDashboard()
+{
+    const int previousId = dashboardSongBox_.getSelectedId();
+    dashboardSongBox_.clear(juce::dontSendNotification);
+    for (std::size_t i = 0; i < setlist_.size(); ++i)
+    {
+        if (const auto* song = setlist_.song(i))
+            dashboardSongBox_.addItem(juce::String(song->name), static_cast<int>(i + 1));
+    }
+
+    if (setlist_.size() > 0)
+    {
+        const int currentId = static_cast<int>(setlist_.currentIndex()) + 1;
+        dashboardSongBox_.setSelectedId(currentId, juce::dontSendNotification);
+        if (const auto* song = setlist_.current())
+        {
+            juce::String info;
+            info << (song->artist.empty() ? juce::String("Worship set") : juce::String(song->artist)) << "\n";
+            info << (song->key.empty() ? juce::String("Tono —") : "Tono " + juce::String(song->key))
+                 << "  ·  " << juce::String(song->bpm, 1) << " BPM";
+            dashboardSongInfo_.setText(info, juce::dontSendNotification);
+        }
+    }
+    else
+    {
+        juce::ignoreUnused(previousId);
+        dashboardSongInfo_.setText("Setlist vacío\nAgregá canciones en SETLIST.", juce::dontSendNotification);
+    }
+
+    const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+    dashboardIemMixBox_.setSelectedId(mix + 1, juce::dontSendNotification);
+    const float master = std::max(1.0e-6f, iemMaster_[mix].load(std::memory_order_relaxed));
+    dashboardIemMasterSlider_.setValue(juce::Decibels::gainToDecibels(master, -60.0f),
+                                       juce::dontSendNotification);
+
+    const bool recording = recordingEnabled_.load(std::memory_order_acquire);
+    dashboardRecordButton_.setButtonText(recording ? "DETENER" : "GRABAR");
+    dashboardRecordInfo_.setText(recording ? "Grabando multicanal…" : "Listo para grabación multicanal",
+                                 juce::dontSendNotification);
+
+    int loadedPlugins = 0;
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+            if (channelPlugins_[ch][slot].load(std::memory_order_acquire) != nullptr)
+                ++loadedPlugins;
+    dashboardPluginsInfo_.setText(juce::String(loadedPlugins) + " inserts activos\n4 slots VST3 por canal",
+                                  juce::dontSendNotification);
+
+    dashboardPadButton_.setToggleState(padEnabledButton_.getToggleState(), juce::dontSendNotification);
+    dashboardClickButton_.setToggleState(clickEnabledButton_.getToggleState(), juce::dontSendNotification);
+    dashboardTempoLabel_.setText(juce::String(bpmSlider_.getValue(), 1) + " BPM  ·  "
+        + (padKeyBox_.getText().isNotEmpty() ? padKeyBox_.getText() : juce::String("C"))
+        + (padMinorButton_.getToggleState() ? "m" : ""), juce::dontSendNotification);
+}
+
+void MainComponent::checkForUpdatesAsync()
+{
+    if (updateBusy_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    auto current = j3::Updater::parseVersion(
+        juce::JUCEApplication::getInstance()->getApplicationVersion().toStdString()).value_or(j3::SemVer { 1, 1, 0 });
+    auto safe = juce::Component::SafePointer<MainComponent>(this);
+    std::thread([safe, current]
+    {
+        juce::String error;
+        auto update = j3ui::UpdateService::checkLatest(current, error);
+        juce::MessageManager::callAsync([safe, update, error]
+        {
+            if (safe == nullptr)
+                return;
+            safe->updateBusy_.store(false, std::memory_order_release);
+            if (update.has_value())
+            {
+                safe->availableUpdate_ = *update;
+                safe->updateButton_.setButtonText("ACTUALIZAR " + update->versionText);
+                safe->updateButton_.setTooltip("Nueva versión disponible. Descarga verificada por SHA-256.");
+                safe->updateButton_.setVisible(true);
+                safe->resized();
+            }
+            else if (error.isNotEmpty())
+            {
+                safe->updateButton_.setTooltip("No se pudo comprobar la versión: " + error);
+            }
+        });
+    }).detach();
+}
+
+void MainComponent::beginUpdateInstall()
+{
+    if (!availableUpdate_.has_value())
+    {
+        checkForUpdatesAsync();
+        return;
+    }
+
+    const auto safeToInstallNow = [this]
+    {
+        const bool liveMode = liveMonitorEnabled_.load(std::memory_order_acquire);
+        const bool recording = recordingEnabled_.load(std::memory_order_acquire);
+        const bool sessionActive = transportRunning_.load(std::memory_order_acquire);
+        return j3::Updater::safeToInstall(liveMode, recording, sessionActive);
+    };
+
+    if (downloadedUpdateInstaller_.existsAsFile())
+    {
+        if (!safeToInstallNow())
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+                "Actualización lista",
+                "La nueva versión ya está descargada y verificada. Detené LIVE/CLICK y la grabación; después tocá INSTALAR.");
+            updateButton_.setButtonText("INSTALAR " + availableUpdate_->versionText);
+            return;
+        }
+
+        juce::String error;
+        if (!j3ui::UpdateService::launchInstallerAndRestart(downloadedUpdateInstaller_, error))
+        {
+            showAudioError(error);
+            return;
+        }
+        juce::JUCEApplication::getInstance()->systemRequestedQuit();
+        return;
+    }
+
+    if (updateBusy_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    updateButton_.setEnabled(false);
+    updateButton_.setButtonText("DESCARGANDO…");
+    const auto update = *availableUpdate_;
+    auto safe = juce::Component::SafePointer<MainComponent>(this);
+    std::thread([safe, update]
+    {
+        juce::File installer;
+        juce::String error;
+        const bool ok = j3ui::UpdateService::downloadAndVerify(update, installer, error);
+        juce::MessageManager::callAsync([safe, update, installer, error, ok]
+        {
+            if (safe == nullptr)
+                return;
+            safe->updateBusy_.store(false, std::memory_order_release);
+            safe->updateButton_.setEnabled(true);
+            if (!ok)
+            {
+                safe->updateButton_.setButtonText("REINTENTAR " + update.versionText);
+                safe->showAudioError("No se pudo actualizar: " + error);
+                return;
+            }
+
+            safe->downloadedUpdateInstaller_ = installer;
+            safe->updateButton_.setButtonText("INSTALAR " + update.versionText);
+            const bool canInstall = j3::Updater::safeToInstall(
+                safe->liveMonitorEnabled_.load(std::memory_order_acquire),
+                safe->recordingEnabled_.load(std::memory_order_acquire),
+                safe->transportRunning_.load(std::memory_order_acquire));
+            if (!canInstall)
+                return;
+
+            juce::String launchError;
+            if (!j3ui::UpdateService::launchInstallerAndRestart(installer, launchError))
+            {
+                safe->showAudioError(launchError);
+                return;
+            }
+            juce::JUCEApplication::getInstance()->systemRequestedQuit();
+        });
+    }).detach();
 }
 
 juce::String MainComponent::inputChannelName(int channel) const
