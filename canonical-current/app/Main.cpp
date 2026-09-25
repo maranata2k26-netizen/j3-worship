@@ -5,7 +5,7 @@ class J3WorshipApplication final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "J3 Worship"; }
-    const juce::String getApplicationVersion() override { return "0.5.0-alpha"; }
+    const juce::String getApplicationVersion() override { return "1.0.0"; }
     bool moreThanOneInstanceAllowed() override { return false; }
 
     void initialise(const juce::String&) override
