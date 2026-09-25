@@ -246,6 +246,10 @@ void MainComponent::IemSendStrip::syncFromModel()
 MainComponent::MainComponent()
 {
     setOpaque(true);
+    pluginFormatManager_.addFormat(std::make_unique<juce::VST3PluginFormat>());
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+            pluginBypass_[ch][slot].store(false);
     for (int i = 0; i < kMaxChannels; ++i)
     {
         channelGain_[i].store(dbToGain(-6.0));
@@ -572,6 +576,53 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
 
+    pluginsTitle_.setText("VST3 INSERTS · 4 SLOTS PER INPUT", juce::dontSendNotification);
+    pluginsTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
+    pluginsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+    pluginsPage_.addAndMakeVisible(pluginsTitle_);
+
+    for (int i = 0; i < kMaxChannels; ++i)
+        pluginChannelBox_.addItem("IN " + juce::String(i + 1), i + 1);
+    pluginChannelBox_.setSelectedId(1, juce::dontSendNotification);
+    pluginChannelBox_.onChange = [this] { refreshPluginUi(); };
+    pluginsPage_.addAndMakeVisible(pluginChannelBox_);
+
+    for (int i = 0; i < kPluginSlots; ++i)
+        pluginSlotBox_.addItem("INSERT " + juce::String(i + 1), i + 1);
+    pluginSlotBox_.setSelectedId(1, juce::dontSendNotification);
+    pluginSlotBox_.onChange = [this] { refreshPluginUi(); };
+    pluginsPage_.addAndMakeVisible(pluginSlotBox_);
+
+    pluginsPage_.addAndMakeVisible(pluginCatalogBox_);
+    scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    loadPluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
+    removePluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
+    bypassPluginButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
+    scanPluginsButton_.onClick = [this] { scanVst3Plugins(); };
+    loadPluginButton_.onClick = [this] { loadSelectedPlugin(); };
+    removePluginButton_.onClick = [this] { removeSelectedPlugin(); };
+    openPluginEditorButton_.onClick = [this] { openSelectedPluginEditor(); };
+    bypassPluginButton_.onClick = [this]
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+        const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+        pluginBypass_[ch][slot].store(bypassPluginButton_.getToggleState(), std::memory_order_release);
+        saveAppState();
+        refreshPluginUi();
+    };
+    pluginsPage_.addAndMakeVisible(scanPluginsButton_);
+    pluginsPage_.addAndMakeVisible(loadPluginButton_);
+    pluginsPage_.addAndMakeVisible(removePluginButton_);
+    pluginsPage_.addAndMakeVisible(bypassPluginButton_);
+    pluginsPage_.addAndMakeVisible(openPluginEditorButton_);
+
+    pluginStatusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd4dbe5));
+    pluginStatusLabel_.setFont(juce::FontOptions(16.5f));
+    pluginStatusLabel_.setJustificationType(juce::Justification::topLeft);
+    pluginsPage_.addAndMakeVisible(pluginStatusLabel_);
+    refreshPluginUi();
+
     padTitle_.setText("J3 PADS", juce::dontSendNotification);
     padTitle_.setFont(juce::FontOptions(30.0f, juce::Font::bold));
     padTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
@@ -832,6 +883,7 @@ MainComponent::MainComponent()
     tabs_.addTab("CHANNEL DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GROUPS", juce::Colour(panel), &groupsPage_, false);
     tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
+    tabs_.addTab("PLUGINS", juce::Colour(panel), &pluginsPage_, false);
     tabs_.addTab("PADS", juce::Colour(panel), &padPage_, false);
     tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
     tabs_.addTab("RECORD", juce::Colour(panel), &recordingPage_, false);
@@ -847,8 +899,13 @@ MainComponent::MainComponent()
     rebuildMixerBank();
     rebuildIemBank();
     refreshIemUi();
+    refreshPluginUi();
     updateClickUi();
     updateRecordingUi();
+    juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this)]
+    {
+        if (safe != nullptr) safe->scanVst3Plugins();
+    });
     startTimerHz(30);
     setSize(1440, 900);
 }
