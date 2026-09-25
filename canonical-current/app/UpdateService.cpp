@@ -294,10 +294,9 @@ bool UpdateService::launchInstallerAndRestart(const juce::File& installer, juce:
         .getChildFile("J3WorshipUpdater")
         .getChildFile("apply-update.cmd");
 
-    auto quoteForCmd = [](juce::String s)
+    auto quoteForCmd = [](const juce::String& s)
     {
-        s = s.replace(""", """");
-        return """ + s + """;
+        return juce::String("\"") + s + "\"";
     };
 
     juce::String body;
