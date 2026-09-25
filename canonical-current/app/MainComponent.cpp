@@ -1303,6 +1303,11 @@ MainComponent::MainComponent()
         tabs_.setCurrentTabIndex(7);
         refreshIemUi();
     };
+    dawWorkspace_.onOpenSetlist = [this]
+    {
+        tabs_.setCurrentTabIndex(2);
+        refreshDashboard();
+    };
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(42);
     tabs_.addTab("LIVE", juce::Colour(panel), &mixerPage_, false);
