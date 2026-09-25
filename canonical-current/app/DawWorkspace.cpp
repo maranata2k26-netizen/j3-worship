@@ -264,9 +264,11 @@ void DawWorkspace::TimelineView::paint(juce::Graphics& g)
     const int playX = xFromSeconds(owner_.playheadSeconds_.load(std::memory_order_acquire));
     g.setColour(juce::Colour(0xffff5366));
     g.drawVerticalLine(playX, 0.0f, static_cast<float>(getHeight()));
-    g.fillTriangle(static_cast<float>(playX - 5), 0.0f,
-                   static_cast<float>(playX + 5), 0.0f,
-                   static_cast<float>(playX), 8.0f);
+    juce::Path playheadMarker;
+    playheadMarker.addTriangle(static_cast<float>(playX - 5), 0.0f,
+                               static_cast<float>(playX + 5), 0.0f,
+                               static_cast<float>(playX), 8.0f);
+    g.fillPath(playheadMarker);
 }
 
 void DawWorkspace::TimelineView::mouseDown(const juce::MouseEvent& e)
@@ -578,7 +580,7 @@ void DawWorkspace::PianoRollView::mouseDrag(const juce::MouseEvent& e)
     const float pixelsPerBeat = std::max(34.0f, owner_.horizontalZoom_ * static_cast<float>(owner_.beatToSeconds(1.0)));
     const int row = juce::jlimit(0, noteCount - 1, static_cast<int>((e.y - top) / rowH));
     owner_.midiNotes_[draggingNote_].note.store(maxNote - row);
-    double beat = std::max(0.0, (e.x - keyW) / pixelsPerBeat);
+    double beat = std::max(0.0, static_cast<double>(e.x - keyW) / static_cast<double>(pixelsPerBeat));
     owner_.midiNotes_[draggingNote_].startBeat.store(std::round(beat * 4.0) / 4.0);
     owner_.dirty_ = true;
     repaint();
@@ -613,7 +615,7 @@ DawWorkspace::DawWorkspace()
     instrumentFormatManager_.addFormat(std::make_unique<juce::VST3PluginFormat>());
     initialiseTracks();
     initialiseUi();
-    browserThread_.startThread(3);
+    browserThread_.startThread(juce::Thread::Priority::normal);
     startTimerHz(30);
     setWantsKeyboardFocus(true);
     addKeyListener(this);
@@ -987,12 +989,11 @@ bool DawWorkspace::isInterestedInFileDrag(const juce::StringArray& files)
 
 void DawWorkspace::filesDropped(const juce::StringArray& files, int x, int y)
 {
-    juce::ignoreUnused(x);
     int track = selectedTrack_.load();
     double start = playheadSeconds_.load();
     if (editorTabs_.getCurrentTabIndex() == 0)
     {
-        const auto screen = arrangerPage_.getLocalPoint(this, { x, y });
+        const auto screen = arrangerPage_.getLocalPoint(this, juce::Point<int> { x, y });
         const auto viewPoint = timeline_.getLocalPoint(&arrangerPage_, screen);
         if (viewPoint.x >= kTrackHeaderWidth)
             start = snapSeconds(timeline_.secondsFromX(viewPoint.x));
