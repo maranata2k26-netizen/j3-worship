@@ -678,9 +678,46 @@ void MainComponent::resized()
     }
 
     auto mixerArea = mixerPage_.getLocalBounds().reduced(12);
+    auto mixerNav = mixerArea.removeFromTop(40);
+    mixerPrevButton_.setBounds(mixerNav.removeFromLeft(110));
+    mixerNextButton_.setBounds(mixerNav.removeFromRight(110));
+    mixerBankLabel_.setBounds(mixerNav);
+    mixerArea.removeFromTop(6);
     const int stripW = std::max(1, mixerArea.getWidth() / kVisibleChannels);
     for (int i = 0; i < kVisibleChannels; ++i)
-        strips_[i]->setBounds(mixerArea.removeFromLeft(stripW).reduced(3));
+        if (strips_[i]) strips_[i]->setBounds(mixerArea.removeFromLeft(stripW).reduced(3));
+
+    auto groupsArea = groupsPage_.getLocalBounds().reduced(18);
+    groupsTitle_.setBounds(groupsArea.removeFromTop(38));
+    groupsArea.removeFromTop(8);
+    auto busRow = groupsArea.removeFromTop(std::max(220, groupsArea.getHeight() / 2 - 5));
+    const int groupW = std::max(1, busRow.getWidth() / kBuses);
+    for (int i = 0; i < kBuses; ++i)
+        if (busStrips_[i]) busStrips_[i]->setBounds(busRow.removeFromLeft(groupW).reduced(3));
+    groupsArea.removeFromTop(10);
+    const int dcaW = std::max(1, groupsArea.getWidth() / kDcas);
+    for (int i = 0; i < kDcas; ++i)
+        if (dcaStrips_[i]) dcaStrips_[i]->setBounds(groupsArea.removeFromLeft(dcaW).reduced(3));
+
+    auto iemArea = iemPage_.getLocalBounds().reduced(18);
+    auto iemTop = iemArea.removeFromTop(40);
+    iemTitle_.setBounds(iemTop.removeFromLeft(300));
+    iemMixBox_.setBounds(iemTop.removeFromLeft(150).reduced(4, 3));
+    iemRouteLabel_.setBounds(iemTop.removeFromLeft(160));
+    iemOutLeftBox_.setBounds(iemTop.removeFromLeft(170).reduced(4, 3));
+    iemOutRightBox_.setBounds(iemTop.removeFromLeft(170).reduced(4, 3));
+    iemMuteButton_.setBounds(iemTop.removeFromRight(120));
+    iemArea.removeFromTop(8);
+    auto iemMasterRow = iemArea.removeFromTop(40);
+    iemMasterSlider_.setBounds(iemMasterRow.removeFromLeft(520));
+    auto iemNav = iemMasterRow;
+    iemPrevButton_.setBounds(iemNav.removeFromLeft(110));
+    iemNextButton_.setBounds(iemNav.removeFromRight(110));
+    iemBankLabel_.setBounds(iemNav);
+    iemArea.removeFromTop(8);
+    const int iemW = std::max(1, iemArea.getWidth() / kVisibleChannels);
+    for (int i = 0; i < kVisibleChannels; ++i)
+        if (iemStrips_[i]) iemStrips_[i]->setBounds(iemArea.removeFromLeft(iemW).reduced(3));
 
     auto clickArea = clickPage_.getLocalBounds().reduced(36);
     clickTitle_.setBounds(clickArea.removeFromTop(48));
