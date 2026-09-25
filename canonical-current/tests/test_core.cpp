@@ -93,7 +93,7 @@ int main() {
         for(int i=0;i<15;++i) live.tickBeat(); check(live.now()=="CHORUS", "end-of-section transition does not cut early");
         live.tickBeat(); check(live.now()=="BRIDGE", "end-of-section transition lands on boundary");
         live.enterFreePad(); for(int i=0;i<4;++i) live.tickBeat(); check(live.now()=="FREE / PAD", "free/pad quantized entry");
-        live.stop(); check(live.now()=="STOPPED" && live.next().empty(), "live transport stop clears current and queued section");
+        live.stop(); check(live.now()=="STOPPED" && live.next()=="—", "live transport stop clears current and queued section");
 
         ClickEngine c; c.setTempo(100); c.setTimeSignature(4,4);
         check(c.isAccent(0), "click accent on downbeat"); check(!c.isAccent(1), "click non-accent beat");
