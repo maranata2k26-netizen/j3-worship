@@ -1411,6 +1411,29 @@ void MainComponent::resized()
     for (int i = 0; i < kVisibleChannels; ++i)
         if (iemStrips_[i]) iemStrips_[i]->setBounds(iemArea.removeFromLeft(iemW).reduced(3));
 
+    auto pluginsArea = pluginsPage_.getLocalBounds().reduced(30);
+    pluginsTitle_.setBounds(pluginsArea.removeFromTop(48));
+    pluginsArea.removeFromTop(12);
+    auto pluginSelectRow = pluginsArea.removeFromTop(44);
+    pluginChannelBox_.setBounds(pluginSelectRow.removeFromLeft(170).reduced(3));
+    pluginSelectRow.removeFromLeft(10);
+    pluginSlotBox_.setBounds(pluginSelectRow.removeFromLeft(150).reduced(3));
+    pluginSelectRow.removeFromLeft(10);
+    pluginCatalogBox_.setBounds(pluginSelectRow.removeFromLeft(std::min(520, pluginSelectRow.getWidth() - 150)).reduced(3));
+    pluginSelectRow.removeFromLeft(10);
+    scanPluginsButton_.setBounds(pluginSelectRow.removeFromLeft(140).reduced(2));
+    pluginsArea.removeFromTop(18);
+    auto pluginActionRow = pluginsArea.removeFromTop(44);
+    loadPluginButton_.setBounds(pluginActionRow.removeFromLeft(160));
+    pluginActionRow.removeFromLeft(10);
+    removePluginButton_.setBounds(pluginActionRow.removeFromLeft(130));
+    pluginActionRow.removeFromLeft(10);
+    bypassPluginButton_.setBounds(pluginActionRow.removeFromLeft(130));
+    pluginActionRow.removeFromLeft(10);
+    openPluginEditorButton_.setBounds(pluginActionRow.removeFromLeft(210));
+    pluginsArea.removeFromTop(22);
+    pluginStatusLabel_.setBounds(pluginsArea.removeFromTop(190));
+
     auto padArea = padPage_.getLocalBounds().reduced(42);
     padTitle_.setBounds(padArea.removeFromTop(54));
     padArea.removeFromTop(18);
@@ -2511,6 +2534,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             if (in == nullptr)
                 continue;
 
+            const auto* processedInput = processPluginChain(ch, in, numSamples);
             applyDspParameters(ch);
             const bool muted = channelMute_[ch].load(std::memory_order_relaxed);
             const int dca = channelDca_[ch].load(std::memory_order_relaxed);
@@ -2526,7 +2550,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
 
             for (int i = 0; i < numSamples; ++i)
             {
-                const float x = channelDsp_[ch].process(in[i]);
+                const float x = channelDsp_[ch].process(processedInput[i]);
                 peak = std::max(peak, std::abs(x));
                 if (muted)
                     continue;
@@ -2669,8 +2693,30 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     const auto sr = device->getCurrentSampleRate();
     sampleRate_.store(sr, std::memory_order_release);
     bufferSize_.store(device->getCurrentBufferSizeSamples(), std::memory_order_release);
-    busScratch_.setSize(kBuses * 2, std::max(2048, device->getCurrentBufferSizeSamples()), false, true, false);
+    const int preparedBlock = std::max(2048, device->getCurrentBufferSizeSamples());
+    busScratch_.setSize(kBuses * 2, preparedBlock, false, true, false);
     busScratch_.clear();
+    pluginScratch_.setSize(2, preparedBlock, false, true, false);
+    pluginScratch_.clear();
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+    {
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+        {
+            if (auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire))
+            {
+                try
+                {
+                    plugin->releaseResources();
+                    plugin->setRateAndBufferSizeDetails(sr, device->getCurrentBufferSizeSamples());
+                    plugin->prepareToPlay(sr, device->getCurrentBufferSizeSamples());
+                }
+                catch (...)
+                {
+                    pluginBypass_[ch][slot].store(true, std::memory_order_release);
+                }
+            }
+        }
+    }
     for (int ch = 0; ch < kMaxChannels; ++ch)
     {
         channelDsp_[ch].prepare(sr);
