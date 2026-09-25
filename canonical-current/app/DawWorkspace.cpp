@@ -572,16 +572,16 @@ void DawWorkspace::resized()
     toolbar.removeFromTop(4);
     auto bottomRow = toolbar.removeFromTop(28);
 
-    auto takeLeft = [](juce::Rectangle<int>& row, juce::Component& c, int width)
+    auto takeLeft = [](juce::Rectangle<int>& row, juce::Component& component, int width)
     {
         const int w = std::min(width, std::max(0, row.getWidth()));
-        c.setBounds(row.removeFromLeft(w));
+        component.setBounds(row.removeFromLeft(w));
         if (row.getWidth() > 0) row.removeFromLeft(std::min(4, row.getWidth()));
     };
-    auto takeRight = [](juce::Rectangle<int>& row, juce::Component& c, int width)
+    auto takeRight = [](juce::Rectangle<int>& row, juce::Component& component, int width)
     {
         const int w = std::min(width, std::max(0, row.getWidth()));
-        c.setBounds(row.removeFromRight(w));
+        component.setBounds(row.removeFromRight(w));
         if (row.getWidth() > 0) row.removeFromRight(std::min(4, row.getWidth()));
     };
 
@@ -609,44 +609,83 @@ void DawWorkspace::resized()
     takeLeft(bottomRow, duplicateButton_, 74);
     takeLeft(bottomRow, deleteButton_, 60);
     bottomRow.removeFromLeft(std::min(8, bottomRow.getWidth()));
-    takeLeft(bottomRow, bpmSlider_, 142);
-    takeLeft(bottomRow, snapBox_, 106);
+    takeLeft(bottomRow, bpmSlider_, 136);
+    takeLeft(bottomRow, snapBox_, 102);
+
+    takeRight(bottomRow, resetWorkspaceButton_, 68);
+    takeRight(bottomRow, workspaceBox_, 94);
+    takeRight(bottomRow, fitSelectionButton_, 44);
+    takeRight(bottomRow, fitProjectButton_, 44);
     zoomSlider_.setBounds(bottomRow);
 
-    auto inspector = r.removeFromBottom(inspectorHeight_).reduced(8, 8);
-    auto top = inspector.removeFromTop(32);
-    trackNameEditor_.setBounds(top.removeFromLeft(170));
-    top.removeFromLeft(6);
-    trackMuteButton_.setBounds(top.removeFromLeft(38));
-    trackSoloButton_.setBounds(top.removeFromLeft(38));
-    trackArmButton_.setBounds(top.removeFromLeft(48));
-    top.removeFromLeft(8);
-    trackVolumeSlider_.setBounds(top.removeFromLeft(176));
-    trackPanSlider_.setBounds(top.removeFromLeft(144));
-    top.removeFromLeft(8);
-    clipMuteButton_.setBounds(top.removeFromLeft(86));
-    clipLoopButton_.setBounds(top.removeFromLeft(86));
-    statusLabel_.setBounds(top);
+    auto browser = browserBounds().reduced(9, 8);
+    browser.removeFromTop(24);
+    browserSearch_.setBounds(browser.removeFromTop(30));
+
+    auto inspector = inspectorBounds().reduced(10, 8);
+    inspector.removeFromTop(27);
+    trackNameEditor_.setBounds(inspector.removeFromTop(30));
+    inspector.removeFromTop(7);
+
+    auto trackButtons = inspector.removeFromTop(28);
+    trackMuteButton_.setBounds(trackButtons.removeFromLeft(42));
+    trackButtons.removeFromLeft(5);
+    trackSoloButton_.setBounds(trackButtons.removeFromLeft(42));
+    trackButtons.removeFromLeft(5);
+    trackArmButton_.setBounds(trackButtons.removeFromLeft(54));
 
     inspector.removeFromTop(8);
-    auto bottom = inspector.removeFromTop(32);
-    clipGainSlider_.setBounds(bottom.removeFromLeft(190));
-    bottom.removeFromLeft(8);
-    fadeInSlider_.setBounds(bottom.removeFromLeft(180));
-    fadeOutSlider_.setBounds(bottom.removeFromLeft(180));
+    trackVolumeSlider_.setBounds(inspector.removeFromTop(30));
+    trackPanSlider_.setBounds(inspector.removeFromTop(30));
+    inspector.removeFromTop(8);
 
+    auto clipButtons = inspector.removeFromTop(28);
+    clipMuteButton_.setBounds(clipButtons.removeFromLeft(std::min(92, clipButtons.getWidth() / 2)));
+    clipButtons.removeFromLeft(std::min(5, clipButtons.getWidth()));
+    clipLoopButton_.setBounds(clipButtons);
+
+    inspector.removeFromTop(7);
+    clipGainSlider_.setBounds(inspector.removeFromTop(30));
+    fadeInSlider_.setBounds(inspector.removeFromTop(30));
+    fadeOutSlider_.setBounds(inspector.removeFromTop(30));
+
+    statusLabel_.setBounds(inspector.removeFromBottom(std::min(54, inspector.getHeight())));
     repaint();
 }
 
 juce::Rectangle<int> DawWorkspace::timelineBounds() const
 {
-    return { 0, toolbarHeight_ + rulerHeight_, getWidth(),
-             std::max(0, getHeight() - toolbarHeight_ - rulerHeight_ - inspectorHeight_) };
+    const int left = juce::jlimit(140, std::max(140, getWidth() / 3), browserWidth_);
+    const int right = juce::jlimit(220, std::max(220, getWidth() / 3), inspectorWidth_);
+    const int bottom = juce::jlimit(96, std::max(96, getHeight() / 2), mixerHeight_);
+    return { left, toolbarHeight_ + rulerHeight_,
+             std::max(0, getWidth() - left - right),
+             std::max(0, getHeight() - toolbarHeight_ - rulerHeight_ - bottom) };
 }
 
 juce::Rectangle<int> DawWorkspace::rulerBounds() const
 {
-    return { 0, toolbarHeight_, getWidth(), rulerHeight_ };
+    const auto tl = timelineBounds();
+    return { tl.getX(), toolbarHeight_, tl.getWidth(), rulerHeight_ };
+}
+
+juce::Rectangle<int> DawWorkspace::browserBounds() const
+{
+    const auto tl = timelineBounds();
+    return { 0, toolbarHeight_, tl.getX(), std::max(0, getHeight() - toolbarHeight_ - mixerBounds().getHeight()) };
+}
+
+juce::Rectangle<int> DawWorkspace::inspectorBounds() const
+{
+    const auto tl = timelineBounds();
+    return { tl.getRight(), toolbarHeight_, std::max(0, getWidth() - tl.getRight()),
+             std::max(0, getHeight() - toolbarHeight_ - mixerBounds().getHeight()) };
+}
+
+juce::Rectangle<int> DawWorkspace::mixerBounds() const
+{
+    const int h = juce::jlimit(96, std::max(96, getHeight() / 2), mixerHeight_);
+    return { 0, std::max(toolbarHeight_, getHeight() - h), getWidth(), h };
 }
 
 juce::Rectangle<int> DawWorkspace::trackHeaderBounds(int track) const
