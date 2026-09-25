@@ -1975,7 +1975,7 @@ void MainComponent::loadSelectedPlugin()
     }
     const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
     const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
-    loadPluginPathIntoSlot(juce::String(plugins[static_cast<std::size_t>(selected)].path.wstring()), ch, slot);
+    loadPluginPathIntoSlot(juce::String(plugins[static_cast<std::size_t>(selected)].path.wstring().c_str()), ch, slot);
 }
 
 void MainComponent::loadPluginPathIntoSlot(const juce::String& path, int channel, int slot)
