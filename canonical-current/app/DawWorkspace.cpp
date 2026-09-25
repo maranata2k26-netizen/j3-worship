@@ -97,8 +97,8 @@ void DawWorkspace::configureControls()
         b.setColour(juce::TextButton::textColourOffId, juce::Colour(kText));
     };
     for (auto* b : { &newButton_, &openButton_, &saveButton_, &importButton_, &addTrackButton_,
-                     &playButton_, &stopButton_, &recordButton_, &splitButton_,
-                     &duplicateButton_, &deleteButton_ })
+                     &addMidiTrackButton_, &patternButton_, &playButton_, &stopButton_, &recordButton_,
+                     &splitButton_, &duplicateButton_, &deleteButton_ })
         addButton(*b);
 
     playButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(kAccent).darker(0.2f));
@@ -125,6 +125,9 @@ void DawWorkspace::configureControls()
             });
     };
     addTrackButton_.onClick = [this] { checkpointUndo(); addTrack(); };
+    addMidiTrackButton_.onClick = [this] { checkpointUndo(); addMidiTrack(); };
+    patternButton_.onClick = [this] { addPattern16(); };
+    patternButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(kAccent).darker(0.45f));
     playButton_.onClick = [this] { togglePlay(); };
     stopButton_.onClick = [this] { stopTransport(true); };
     recordButton_.onClick = [this] { toggleTrackRecording(); };
@@ -492,20 +495,22 @@ void DawWorkspace::resized()
     take(newButton_, 58);
     take(openButton_, 58);
     take(saveButton_, 68);
-    take(importButton_, 112);
-    take(addTrackButton_, 70);
-    toolbar.removeFromLeft(8);
-    take(stopButton_, 54);
+    take(importButton_, 106);
+    take(addTrackButton_, 66);
+    take(addMidiTrackButton_, 62);
+    take(patternButton_, 82);
+    toolbar.removeFromLeft(6);
+    take(stopButton_, 52);
     take(playButton_, 58);
     take(recordButton_, 46);
     take(loopButton_, 58);
     take(splitButton_, 64);
-    take(duplicateButton_, 76);
-    take(deleteButton_, 62);
-    toolbar.removeFromLeft(8);
-    take(bpmSlider_, 146);
-    take(snapBox_, 110);
-    take(zoomSlider_, std::min(130, toolbar.getWidth()));
+    take(duplicateButton_, 72);
+    take(deleteButton_, 58);
+    toolbar.removeFromLeft(5);
+    take(bpmSlider_, 136);
+    take(snapBox_, 102);
+    take(zoomSlider_, std::max(0, toolbar.getWidth()));
 
     auto inspector = r.removeFromBottom(inspectorHeight_).reduced(8, 7);
     auto top = inspector.removeFromTop(30);
