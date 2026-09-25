@@ -1869,6 +1869,68 @@ void DawWorkspace::splitSelectedClipAtPlayhead()
     }
 }
 
+void DawWorkspace::normalizeSelectedClip()
+{
+    for (auto& clip : clips_)
+    {
+        if (clip.id != selectedClipId_ || clip.audio == nullptr)
+            continue;
+
+        const auto& audio = clip.audio->samples;
+        const int totalSamples = audio.getNumSamples();
+        if (totalSamples <= 0)
+            return;
+
+        const int start = juce::jlimit(0, totalSamples - 1,
+            static_cast<int>(std::llround(clip.sourceOffsetSeconds * clip.audio->sampleRate)));
+        const double seconds = clip.lengthBeats * 60.0 / std::max(1.0, bpm());
+        const int wanted = std::max(1, static_cast<int>(std::llround(seconds * clip.audio->sampleRate)));
+        const int count = std::max(1, std::min(wanted, totalSamples - start));
+
+        float peak = 0.0f;
+        for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+            peak = std::max(peak, audio.getMagnitude(ch, start, count));
+
+        if (peak <= 1.0e-7f)
+        {
+            refreshStatus("Normalize: el clip no contiene señal útil.");
+            return;
+        }
+
+        checkpointUndo();
+        constexpr float targetPeak = 0.89125094f; // -1 dBFS
+        const float normalizedGain = targetPeak / peak;
+        const float minGain = dbToGain(-36.0);
+        const float maxGain = dbToGain(18.0);
+        clip.gain = juce::jlimit(minGain, maxGain, normalizedGain);
+        projectDirty_ = true;
+        markRenderDirty();
+        syncInspector();
+        repaint();
+        refreshStatus("Clip normalizado a -1 dBFS de pico · no destructivo");
+        return;
+    }
+}
+
+void DawWorkspace::reverseSelectedClip()
+{
+    for (auto& clip : clips_)
+    {
+        if (clip.id != selectedClipId_)
+            continue;
+
+        checkpointUndo();
+        clip.reversed = !clip.reversed;
+        projectDirty_ = true;
+        markRenderDirty();
+        syncInspector();
+        repaint();
+        refreshStatus(clip.reversed ? "Reverse activado · no destructivo"
+                                    : "Reverse desactivado");
+        return;
+    }
+}
+
 void DawWorkspace::togglePlay()
 {
     const bool next = !playing_.load(std::memory_order_acquire);
