@@ -4,6 +4,7 @@
 namespace j3 {
 void LiveEngine::setTempo(double bpm,int bpb){ if(bpm<20||bpm>400||bpb<1||bpb>16) throw std::invalid_argument("Invalid tempo/signature"); bpm_=bpm; beatsPerBar_=bpb; }
 void LiveEngine::start(Section s){ current_=std::move(s); queued_.reset(); beatCounter_=0; playing_=true; }
+void LiveEngine::stop(){ current_={"STOPPED",SectionKind::Custom,4}; queued_.reset(); beatCounter_=0; playing_=false; }
 void LiveEngine::request(Section n,Quantize q){ queued_=std::move(n); quantize_=q; }
 bool LiveEngine::boundaryReached() const {
     if(!queued_) return false;

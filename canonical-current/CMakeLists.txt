@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 if(POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
-project(J3Worship VERSION 1.0.0 LANGUAGES C CXX)
+project(J3Worship VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -65,7 +65,7 @@ if(J3_BUILD_DESKTOP_APP)
     PRODUCT_NAME "J3 Worship"
     COMPANY_NAME "J3 Worship"
     BUNDLE_ID "com.j3worship.desktop"
-    VERSION "1.0.0"
+    VERSION "1.1.0"
     NEEDS_CURL FALSE
     NEEDS_WEB_BROWSER FALSE
   )
@@ -74,6 +74,10 @@ if(J3_BUILD_DESKTOP_APP)
     app/Main.cpp
     app/MainComponent.cpp
     app/MainComponent.h
+    app/J3Theme.cpp
+    app/J3Theme.h
+    app/UpdateService.cpp
+    app/UpdateService.h
   )
   target_include_directories(J3Worship PRIVATE include)
   target_compile_definitions(J3Worship PRIVATE
@@ -91,6 +95,8 @@ if(J3_BUILD_DESKTOP_APP)
     juce::juce_audio_formats
     juce::juce_dsp
     juce::juce_gui_extra
+    juce::juce_cryptography
+    winhttp
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags

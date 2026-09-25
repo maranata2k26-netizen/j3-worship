@@ -2,22 +2,43 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <functional>
+#include <thread>
 #include <vector>
 
 namespace
 {
-constexpr auto background = 0xff0b0e13;
-constexpr auto topBar = 0xff11151c;
-constexpr auto panel = 0xff151a22;
-constexpr auto panel2 = 0xff1d2430;
-constexpr auto panel3 = 0xff252e3b;
-constexpr auto accent = 0xff4da3ff;
-constexpr auto accentDeep = 0xff286da8;
-constexpr auto good = 0xff43d17d;
-constexpr auto warning = 0xffffb84d;
-constexpr auto danger = 0xffff5b68;
-constexpr auto text = 0xfff3f6fa;
-constexpr auto mutedText = 0xff9da8b7;
+std::uint32_t background = 0xff080d12;
+std::uint32_t topBar = 0xff0b131a;
+std::uint32_t panel = 0xff0e1820;
+std::uint32_t panel2 = 0xff12222c;
+std::uint32_t panel3 = 0xff19303d;
+std::uint32_t accent = 0xff158cff;
+std::uint32_t accentDeep = 0xff0d67bf;
+std::uint32_t good = 0xff2ed47a;
+std::uint32_t warning = 0xffffc247;
+std::uint32_t danger = 0xffff4d64;
+std::uint32_t text = 0xffeff6fc;
+std::uint32_t mutedText = 0xff91a3b3;
+std::uint32_t border = 0xff263a47;
+
+void syncPaletteGlobals(const j3ui::Palette& p)
+{
+    background = p.background.getARGB();
+    topBar = p.topBar.getARGB();
+    panel = p.panel.getARGB();
+    panel2 = p.panel2.getARGB();
+    panel3 = p.panel3.getARGB();
+    accent = p.accent.getARGB();
+    accentDeep = p.accent.darker(0.25f).getARGB();
+    good = p.good.getARGB();
+    warning = p.warning.getARGB();
+    danger = p.danger.getARGB();
+    text = p.text.getARGB();
+    mutedText = p.mutedText.getARGB();
+    border = p.border.getARGB();
+}
 
 float dbToGain(double db)
 {
@@ -48,6 +69,21 @@ public:
 private:
     std::shared_ptr<juce::AudioPluginInstance> plugin_;
     std::unique_ptr<juce::GenericAudioProcessorEditor> editor_;
+};
+
+class DashboardCard final : public juce::Component
+{
+public:
+    void paint(juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced(0.5f);
+        const auto base = getLookAndFeel().findColour(juce::ComboBox::backgroundColourId);
+        const auto outline = getLookAndFeel().findColour(juce::ComboBox::outlineColourId);
+        g.setColour(base.darker(0.12f));
+        g.fillRoundedRectangle(r, 7.0f);
+        g.setColour(outline.withAlpha(0.85f));
+        g.drawRoundedRectangle(r, 7.0f, 1.0f);
+    }
 };
 }
 
@@ -109,14 +145,37 @@ void MainComponent::MixerStrip::paint(juce::Graphics& g)
     auto r = getLocalBounds().toFloat().reduced(2.0f);
     g.setColour(juce::Colour(panel2));
     g.fillRoundedRectangle(r, 8.0f);
-    g.setColour(juce::Colour(0xff303946));
+    g.setColour(juce::Colour(border));
     g.drawRoundedRectangle(r, 8.0f, 1.0f);
+
+    auto graph = r.reduced(8.0f);
+    graph.setY(graph.getY() + 28.0f);
+    graph.setHeight(45.0f);
+    g.setColour(juce::Colour(background).withAlpha(0.72f));
+    g.fillRoundedRectangle(graph, 4.0f);
+
+    juce::Path waveform;
+    const float mid = graph.getCentreY();
+    const float step = graph.getWidth() / static_cast<float>(meterHistory_.size() - 1);
+    for (std::size_t i = 0; i < meterHistory_.size(); ++i)
+    {
+        const float x = graph.getX() + step * static_cast<float>(i);
+        const float amplitude = juce::jlimit(0.0f, 1.0f, meterHistory_[i]);
+        const float phase = static_cast<float>(i) * 1.73f + static_cast<float>(index_) * 0.41f;
+        const float y = mid - std::sin(phase) * amplitude * graph.getHeight() * 0.42f;
+        if (i == 0) waveform.startNewSubPath(x, y);
+        else waveform.lineTo(x, y);
+    }
+    g.setColour(juce::Colour(accent).withAlpha(0.9f));
+    g.strokePath(waveform, juce::PathStrokeType(1.45f, juce::PathStrokeType::curved,
+                                                juce::PathStrokeType::rounded));
 }
 
 void MainComponent::MixerStrip::resized()
 {
     auto r = getLocalBounds().reduced(8);
     title_.setBounds(r.removeFromTop(26));
+    r.removeFromTop(49); // real-time signal history graph painted behind this band
     meterBar_.setBounds(r.removeFromRight(10).reduced(0, 14));
     r.removeFromRight(4);
     dcaBox_.setBounds(r.removeFromBottom(28));
@@ -124,7 +183,7 @@ void MainComponent::MixerStrip::resized()
     busBox_.setBounds(r.removeFromBottom(28));
     r.removeFromBottom(3);
     muteButton_.setBounds(r.removeFromBottom(28));
-    panSlider_.setBounds(r.removeFromBottom(82));
+    panSlider_.setBounds(r.removeFromBottom(76));
     fader_.setBounds(r.reduced(2, 4));
 }
 
@@ -133,6 +192,9 @@ void MainComponent::MixerStrip::timerTick()
     const auto peak = meter_.exchange(0.0f, std::memory_order_relaxed);
     const auto target = juce::jlimit(0.0, 1.0, static_cast<double>(peak));
     meterValue_ = std::max(target, meterValue_ * 0.86);
+    std::move(meterHistory_.begin() + 1, meterHistory_.end(), meterHistory_.begin());
+    meterHistory_.back() = static_cast<float>(meterValue_);
+    repaint();
 }
 
 void MainComponent::MixerStrip::syncFromModel()
@@ -245,6 +307,9 @@ void MainComponent::IemSendStrip::syncFromModel()
 
 MainComponent::MainComponent()
 {
+    lookAndFeel_ = std::make_unique<j3ui::LookAndFeel>();
+    setLookAndFeel(lookAndFeel_.get());
+    syncPaletteGlobals(lookAndFeel_->palette());
     setOpaque(true);
     pluginFormatManager_.addFormat(std::make_unique<juce::VST3PluginFormat>());
     for (int ch = 0; ch < kMaxChannels; ++ch)
@@ -303,7 +368,7 @@ MainComponent::MainComponent()
     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(brandLabel_);
 
-    versionLabel_.setText("1.0.0", juce::dontSendNotification);
+    versionLabel_.setText("1.1.0", juce::dontSendNotification);
     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
     addAndMakeVisible(versionLabel_);
@@ -312,6 +377,19 @@ MainComponent::MainComponent()
     statusLabel_.setJustificationType(juce::Justification::centredRight);
     statusLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
     addAndMakeVisible(statusLabel_);
+
+    for (int id = 1; id <= 5; ++id)
+        themeBox_.addItem(j3ui::themeName(id), id);
+    themeBox_.setSelectedId(1, juce::dontSendNotification);
+    themeBox_.setTooltip("Tema visual de J3 Worship");
+    themeBox_.onChange = [this] { applyTheme(themeBox_.getSelectedId()); };
+    addAndMakeVisible(themeBox_);
+
+    updateButton_.setVisible(false);
+    updateButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
+    updateButton_.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    updateButton_.onClick = [this] { beginUpdateInstall(); };
+    addAndMakeVisible(updateButton_);
 
     audioSettingsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     audioSettingsButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(text));
@@ -432,6 +510,113 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(mixerNextButton_);
     mixerPage_.addAndMakeVisible(mixerBankLabel_);
     rebuildMixerBank();
+
+    dashboardLeftCard_ = std::make_unique<DashboardCard>();
+    dashboardRightCard_ = std::make_unique<DashboardCard>();
+    dashboardBottomCard_ = std::make_unique<DashboardCard>();
+    mixerPage_.addAndMakeVisible(*dashboardLeftCard_);
+    mixerPage_.addAndMakeVisible(*dashboardRightCard_);
+    mixerPage_.addAndMakeVisible(*dashboardBottomCard_);
+
+    dashboardSetlistTitle_.setText("SETLIST", juce::dontSendNotification);
+    dashboardSetlistTitle_.setFont(juce::FontOptions(17.0f, juce::Font::bold));
+    dashboardSongInfo_.setFont(juce::FontOptions(14.0f));
+    dashboardSongInfo_.setJustificationType(juce::Justification::topLeft);
+    dashboardSongBox_.onChange = [this]
+    {
+        const int id = dashboardSongBox_.getSelectedId();
+        if (id > 0 && setlist_.select(static_cast<std::size_t>(id - 1)))
+        {
+            setlistSongBox_.setSelectedId(id, juce::dontSendNotification);
+            refreshSetlistUi();
+        }
+    };
+    dashboardLoadSongButton_.onClick = [this] { loadSelectedSong(); };
+    mixerPage_.addAndMakeVisible(dashboardSetlistTitle_);
+    mixerPage_.addAndMakeVisible(dashboardSongBox_);
+    mixerPage_.addAndMakeVisible(dashboardLoadSongButton_);
+    mixerPage_.addAndMakeVisible(dashboardSongInfo_);
+
+    dashboardIemTitle_.setText("IEM · MONITORES", juce::dontSendNotification);
+    dashboardIemTitle_.setFont(juce::FontOptions(16.0f, juce::Font::bold));
+    for (int i = 0; i < kIemMixes; ++i)
+        dashboardIemMixBox_.addItem("MIX " + juce::String(i + 1), i + 1);
+    dashboardIemMixBox_.setSelectedId(1, juce::dontSendNotification);
+    dashboardIemMixBox_.onChange = [this]
+    {
+        selectedIemMix_ = juce::jlimit(0, kIemMixes - 1, dashboardIemMixBox_.getSelectedId() - 1);
+        iemMixBox_.setSelectedId(selectedIemMix_ + 1, juce::dontSendNotification);
+        rebuildIemBank();
+        refreshIemUi();
+    };
+    dashboardIemMasterSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+    dashboardIemMasterSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 62, 22);
+    dashboardIemMasterSlider_.setRange(-60.0, 12.0, 0.1);
+    dashboardIemMasterSlider_.setTextValueSuffix(" dB");
+    dashboardIemMasterSlider_.onValueChange = [this]
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, dashboardIemMixBox_.getSelectedId() - 1);
+        iemMaster_[mix].store(dbToGain(dashboardIemMasterSlider_.getValue()), std::memory_order_relaxed);
+        if (mix == selectedIemMix_)
+            iemMasterSlider_.setValue(dashboardIemMasterSlider_.getValue(), juce::dontSendNotification);
+    };
+    mixerPage_.addAndMakeVisible(dashboardIemTitle_);
+    mixerPage_.addAndMakeVisible(dashboardIemMixBox_);
+    mixerPage_.addAndMakeVisible(dashboardIemMasterSlider_);
+
+    dashboardRecordTitle_.setText("GRABACIÓN", juce::dontSendNotification);
+    dashboardRecordTitle_.setFont(juce::FontOptions(16.0f, juce::Font::bold));
+    dashboardRecordButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(danger).darker(0.35f));
+    dashboardRecordButton_.onClick = [this] { startStopRecording(); };
+    dashboardRecordInfo_.setFont(juce::FontOptions(13.5f));
+    dashboardRecordInfo_.setJustificationType(juce::Justification::topLeft);
+    mixerPage_.addAndMakeVisible(dashboardRecordTitle_);
+    mixerPage_.addAndMakeVisible(dashboardRecordButton_);
+    mixerPage_.addAndMakeVisible(dashboardRecordInfo_);
+
+    dashboardPluginsTitle_.setText("PLUGINS VST3", juce::dontSendNotification);
+    dashboardPluginsTitle_.setFont(juce::FontOptions(16.0f, juce::Font::bold));
+    dashboardPluginsInfo_.setFont(juce::FontOptions(13.5f));
+    dashboardPluginsInfo_.setJustificationType(juce::Justification::topLeft);
+    mixerPage_.addAndMakeVisible(dashboardPluginsTitle_);
+    mixerPage_.addAndMakeVisible(dashboardPluginsInfo_);
+
+    dashboardLiveTitle_.setText("LIVE · SECCIONES", juce::dontSendNotification);
+    dashboardLiveTitle_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+    dashboardStopButton_.onClick = [this] { stopLiveTransport(); };
+    mixerPage_.addAndMakeVisible(dashboardStopButton_);
+    dashboardPadButton_.onClick = [this]
+    {
+        padEnabledButton_.triggerClick();
+        refreshDashboard();
+    };
+    dashboardClickButton_.onClick = [this]
+    {
+        clickEnabledButton_.triggerClick();
+        refreshDashboard();
+    };
+    dashboardTempoLabel_.setJustificationType(juce::Justification::centred);
+    dashboardTempoLabel_.setFont(juce::FontOptions(13.5f, juce::Font::bold));
+    mixerPage_.addAndMakeVisible(dashboardLiveTitle_);
+    mixerPage_.addAndMakeVisible(dashboardPadButton_);
+    mixerPage_.addAndMakeVisible(dashboardClickButton_);
+    mixerPage_.addAndMakeVisible(dashboardTempoLabel_);
+
+    for (std::size_t i = 0; i < names.size(); ++i)
+    {
+        auto b = std::make_unique<juce::TextButton>(names[i]);
+        b->setColour(juce::TextButton::buttonColourId,
+                     i == 3 ? juce::Colour(danger).darker(0.28f)
+                            : (i == 6 ? juce::Colour(0xff593d86) : juce::Colour(panel3)));
+        b->onClick = [this, name = names[i], kind = kinds[i]]
+        {
+            setLiveSection(name, kind, kind == j3::SectionKind::FreePad ? 1 : 4);
+            refreshDashboard();
+        };
+        mixerPage_.addAndMakeVisible(*b);
+        dashboardSectionButtons_[i] = std::move(b);
+    }
+    refreshDashboard();
 
     dspTitle_.setText("J3 CHANNEL DSP · EQ · GATE · COMP · DENOISE", juce::dontSendNotification);
     dspTitle_.setFont(juce::FontOptions(23.0f, juce::Font::bold));
@@ -877,19 +1062,20 @@ MainComponent::MainComponent()
 
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(46);
+    tabs_.addTab("MEZCLADOR", juce::Colour(panel), &mixerPage_, false);
     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
-    tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
-    tabs_.addTab("CHANNEL DSP", juce::Colour(panel), &dspPage_, false);
-    tabs_.addTab("GROUPS", juce::Colour(panel), &groupsPage_, false);
-    tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
-    tabs_.addTab("PLUGINS", juce::Colour(panel), &pluginsPage_, false);
+    tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
+    tabs_.addTab("GRUPOS", juce::Colour(panel), &groupsPage_, false);
     tabs_.addTab("PADS", juce::Colour(panel), &padPage_, false);
+    tabs_.addTab("PLUGINS", juce::Colour(panel), &pluginsPage_, false);
+    tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
     tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
-    tabs_.addTab("RECORD", juce::Colour(panel), &recordingPage_, false);
-    tabs_.addTab("AUDIO / ROUTING", juce::Colour(panel), &setupPage_, false);
-    tabs_.addTab("SYSTEM CHECK", juce::Colour(panel), &diagnosticsPage_, false);
+    tabs_.addTab("GRABACIÓN", juce::Colour(panel), &recordingPage_, false);
+    tabs_.addTab("RUTEO", juce::Colour(panel), &setupPage_, false);
+    tabs_.addTab("AJUSTES", juce::Colour(panel), &diagnosticsPage_, false);
     addAndMakeVisible(tabs_);
+    tabs_.setCurrentTabIndex(0);
 
     recoveredAfterUncleanExit_ = getRuntimeLockFile().existsAsFile();
     getRuntimeLockFile().getParentDirectory().createDirectory();
@@ -906,8 +1092,11 @@ MainComponent::MainComponent()
     {
         if (safe != nullptr) safe->scanVst3Plugins();
     });
+    applyTheme(themeId_, false);
+    refreshDashboard();
     startTimerHz(30);
-    setSize(1440, 900);
+    setSize(1600, 960);
+    checkForUpdatesAsync();
 }
 
 MainComponent::~MainComponent()
@@ -924,16 +1113,289 @@ MainComponent::~MainComponent()
     saveAudioState();
     deviceManager_.closeAudioDevice();
     getRuntimeLockFile().deleteFile();
+    setLookAndFeel(nullptr);
 }
 
 void MainComponent::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(background));
-    auto top = getLocalBounds().removeFromTop(66);
+    auto top = getLocalBounds().removeFromTop(74);
     g.setColour(juce::Colour(topBar));
     g.fillRect(top);
-    g.setColour(juce::Colour(0xff2a3340));
-    g.drawHorizontalLine(65, 0.0f, static_cast<float>(getWidth()));
+    g.setColour(juce::Colour(border));
+    g.drawHorizontalLine(73, 0.0f, static_cast<float>(getWidth()));
+}
+
+void MainComponent::applyTheme(int themeId, bool persist)
+{
+    themeId_ = juce::jlimit(1, 5, themeId);
+    if (lookAndFeel_ == nullptr)
+        lookAndFeel_ = std::make_unique<j3ui::LookAndFeel>();
+
+    lookAndFeel_->setTheme(themeId_);
+    syncPaletteGlobals(lookAndFeel_->palette());
+    setLookAndFeel(lookAndFeel_.get());
+    themeBox_.setSelectedId(themeId_, juce::dontSendNotification);
+    const auto& p = lookAndFeel_->palette();
+
+    std::function<void(juce::Component&)> styleComponent;
+    styleComponent = [&](juce::Component& component)
+    {
+        if (auto* label = dynamic_cast<juce::Label*>(&component))
+        {
+            if (label != &statusLabel_)
+                label->setColour(juce::Label::textColourId, p.text);
+        }
+        if (auto* button = dynamic_cast<juce::TextButton*>(&component))
+        {
+            button->setColour(juce::TextButton::buttonColourId, p.panel3);
+            button->setColour(juce::TextButton::buttonOnColourId, p.accent);
+            button->setColour(juce::TextButton::textColourOffId, p.text);
+            button->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        }
+        if (auto* toggle = dynamic_cast<juce::ToggleButton*>(&component))
+            toggle->setColour(juce::ToggleButton::textColourId, p.text);
+        if (auto* slider = dynamic_cast<juce::Slider*>(&component))
+        {
+            slider->setColour(juce::Slider::thumbColourId, p.accent);
+            slider->setColour(juce::Slider::trackColourId, p.accent.withAlpha(0.72f));
+            slider->setColour(juce::Slider::rotarySliderFillColourId, p.accent);
+            slider->setColour(juce::Slider::rotarySliderOutlineColourId, p.border);
+            slider->setColour(juce::Slider::textBoxTextColourId, p.text);
+            slider->setColour(juce::Slider::textBoxBackgroundColourId, p.panel);
+            slider->setColour(juce::Slider::textBoxOutlineColourId, p.border);
+        }
+        if (auto* combo = dynamic_cast<juce::ComboBox*>(&component))
+        {
+            combo->setColour(juce::ComboBox::backgroundColourId, p.panel2);
+            combo->setColour(juce::ComboBox::textColourId, p.text);
+            combo->setColour(juce::ComboBox::outlineColourId, p.border);
+            combo->setColour(juce::ComboBox::arrowColourId, p.mutedText);
+        }
+        if (auto* editor = dynamic_cast<juce::TextEditor*>(&component))
+        {
+            editor->setColour(juce::TextEditor::backgroundColourId, p.panel2);
+            editor->setColour(juce::TextEditor::textColourId, p.text);
+            editor->setColour(juce::TextEditor::outlineColourId, p.border);
+        }
+        if (auto* progress = dynamic_cast<juce::ProgressBar*>(&component))
+        {
+            progress->setColour(juce::ProgressBar::backgroundColourId, p.background);
+            progress->setColour(juce::ProgressBar::foregroundColourId, p.good);
+        }
+
+        for (int i = 0; i < component.getNumChildComponents(); ++i)
+            if (auto* child = component.getChildComponent(i))
+                styleComponent(*child);
+    };
+    styleComponent(*this);
+
+    versionLabel_.setColour(juce::Label::textColourId, p.mutedText);
+    liveHint_.setColour(juce::Label::textColourId, p.mutedText);
+    dashboardSongInfo_.setColour(juce::Label::textColourId, p.mutedText);
+    dashboardRecordInfo_.setColour(juce::Label::textColourId, p.mutedText);
+    dashboardPluginsInfo_.setColour(juce::Label::textColourId, p.mutedText);
+    updateButton_.setColour(juce::TextButton::buttonColourId, p.accent.darker(0.2f));
+    recordButton_.setColour(juce::TextButton::buttonColourId, p.danger.darker(0.35f));
+    dashboardRecordButton_.setColour(juce::TextButton::buttonColourId, p.danger.darker(0.35f));
+    dashboardStopButton_.setColour(juce::TextButton::buttonColourId, p.danger.darker(0.45f));
+    loadPluginButton_.setColour(juce::TextButton::buttonColourId, p.accent.darker(0.25f));
+    openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, p.good.darker(0.45f));
+
+    const std::array<juce::Colour, 8> sectionColours {
+        p.accent.darker(0.28f), p.good.darker(0.42f), p.warning.darker(0.42f), p.danger.darker(0.32f),
+        p.accent2.darker(0.42f), p.accent.darker(0.5f), juce::Colour(0xff684494), p.mutedText.darker(0.42f)
+    };
+    for (std::size_t i = 0; i < sectionColours.size(); ++i)
+    {
+        if (liveButtons_[i])
+            liveButtons_[i]->setColour(juce::TextButton::buttonColourId, sectionColours[i]);
+        if (dashboardSectionButtons_[i])
+            dashboardSectionButtons_[i]->setColour(juce::TextButton::buttonColourId, sectionColours[i]);
+    }
+
+    tabs_.setColour(juce::TabbedComponent::backgroundColourId, p.background);
+    for (int i = 0; i < tabs_.getNumTabs(); ++i)
+        tabs_.setTabBackgroundColour(i, p.panel);
+
+    if (dashboardLeftCard_) dashboardLeftCard_->repaint();
+    if (dashboardRightCard_) dashboardRightCard_->repaint();
+    if (dashboardBottomCard_) dashboardBottomCard_->repaint();
+    sendLookAndFeelChange();
+    repaint();
+
+    if (persist)
+        saveAppState();
+}
+
+void MainComponent::refreshDashboard()
+{
+    const int previousId = dashboardSongBox_.getSelectedId();
+    dashboardSongBox_.clear(juce::dontSendNotification);
+    for (std::size_t i = 0; i < setlist_.size(); ++i)
+    {
+        if (const auto* song = setlist_.song(i))
+            dashboardSongBox_.addItem(juce::String(song->name), static_cast<int>(i + 1));
+    }
+
+    if (setlist_.size() > 0)
+    {
+        const int currentId = static_cast<int>(setlist_.currentIndex()) + 1;
+        dashboardSongBox_.setSelectedId(currentId, juce::dontSendNotification);
+        if (const auto* song = setlist_.current())
+        {
+            juce::String info;
+            info << (song->artist.empty() ? juce::String("Worship set") : juce::String(song->artist)) << "\n";
+            info << (song->key.empty() ? juce::String("Tono —") : "Tono " + juce::String(song->key))
+                 << "  ·  " << juce::String(song->bpm, 1) << " BPM";
+            dashboardSongInfo_.setText(info, juce::dontSendNotification);
+        }
+    }
+    else
+    {
+        juce::ignoreUnused(previousId);
+        dashboardSongInfo_.setText("Setlist vacío\nAgregá canciones en SETLIST.", juce::dontSendNotification);
+    }
+
+    const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+    dashboardIemMixBox_.setSelectedId(mix + 1, juce::dontSendNotification);
+    const float master = std::max(1.0e-6f, iemMaster_[mix].load(std::memory_order_relaxed));
+    dashboardIemMasterSlider_.setValue(juce::Decibels::gainToDecibels(master, -60.0f),
+                                       juce::dontSendNotification);
+
+    const bool recording = recordingEnabled_.load(std::memory_order_acquire);
+    dashboardRecordButton_.setButtonText(recording ? "DETENER" : "GRABAR");
+    dashboardRecordInfo_.setText(recording ? "Grabando multicanal…" : "Listo para grabación multicanal",
+                                 juce::dontSendNotification);
+
+    int loadedPlugins = 0;
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+            if (channelPlugins_[ch][slot].load(std::memory_order_acquire) != nullptr)
+                ++loadedPlugins;
+    dashboardPluginsInfo_.setText(juce::String(loadedPlugins) + " inserts activos\n4 slots VST3 por canal",
+                                  juce::dontSendNotification);
+
+    dashboardPadButton_.setToggleState(padEnabledButton_.getToggleState(), juce::dontSendNotification);
+    dashboardClickButton_.setToggleState(clickEnabledButton_.getToggleState(), juce::dontSendNotification);
+    dashboardTempoLabel_.setText(juce::String(bpmSlider_.getValue(), 1) + " BPM  ·  "
+        + (padKeyBox_.getText().isNotEmpty() ? padKeyBox_.getText() : juce::String("C"))
+        + (padMinorButton_.getToggleState() ? "m" : ""), juce::dontSendNotification);
+}
+
+void MainComponent::checkForUpdatesAsync()
+{
+    if (updateBusy_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    auto current = j3::Updater::parseVersion(
+        juce::JUCEApplication::getInstance()->getApplicationVersion().toStdString()).value_or(j3::SemVer { 1, 1, 0 });
+    auto safe = juce::Component::SafePointer<MainComponent>(this);
+    std::thread([safe, current]
+    {
+        juce::String error;
+        auto update = j3ui::UpdateService::checkLatest(current, error);
+        juce::MessageManager::callAsync([safe, update, error]
+        {
+            if (safe == nullptr)
+                return;
+            safe->updateBusy_.store(false, std::memory_order_release);
+            if (update.has_value())
+            {
+                safe->availableUpdate_ = *update;
+                safe->updateButton_.setButtonText("ACTUALIZAR " + update->versionText);
+                safe->updateButton_.setTooltip("Nueva versión disponible. Descarga verificada por SHA-256.");
+                safe->updateButton_.setVisible(true);
+                safe->resized();
+            }
+            else if (error.isNotEmpty())
+            {
+                safe->updateButton_.setTooltip("No se pudo comprobar la versión: " + error);
+            }
+        });
+    }).detach();
+}
+
+void MainComponent::beginUpdateInstall()
+{
+    if (!availableUpdate_.has_value())
+    {
+        checkForUpdatesAsync();
+        return;
+    }
+
+    const auto safeToInstallNow = [this]
+    {
+        const bool liveMode = liveMonitorEnabled_.load(std::memory_order_acquire);
+        const bool recording = recordingEnabled_.load(std::memory_order_acquire);
+        const bool sessionActive = transportRunning_.load(std::memory_order_acquire);
+        return j3::Updater::safeToInstall(liveMode, recording, sessionActive);
+    };
+
+    if (downloadedUpdateInstaller_.existsAsFile())
+    {
+        if (!safeToInstallNow())
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+                "Actualización lista",
+                "La nueva versión ya está descargada y verificada. Detené LIVE/CLICK y la grabación; después tocá INSTALAR.");
+            updateButton_.setButtonText("INSTALAR " + availableUpdate_->versionText);
+            return;
+        }
+
+        juce::String error;
+        if (!j3ui::UpdateService::launchInstallerAndRestart(downloadedUpdateInstaller_, error))
+        {
+            showAudioError(error);
+            return;
+        }
+        juce::JUCEApplication::getInstance()->systemRequestedQuit();
+        return;
+    }
+
+    if (updateBusy_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    updateButton_.setEnabled(false);
+    updateButton_.setButtonText("DESCARGANDO…");
+    const auto update = *availableUpdate_;
+    auto safe = juce::Component::SafePointer<MainComponent>(this);
+    std::thread([safe, update]
+    {
+        juce::File installer;
+        juce::String error;
+        const bool ok = j3ui::UpdateService::downloadAndVerify(update, installer, error);
+        juce::MessageManager::callAsync([safe, update, installer, error, ok]
+        {
+            if (safe == nullptr)
+                return;
+            safe->updateBusy_.store(false, std::memory_order_release);
+            safe->updateButton_.setEnabled(true);
+            if (!ok)
+            {
+                safe->updateButton_.setButtonText("REINTENTAR " + update.versionText);
+                safe->showAudioError("No se pudo actualizar: " + error);
+                return;
+            }
+
+            safe->downloadedUpdateInstaller_ = installer;
+            safe->updateButton_.setButtonText("INSTALAR " + update.versionText);
+            const bool canInstall = j3::Updater::safeToInstall(
+                safe->liveMonitorEnabled_.load(std::memory_order_acquire),
+                safe->recordingEnabled_.load(std::memory_order_acquire),
+                safe->transportRunning_.load(std::memory_order_acquire));
+            if (!canInstall)
+                return;
+
+            juce::String launchError;
+            if (!j3ui::UpdateService::launchInstallerAndRestart(installer, launchError))
+            {
+                safe->showAudioError(launchError);
+                return;
+            }
+            juce::JUCEApplication::getInstance()->systemRequestedQuit();
+        });
+    }).detach();
 }
 
 juce::String MainComponent::inputChannelName(int channel) const
@@ -1281,15 +1743,27 @@ void MainComponent::applyIemRoutingFromControls()
 void MainComponent::resized()
 {
     auto area = getLocalBounds();
-    auto top = area.removeFromTop(66).reduced(16, 8);
+    auto top = area.removeFromTop(74).reduced(14, 8);
     brandLabel_.setBounds(top.removeFromLeft(190));
-    versionLabel_.setBounds(top.removeFromLeft(100).reduced(0, 11));
-    audioSettingsButton_.setBounds(top.removeFromRight(150));
-    top.removeFromRight(10);
-    liveMonitorButton_.setBounds(top.removeFromRight(132));
-    top.removeFromRight(10);
-    statusLabel_.setBounds(top.removeFromRight(510));
-    tabs_.setBounds(area.reduced(10));
+    versionLabel_.setBounds(top.removeFromLeft(62).reduced(0, 11));
+
+    audioSettingsButton_.setBounds(top.removeFromRight(132));
+    top.removeFromRight(8);
+    liveMonitorButton_.setBounds(top.removeFromRight(112));
+    top.removeFromRight(8);
+    themeBox_.setBounds(top.removeFromRight(154).reduced(0, 3));
+    top.removeFromRight(8);
+    if (updateButton_.isVisible())
+    {
+        updateButton_.setBounds(top.removeFromRight(148).reduced(0, 2));
+        top.removeFromRight(8);
+    }
+    else
+    {
+        updateButton_.setBounds({});
+    }
+    statusLabel_.setBounds(top.reduced(4, 0));
+    tabs_.setBounds(area.reduced(8));
 
     auto liveArea = livePage_.getLocalBounds().reduced(24);
     nowLabel_.setBounds(liveArea.removeFromTop(58));
@@ -1334,15 +1808,72 @@ void MainComponent::resized()
     setArea.removeFromTop(20);
     setlistInfoLabel_.setBounds(setArea.removeFromTop(170));
 
-    auto mixerArea = mixerPage_.getLocalBounds().reduced(12);
-    auto mixerNav = mixerArea.removeFromTop(40);
-    mixerPrevButton_.setBounds(mixerNav.removeFromLeft(110));
-    mixerNextButton_.setBounds(mixerNav.removeFromRight(110));
+    auto mixerArea = mixerPage_.getLocalBounds().reduced(9);
+    const int leftWidth = juce::jlimit(190, 248, mixerArea.getWidth() * 16 / 100);
+    const int rightWidth = juce::jlimit(218, 278, mixerArea.getWidth() * 18 / 100);
+    auto dashboardLeft = mixerArea.removeFromLeft(leftWidth);
+    mixerArea.removeFromLeft(8);
+    auto dashboardRight = mixerArea.removeFromRight(rightWidth);
+    mixerArea.removeFromRight(8);
+    auto dashboardBottom = mixerArea.removeFromBottom(118);
+    mixerArea.removeFromBottom(8);
+
+    if (dashboardLeftCard_) dashboardLeftCard_->setBounds(dashboardLeft);
+    if (dashboardRightCard_) dashboardRightCard_->setBounds(dashboardRight);
+    if (dashboardBottomCard_) dashboardBottomCard_->setBounds(dashboardBottom);
+
+    auto leftContent = dashboardLeft.reduced(12);
+    dashboardSetlistTitle_.setBounds(leftContent.removeFromTop(28));
+    leftContent.removeFromTop(4);
+    dashboardSongBox_.setBounds(leftContent.removeFromTop(34));
+    leftContent.removeFromTop(8);
+    dashboardSongInfo_.setBounds(leftContent.removeFromTop(70));
+    leftContent.removeFromTop(8);
+    dashboardLoadSongButton_.setBounds(leftContent.removeFromTop(36));
+
+    auto rightContent = dashboardRight.reduced(12);
+    dashboardIemTitle_.setBounds(rightContent.removeFromTop(26));
+    auto iemRow = rightContent.removeFromTop(34);
+    dashboardIemMixBox_.setBounds(iemRow.removeFromLeft(92));
+    iemRow.removeFromLeft(6);
+    dashboardIemMasterSlider_.setBounds(iemRow);
+    rightContent.removeFromTop(12);
+    dashboardRecordTitle_.setBounds(rightContent.removeFromTop(24));
+    auto recordRow = rightContent.removeFromTop(38);
+    dashboardRecordButton_.setBounds(recordRow.removeFromLeft(92));
+    recordRow.removeFromLeft(8);
+    dashboardRecordInfo_.setBounds(recordRow);
+    rightContent.removeFromTop(12);
+    dashboardPluginsTitle_.setBounds(rightContent.removeFromTop(24));
+    dashboardPluginsInfo_.setBounds(rightContent.removeFromTop(62));
+
+    auto mixerNav = mixerArea.removeFromTop(34);
+    mixerPrevButton_.setBounds(mixerNav.removeFromLeft(86).reduced(1));
+    mixerNextButton_.setBounds(mixerNav.removeFromRight(86).reduced(1));
     mixerBankLabel_.setBounds(mixerNav);
-    mixerArea.removeFromTop(6);
+    mixerArea.removeFromTop(4);
     const int stripW = std::max(1, mixerArea.getWidth() / kVisibleChannels);
     for (int i = 0; i < kVisibleChannels; ++i)
-        if (strips_[i]) strips_[i]->setBounds(mixerArea.removeFromLeft(stripW).reduced(3));
+        if (strips_[i]) strips_[i]->setBounds(mixerArea.removeFromLeft(stripW).reduced(2));
+
+    auto transport = dashboardBottom.reduced(10);
+    auto transportTop = transport.removeFromTop(28);
+    dashboardLiveTitle_.setBounds(transportTop.removeFromLeft(150));
+    dashboardStopButton_.setBounds(transportTop.removeFromLeft(70).reduced(2));
+    dashboardPadButton_.setBounds(transportTop.removeFromLeft(70).reduced(2));
+    dashboardClickButton_.setBounds(transportTop.removeFromLeft(78).reduced(2));
+    dashboardTempoLabel_.setBounds(transportTop.removeFromRight(150));
+    transport.removeFromTop(7);
+    const int sectionGap = 5;
+    const int sectionWidth = std::max(54, (transport.getWidth() - sectionGap * 7) / 8);
+    for (int i = 0; i < 8; ++i)
+    {
+        if (dashboardSectionButtons_[i])
+        {
+            dashboardSectionButtons_[i]->setBounds(transport.removeFromLeft(sectionWidth));
+            if (i < 7) transport.removeFromLeft(sectionGap);
+        }
+    }
 
     auto dspArea = dspPage_.getLocalBounds().reduced(20);
     auto dspHeader = dspArea.removeFromTop(42);
@@ -1550,6 +2081,10 @@ void MainComponent::loadAppState()
     if (xml == nullptr || !xml->hasTagName("J3WorshipState"))
         return;
 
+    themeId_ = juce::jlimit(1, 5, xml->getIntAttribute("themeId", 1));
+    themeBox_.setSelectedId(themeId_, juce::dontSendNotification);
+    applyTheme(themeId_, false);
+
     paLeft_.store(xml->getIntAttribute("paLeft", 0));
     paRight_.store(xml->getIntAttribute("paRight", 1));
     clickOutput_.store(xml->getIntAttribute("clickOutput", -1));
@@ -1670,12 +2205,14 @@ void MainComponent::loadAppState()
     refreshDspUi();
     refreshPadUi();
     refreshSetlistUi();
+    refreshDashboard();
 }
 
 void MainComponent::saveAppState(bool capturePluginState)
 {
     juce::XmlElement xml("J3WorshipState");
-    xml.setAttribute("version", "1.0.0");
+    xml.setAttribute("version", "1.1.0");
+    xml.setAttribute("themeId", themeId_);
     xml.setAttribute("paLeft", paLeft_.load());
     xml.setAttribute("paRight", paRight_.load());
     xml.setAttribute("clickOutput", clickOutput_.load());
@@ -2485,12 +3022,28 @@ void MainComponent::setLiveSection(const juce::String& name, j3::SectionKind kin
         liveEngine_.request(section, j3::Quantize::Bar);
     }
     refreshLiveLabels();
+    refreshDashboard();
+}
+
+void MainComponent::stopLiveTransport()
+{
+    liveEngine_.stop();
+    liveStarted_ = false;
+    transportRunning_.store(false, std::memory_order_release);
+    clickAudible_.store(false, std::memory_order_release);
+    clickEnabledButton_.setToggleState(false, juce::dontSendNotification);
+    clickGenerator_.setEnabled(false);
+    clickGenerator_.reset();
+    refreshLiveLabels();
+    updateClickUi();
+    refreshDashboard();
 }
 
 void MainComponent::refreshLiveLabels()
 {
     nowLabel_.setText("NOW: " + juce::String(liveEngine_.now()), juce::dontSendNotification);
     nextLabel_.setText("NEXT: " + juce::String(liveEngine_.next()), juce::dontSendNotification);
+    refreshDashboard();
 }
 
 bool MainComponent::routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept
@@ -2808,6 +3361,7 @@ void MainComponent::timerCallback()
         updateDiagnostics();
         updateClickUi();
         updateRecordingUi();
+        refreshDashboard();
     }
     if (ticks % 150 == 0)
         saveAppState();
