@@ -17,6 +17,7 @@ SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
+SetupIconFile=..\resources\J3Worship.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 VersionInfoVersion=1.2.0.0
 VersionInfoCompany=J3 Worship
