@@ -1,0 +1,62 @@
+#include "j3/Recording.h"
+#include <algorithm>
+#include <chrono>
+#include <cstring>
+
+namespace j3 {
+namespace {
+template <typename T> void writeLE(std::ofstream& o, T value) { o.write(reinterpret_cast<const char*>(&value), sizeof(T)); }
+void writeHeader(std::ofstream& o, std::uint32_t sr, std::uint16_t ch, std::uint32_t dataBytes) {
+    o.seekp(0);
+    o.write("RIFF",4); writeLE<std::uint32_t>(o,36u+dataBytes); o.write("WAVE",4);
+    o.write("fmt ",4); writeLE<std::uint32_t>(o,16); writeLE<std::uint16_t>(o,3); writeLE<std::uint16_t>(o,ch);
+    writeLE<std::uint32_t>(o,sr); writeLE<std::uint32_t>(o,sr*ch*4); writeLE<std::uint16_t>(o,static_cast<std::uint16_t>(ch*4)); writeLE<std::uint16_t>(o,32);
+    o.write("data",4); writeLE<std::uint32_t>(o,dataBytes);
+}
+}
+FloatWavWriter::~FloatWavWriter(){ std::string ignored; close(ignored); }
+bool FloatWavWriter::open(const std::filesystem::path& p,std::uint32_t sr,std::uint16_t ch,std::string& error){
+    if(ch==0){error="WAV requires channels";return false;} std::filesystem::create_directories(p.parent_path()); out_.open(p,std::ios::binary|std::ios::trunc); if(!out_){error="Cannot create WAV";return false;} sampleRate_=sr;channels_=ch;framesWritten_=0; std::array<char,44> z{};out_.write(z.data(),z.size()); return static_cast<bool>(out_);
+}
+bool FloatWavWriter::writeInterleaved(const float* s,std::size_t frames,std::string& error){ if(!out_){error="WAV not open";return false;} out_.write(reinterpret_cast<const char*>(s),static_cast<std::streamsize>(frames*channels_*sizeof(float))); if(!out_){error="WAV write failed";return false;} framesWritten_+=frames;return true; }
+bool FloatWavWriter::close(std::string& error){ if(!out_.is_open()) return true; const auto bytes64=framesWritten_*channels_*sizeof(float); if(bytes64>0xFFFFFFFFull){error="WAV exceeded RIFF 4GB limit";out_.close();return false;} writeHeader(out_,sampleRate_,channels_,static_cast<std::uint32_t>(bytes64)); out_.flush(); const bool ok=static_cast<bool>(out_); out_.close(); if(!ok)error="WAV finalization failed"; return ok; }
+
+MultiTrackRecorder::MultiTrackRecorder() : queue_(std::make_unique<SpscRing<RecordingBlock, 64>>()) {}
+MultiTrackRecorder::~MultiTrackRecorder(){ std::string ignored; stop(ignored); }
+std::string MultiTrackRecorder::safeName(std::string n){ for(char&c:n) if(c=='/'||c=='\\'||c==':'||c=='*'||c=='?'||c=='\"'||c=='<'||c=='>'||c=='|') c='_'; if(n.empty())n="Channel"; return n; }
+bool MultiTrackRecorder::start(const std::filesystem::path& dir,std::uint32_t sr,const std::vector<std::string>& names,std::string& error){
+    if(running_){error="Recorder already running";return false;} if(names.empty()||names.size()>kRecordMaxChannels){error="Invalid recording channel count";return false;} writers_.clear(); try{std::filesystem::create_directories(dir);}catch(const std::exception&e){error=e.what();return false;}
+    for(const auto& name:names){auto w=std::make_unique<FloatWavWriter>(); if(!w->open(dir/(safeName(name)+".wav"),sr,1,error)){writers_.clear();return false;} writers_.push_back(std::move(w));}
+    overflows_=0;blocksWritten_=0;workerError_=false;stopRequested_=false;running_=true;worker_=std::thread(&MultiTrackRecorder::workerMain,this);return true;
+}
+bool MultiTrackRecorder::submit(const float* const* inputs,std::size_t channels,std::size_t frames) noexcept {
+    if(!running_.load(std::memory_order_acquire)||channels!=writers_.size()||frames==0||frames>kRecordMaxFrames) return false;
+    RecordingBlock b; b.channels=static_cast<std::uint16_t>(channels); b.frames=static_cast<std::uint16_t>(frames);
+    for(std::size_t c=0;c<channels;++c) std::memcpy(b.planar.data()+c*kRecordMaxFrames,inputs[c],frames*sizeof(float));
+    if(!queue_->push(b)){overflows_.fetch_add(1,std::memory_order_relaxed);return false;} return true;
+}
+void MultiTrackRecorder::workerMain(){
+    RecordingBlock b; std::vector<float> mono(kRecordMaxFrames); std::string error;
+    while(!stopRequested_.load(std::memory_order_acquire)||!queue_->empty()){
+        if(!queue_->pop(b)){std::this_thread::sleep_for(std::chrono::milliseconds(1));continue;}
+        for(std::size_t c=0;c<b.channels;++c){std::copy_n(b.planar.data()+c*kRecordMaxFrames,b.frames,mono.begin()); if(!writers_[c]->writeInterleaved(mono.data(),b.frames,error)) workerError_.store(true);}
+        blocksWritten_.fetch_add(1,std::memory_order_relaxed);
+    }
+}
+bool MultiTrackRecorder::stop(std::string& error) {
+    if (!running_.exchange(false)) return true;
+    stopRequested_ = true;
+    if (worker_.joinable()) worker_.join();
+    bool ok = !workerError_.load();
+    for (auto& w : writers_) {
+        std::string e;
+        if (!w->close(e)) {
+            ok = false;
+            if (error.empty()) error = e;
+        }
+    }
+    writers_.clear();
+    if (!ok && error.empty()) error = "Recording worker reported an error";
+    return ok;
+}
+}
