@@ -81,7 +81,7 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
     if (object.empty())
         object = L"/";
 
-    InternetHandle session { WinHttpOpen(L"J3Worship/1.1",
+    InternetHandle session { WinHttpOpen(L"J3Worship/1.2",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0) };
     if (session.handle == nullptr)

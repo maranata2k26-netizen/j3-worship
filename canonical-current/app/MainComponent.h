@@ -10,6 +10,7 @@
 #include "j3/PluginCatalog.h"
 #include "J3Theme.h"
 #include "UpdateService.h"
+#include "DawWorkspace.h"
 
 #include <array>
 #include <atomic>
@@ -35,7 +36,7 @@ private:
     static constexpr int kBuses = 8;
     static constexpr int kDcas = 8;
     static constexpr int kIemMixes = 16;
-    static constexpr int kPluginSlots = 4;
+    static constexpr int kPluginSlots = 8;
 
     class MixerStrip final : public juce::Component
     {
@@ -125,6 +126,7 @@ private:
     juce::String inputChannelName(int channel) const;
     void setLiveSection(const juce::String& name, j3::SectionKind kind, int bars = 4);
     void stopLiveTransport();
+    void panicStopAll();
     void refreshLiveLabels();
     void updateClickUi();
     void handleTapTempo();
@@ -140,6 +142,7 @@ private:
     void removeSelectedPlugin();
     void openSelectedPluginEditor();
     void restoreSavedPluginsAfterScan();
+    bool pluginMutationLocked() const noexcept;
     const float* processPluginChain(int channel, const float* input, int numSamples) noexcept;
     bool routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept;
     bool iemRouteIsSafe(int mix, int left, int right) const noexcept;
@@ -218,10 +221,12 @@ private:
     juce::AudioPluginFormatManager pluginFormatManager_;
     std::array<std::array<std::atomic<std::shared_ptr<juce::AudioPluginInstance>>, kPluginSlots>, kMaxChannels> channelPlugins_{};
     std::array<std::array<std::atomic<bool>, kPluginSlots>, kMaxChannels> pluginBypass_{};
+    std::array<std::array<std::atomic<std::uint32_t>, kPluginSlots>, kMaxChannels> pluginFaults_{};
     std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginPaths_{};
     std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginNames_{};
     std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginStateBase64_{};
     juce::AudioBuffer<float> pluginScratch_;
+    juce::AudioBuffer<float> pluginGuardScratch_;
     juce::MidiBuffer pluginMidiScratch_;
     bool pluginsScanned_ { false };
 
@@ -239,6 +244,7 @@ private:
     std::atomic<bool> shuttingDown_ { false };
     std::uint64_t lastReconnectAttemptMs_ { 0 };
     int reconnectAttempts_ { 0 };
+    std::atomic<std::uint64_t> outputSafetyEvents_ { 0 };
     juce::String lastAudioError_;
     juce::String deviceInventory_;
 
@@ -248,14 +254,17 @@ private:
     juce::File downloadedUpdateInstaller_;
     std::atomic<bool> updateBusy_ { false };
 
+    juce::Image brandLogo_;
     juce::Label brandLabel_;
     juce::Label versionLabel_;
     juce::Label statusLabel_;
+    juce::Label safetyLabel_;
     juce::ComboBox themeBox_;
     juce::TextButton updateButton_ { "ACTUALIZAR" };
     juce::TextButton audioSettingsButton_ { "AUDIO / MIDI" };
     juce::ToggleButton liveMonitorButton_ { "LIVE INPUTS" };
     juce::TabbedComponent tabs_ { juce::TabbedButtonBar::TabsAtTop };
+    DawWorkspace dawWorkspace_;
 
     juce::Component livePage_;
     juce::Label nowLabel_;
@@ -282,6 +291,7 @@ private:
     std::unique_ptr<juce::Component> dashboardLeftCard_;
     std::unique_ptr<juce::Component> dashboardRightCard_;
     std::unique_ptr<juce::Component> dashboardBottomCard_;
+    std::unique_ptr<juce::Component> sessionGrid_;
     juce::Label dashboardSetlistTitle_;
     juce::ComboBox dashboardSongBox_;
     juce::TextButton dashboardLoadSongButton_ { "CARGAR EN LIVE" };

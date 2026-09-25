@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "BinaryData.h"
 
 #include <algorithm>
 #include <cmath>
@@ -57,18 +58,34 @@ class GenericPluginEditorHolder final : public juce::Component
 {
 public:
     explicit GenericPluginEditorHolder(std::shared_ptr<juce::AudioPluginInstance> plugin)
-        : plugin_(std::move(plugin)), editor_(std::make_unique<juce::GenericAudioProcessorEditor>(*plugin_))
+        : plugin_(std::move(plugin))
     {
-        addAndMakeVisible(*editor_);
-        setSize(juce::jlimit(480, 980, editor_->getWidth()),
-                juce::jlimit(420, 760, editor_->getHeight()));
+        if (plugin_ != nullptr && plugin_->hasEditor())
+            editor_.reset(plugin_->createEditorIfNeeded());
+        if (editor_ == nullptr && plugin_ != nullptr)
+            editor_ = std::make_unique<juce::GenericAudioProcessorEditor>(*plugin_);
+
+        if (editor_ != nullptr)
+        {
+            addAndMakeVisible(*editor_);
+            setSize(juce::jlimit(520, 1180, editor_->getWidth()),
+                    juce::jlimit(420, 820, editor_->getHeight()));
+        }
+        else
+        {
+            setSize(640, 480);
+        }
     }
 
-    void resized() override { editor_->setBounds(getLocalBounds()); }
+    void resized() override
+    {
+        if (editor_ != nullptr)
+            editor_->setBounds(getLocalBounds());
+    }
 
 private:
     std::shared_ptr<juce::AudioPluginInstance> plugin_;
-    std::unique_ptr<juce::GenericAudioProcessorEditor> editor_;
+    std::unique_ptr<juce::AudioProcessorEditor> editor_;
 };
 
 class DashboardCard final : public juce::Component
@@ -84,6 +101,125 @@ public:
         g.setColour(outline.withAlpha(0.85f));
         g.drawRoundedRectangle(r, 7.0f, 1.0f);
     }
+};
+
+class SessionGrid final : public juce::Component
+{
+public:
+    SessionGrid(std::function<void(int)> sceneCallback,
+                std::function<void(int)> trackCallback)
+        : onScene_(std::move(sceneCallback)), onTrack_(std::move(trackCallback))
+    {
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        static constexpr const char* trackNames[8] {
+            "Voz Líder", "Coros", "Guitarra", "Bajo",
+            "Teclado", "Batería", "Secuencias", "Click"
+        };
+        static constexpr const char* cells[8][8] {
+            { "Intro", "Verse 1", "Pre-Chorus", "Chorus", "Verse 2", "Bridge", "Instrumental", "Ending" },
+            { "Pad 1", "Pad 2", "Pad 3", "Pad 4", "Ambiente", "Drone", "Shimmer", "—" },
+            { "Clean", "Drive", "Ambient", "Solo", "—", "—", "—", "—" },
+            { "Intro", "Verse", "Chorus", "Bridge", "—", "—", "—", "—" },
+            { "Piano", "Pad", "Strings", "Synth", "Ambient", "—", "—", "—" },
+            { "Kit 1", "Kit 2", "Loop", "Percusión", "Shaker", "—", "—", "—" },
+            { "FX 1", "FX 2", "Drone", "Risers", "Impactos", "—", "—", "—" },
+            { "Click", "Guía", "Metron", "—", "—", "—", "—", "—" }
+        };
+        static constexpr std::uint32_t trackColours[8] {
+            0xff168cff, 0xff9a4cf3, 0xff1bcf7a, 0xffffc52f,
+            0xffff4dad, 0xffff5353, 0xff13bfe7, 0xff87929c
+        };
+
+        auto area = getLocalBounds();
+        g.setColour(juce::Colour(0xff101820));
+        g.fillRoundedRectangle(area.toFloat(), 5.0f);
+        g.setColour(juce::Colour(0xff35434f));
+        g.drawRoundedRectangle(area.toFloat().reduced(0.5f), 5.0f, 1.0f);
+
+        constexpr int columns = 8;
+        constexpr int rows = 8;
+        const int headerH = 30;
+        const int colW = std::max(1, area.getWidth() / columns);
+        const int rowH = std::max(18, (area.getHeight() - headerH) / rows);
+
+        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        for (int col = 0; col < columns; ++col)
+        {
+            const int x = col * colW;
+            auto colour = juce::Colour(trackColours[col]);
+            auto header = juce::Rectangle<int>(x, 0,
+                col == columns - 1 ? area.getWidth() - x : colW, headerH).reduced(1);
+            g.setColour(colour.withMultipliedBrightness(col == selectedTrack_ ? 1.15f : 0.9f));
+            g.fillRoundedRectangle(header.toFloat(), 3.5f);
+            g.setColour(col <= 4 ? juce::Colour(0xff071018) : juce::Colours::white);
+            g.drawText(juce::String(col + 1) + "  " + trackNames[col], header.reduced(5, 0),
+                       juce::Justification::centredLeft, true);
+
+            for (int row = 0; row < rows; ++row)
+            {
+                const int y = headerH + row * rowH;
+                auto cell = juce::Rectangle<int>(x, y,
+                    col == columns - 1 ? area.getWidth() - x : colW,
+                    row == rows - 1 ? area.getHeight() - y : rowH).reduced(1);
+
+                const bool populated = juce::String(cells[col][row]) != "—";
+                auto base = populated ? colour.withAlpha(0.28f) : juce::Colour(0xff182129);
+                if (row == selectedScene_)
+                    base = populated ? colour.withAlpha(0.58f) : juce::Colour(0xff22303b);
+
+                g.setColour(base);
+                g.fillRoundedRectangle(cell.toFloat(), 2.0f);
+                g.setColour(juce::Colour(0xff41515e).withAlpha(0.75f));
+                g.drawRoundedRectangle(cell.toFloat(), 2.0f, 0.7f);
+
+                if (populated)
+                {
+                    auto textArea = cell.reduced(5, 0);
+                    g.setColour(row == selectedScene_ ? juce::Colours::white : juce::Colour(0xffd9e4ec));
+                    g.setFont(juce::FontOptions(10.5f));
+                    g.drawText("▶", textArea.removeFromLeft(14), juce::Justification::centred);
+                    g.drawText(cells[col][row], textArea, juce::Justification::centredLeft, true);
+                }
+            }
+        }
+
+        const int y = headerH + selectedScene_ * rowH;
+        g.setColour(juce::Colour(0xffeaf5ff).withAlpha(0.78f));
+        g.drawHorizontalLine(y, 1.0f, static_cast<float>(getWidth() - 1));
+        g.drawHorizontalLine(std::min(getHeight() - 1, y + rowH), 1.0f, static_cast<float>(getWidth() - 1));
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (getWidth() <= 0 || getHeight() <= 0)
+            return;
+        constexpr int columns = 8;
+        constexpr int rows = 8;
+        const int headerH = 30;
+        const int colW = std::max(1, getWidth() / columns);
+        const int col = juce::jlimit(0, columns - 1, e.x / colW);
+        selectedTrack_ = col;
+        if (onTrack_) onTrack_(col);
+
+        if (e.y >= headerH && col == 0)
+        {
+            const int rowH = std::max(18, (getHeight() - headerH) / rows);
+            const int row = juce::jlimit(0, rows - 1, (e.y - headerH) / rowH);
+            selectedScene_ = row;
+            if (onScene_) onScene_(row);
+        }
+        repaint();
+    }
+
+private:
+    std::function<void(int)> onScene_;
+    std::function<void(int)> onTrack_;
+    int selectedScene_ { 1 };
+    int selectedTrack_ { 0 };
 };
 }
 
@@ -161,8 +297,7 @@ void MainComponent::MixerStrip::paint(juce::Graphics& g)
     {
         const float x = graph.getX() + step * static_cast<float>(i);
         const float amplitude = juce::jlimit(0.0f, 1.0f, meterHistory_[i]);
-        const float phase = static_cast<float>(i) * 1.73f + static_cast<float>(index_) * 0.41f;
-        const float y = mid - std::sin(phase) * amplitude * graph.getHeight() * 0.42f;
+        const float y = graph.getBottom() - amplitude * graph.getHeight();
         if (i == 0) waveform.startNewSubPath(x, y);
         else waveform.lineTo(x, y);
     }
@@ -311,10 +446,15 @@ MainComponent::MainComponent()
     setLookAndFeel(lookAndFeel_.get());
     syncPaletteGlobals(lookAndFeel_->palette());
     setOpaque(true);
+    brandLogo_ = juce::ImageFileFormat::loadFrom(BinaryData::J3WorshipLogo_png,
+                                                  BinaryData::J3WorshipLogo_pngSize);
     pluginFormatManager_.addFormat(std::make_unique<juce::VST3PluginFormat>());
     for (int ch = 0; ch < kMaxChannels; ++ch)
         for (int slot = 0; slot < kPluginSlots; ++slot)
+        {
             pluginBypass_[ch][slot].store(false);
+            pluginFaults_[ch][slot].store(0);
+        }
     for (int i = 0; i < kMaxChannels; ++i)
     {
         channelGain_[i].store(dbToGain(-6.0));
@@ -368,7 +508,7 @@ MainComponent::MainComponent()
     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(brandLabel_);
 
-    versionLabel_.setText("1.1.0", juce::dontSendNotification);
+    versionLabel_.setText("1.2.0", juce::dontSendNotification);
     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
     addAndMakeVisible(versionLabel_);
@@ -378,7 +518,14 @@ MainComponent::MainComponent()
     statusLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
     addAndMakeVisible(statusLabel_);
 
-    for (int id = 1; id <= 5; ++id)
+    safetyLabel_.setText("LIVE SAFE · CHECK", juce::dontSendNotification);
+    safetyLabel_.setJustificationType(juce::Justification::centred);
+    safetyLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+    safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff402a14));
+    safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffffc247));
+    addAndMakeVisible(safetyLabel_);
+
+    for (int id = 1; id <= 6; ++id)
         themeBox_.addItem(j3ui::themeName(id), id);
     themeBox_.setSelectedId(1, juce::dontSendNotification);
     themeBox_.setTooltip("Tema visual de J3 Worship");
@@ -518,7 +665,28 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(*dashboardRightCard_);
     mixerPage_.addAndMakeVisible(*dashboardBottomCard_);
 
-    dashboardSetlistTitle_.setText("SETLIST", juce::dontSendNotification);
+    sessionGrid_ = std::make_unique<SessionGrid>(
+        [this, names, kinds](int scene)
+        {
+            const int index = juce::jlimit(0, static_cast<int>(names.size()) - 1, scene);
+            setLiveSection(names[static_cast<std::size_t>(index)],
+                           kinds[static_cast<std::size_t>(index)],
+                           kinds[static_cast<std::size_t>(index)] == j3::SectionKind::FreePad ? 1 : 4);
+            refreshDashboard();
+        },
+        [this](int channel)
+        {
+            const int ch = juce::jlimit(0, kMaxChannels - 1, channel);
+            setMixerBank((ch / kVisibleChannels) * kVisibleChannels);
+            pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+            dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+            selectedDspChannel_ = ch;
+            refreshPluginUi();
+            refreshDspUi();
+        });
+    mixerPage_.addAndMakeVisible(*sessionGrid_);
+
+    dashboardSetlistTitle_.setText("BIBLIOTECA · SETLIST", juce::dontSendNotification);
     dashboardSetlistTitle_.setFont(juce::FontOptions(17.0f, juce::Font::bold));
     dashboardSongInfo_.setFont(juce::FontOptions(14.0f));
     dashboardSongInfo_.setJustificationType(juce::Justification::topLeft);
@@ -583,7 +751,10 @@ MainComponent::MainComponent()
 
     dashboardLiveTitle_.setText("LIVE · SECCIONES", juce::dontSendNotification);
     dashboardLiveTitle_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
-    dashboardStopButton_.onClick = [this] { stopLiveTransport(); };
+    dashboardStopButton_.setButtonText("STOP ALL");
+    dashboardStopButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff7d1f2b));
+    dashboardStopButton_.setTooltip("Silencia PA, pads, click y reproducción inmediatamente. La grabación continúa.");
+    dashboardStopButton_.onClick = [this] { panicStopAll(); };
     mixerPage_.addAndMakeVisible(dashboardStopButton_);
     dashboardPadButton_.onClick = [this]
     {
@@ -761,7 +932,7 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
 
-    pluginsTitle_.setText("VST3 INSERTS · 4 SLOTS PER INPUT", juce::dontSendNotification);
+    pluginsTitle_.setText("VST3 INSERTS · 8 SLOTS PER INPUT", juce::dontSendNotification);
     pluginsTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
     pluginsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
     pluginsPage_.addAndMakeVisible(pluginsTitle_);
@@ -782,6 +953,7 @@ MainComponent::MainComponent()
     scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     loadPluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
     removePluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    openPluginEditorButton_.setButtonText("OPEN PLUGIN");
     openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
     bypassPluginButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
     scanPluginsButton_.onClick = [this] { scanVst3Plugins(); };
@@ -921,7 +1093,9 @@ MainComponent::MainComponent()
     bpmSlider_.onValueChange = [this]
     {
         clickGenerator_.setTempo(bpmSlider_.getValue());
+        dawWorkspace_.setTempoFromHost(bpmSlider_.getValue());
         if (liveStarted_) liveEngine_.setTempo(bpmSlider_.getValue(), clickGenerator_.numerator());
+        updateClickUi();
     };
     clickPage_.addAndMakeVisible(bpmSlider_);
 
@@ -1060,10 +1234,63 @@ MainComponent::MainComponent()
     };
     diagnosticsPage_.addAndMakeVisible(runCheckButton_);
 
+    dawWorkspace_.onBpmChanged = [this](double value)
+    {
+        if (std::abs(bpmSlider_.getValue() - value) > 0.001)
+            bpmSlider_.setValue(value, juce::dontSendNotification);
+        clickGenerator_.setTempo(value);
+        if (liveStarted_)
+            liveEngine_.setTempo(value, clickGenerator_.numerator());
+        updateClickUi();
+        refreshDashboard();
+    };
+    dawWorkspace_.onPlayStateChanged = [this](bool playing)
+    {
+        if (playing)
+        {
+            transportRunning_.store(true, std::memory_order_release);
+            clickGenerator_.setTempo(dawWorkspace_.bpm());
+            clickGenerator_.setEnabled(clickEnabledButton_.getToggleState());
+        }
+        else if (!liveStarted_)
+        {
+            transportRunning_.store(false, std::memory_order_release);
+            clickGenerator_.setEnabled(false);
+            pendingBeatEvents_.store(0, std::memory_order_release);
+        }
+        updateClickUi();
+    };
+    dawWorkspace_.onSelectedTrackChanged = [this](int track)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, track);
+        pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        selectedDspChannel_ = ch;
+        setMixerBank((ch / kVisibleChannels) * kVisibleChannels);
+        refreshPluginUi();
+        refreshDspUi();
+    };
+    dawWorkspace_.onOpenMixer = [this] { tabs_.setCurrentTabIndex(0); };
+    dawWorkspace_.onOpenDsp = [this]
+    {
+        tabs_.setCurrentTabIndex(3);
+        refreshDspUi();
+    };
+    dawWorkspace_.onOpenPlugins = [this]
+    {
+        tabs_.setCurrentTabIndex(6);
+        refreshPluginUi();
+    };
+    dawWorkspace_.onOpenPads = [this] { tabs_.setCurrentTabIndex(5); };
+    dawWorkspace_.onOpenIem = [this]
+    {
+        tabs_.setCurrentTabIndex(7);
+        refreshIemUi();
+    };
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
-    tabs_.setTabBarDepth(46);
-    tabs_.addTab("MEZCLADOR", juce::Colour(panel), &mixerPage_, false);
-    tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
+    tabs_.setTabBarDepth(42);
+    tabs_.addTab("LIVE", juce::Colour(panel), &mixerPage_, false);
+    tabs_.addTab("ARRANGER", juce::Colour(panel), &dawWorkspace_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GRUPOS", juce::Colour(panel), &groupsPage_, false);
@@ -1090,7 +1317,7 @@ MainComponent::MainComponent()
     updateRecordingUi();
     juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this)]
     {
-        if (safe != nullptr) safe->scanVst3Plugins();
+        if (safe != nullptr) safe->restoreSavedPluginsAfterScan();
     });
     applyTheme(themeId_, false);
     refreshDashboard();
@@ -1124,11 +1351,17 @@ void MainComponent::paint(juce::Graphics& g)
     g.fillRect(top);
     g.setColour(juce::Colour(border));
     g.drawHorizontalLine(73, 0.0f, static_cast<float>(getWidth()));
+    if (brandLogo_.isValid())
+        g.drawImageWithin(brandLogo_, 14, 7, 58, 58, juce::RectanglePlacement::centred);
+    g.setColour(juce::Colour(0xffaebdc8));
+    g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+    g.drawText("LIVE · MIX · IEM · RECORD · WORSHIP", 80, 48, 220, 14,
+               juce::Justification::centredLeft, false);
 }
 
 void MainComponent::applyTheme(int themeId, bool persist)
 {
-    themeId_ = juce::jlimit(1, 5, themeId);
+    themeId_ = juce::jlimit(1, 6, themeId);
     if (lookAndFeel_ == nullptr)
         lookAndFeel_ = std::make_unique<j3ui::LookAndFeel>();
 
@@ -1268,13 +1501,32 @@ void MainComponent::refreshDashboard()
     dashboardRecordInfo_.setText(recording ? "Grabando multicanal…" : "Listo para grabación multicanal",
                                  juce::dontSendNotification);
 
+    const int selectedPluginChannel = juce::jlimit(0, kMaxChannels - 1,
+        std::max(0, pluginChannelBox_.getSelectedId() - 1));
+    juce::String chain;
+    chain << inputChannelName(selectedPluginChannel) << "\n";
     int loadedPlugins = 0;
-    for (int ch = 0; ch < kMaxChannels; ++ch)
-        for (int slot = 0; slot < kPluginSlots; ++slot)
-            if (channelPlugins_[ch][slot].load(std::memory_order_acquire) != nullptr)
-                ++loadedPlugins;
-    dashboardPluginsInfo_.setText(juce::String(loadedPlugins) + " inserts activos\n4 slots VST3 por canal",
-                                  juce::dontSendNotification);
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+    {
+        auto plugin = channelPlugins_[selectedPluginChannel][slot].load(std::memory_order_acquire);
+        if (plugin == nullptr)
+            continue;
+        if (loadedPlugins < 3)
+        {
+            if (loadedPlugins > 0) chain << " · ";
+            chain << (pluginNames_[selectedPluginChannel][slot].isNotEmpty()
+                ? pluginNames_[selectedPluginChannel][slot] : plugin->getName());
+            if (pluginBypass_[selectedPluginChannel][slot].load(std::memory_order_relaxed))
+                chain << (pluginFaults_[selectedPluginChannel][slot].load(std::memory_order_relaxed) > 0
+                    ? " [SAFE BYP]" : " [BYP]");
+        }
+        ++loadedPlugins;
+    }
+    if (loadedPlugins == 0)
+        chain << "Sin inserts · 8 slots disponibles";
+    else if (loadedPlugins > 3)
+        chain << " · +" << (loadedPlugins - 3);
+    dashboardPluginsInfo_.setText(chain, juce::dontSendNotification);
 
     dashboardPadButton_.setToggleState(padEnabledButton_.getToggleState(), juce::dontSendNotification);
     dashboardClickButton_.setToggleState(clickEnabledButton_.getToggleState(), juce::dontSendNotification);
@@ -1327,7 +1579,8 @@ void MainComponent::beginUpdateInstall()
     const auto safeToInstallNow = [this]
     {
         const bool liveMode = liveMonitorEnabled_.load(std::memory_order_acquire);
-        const bool recording = recordingEnabled_.load(std::memory_order_acquire);
+        const bool recording = recordingEnabled_.load(std::memory_order_acquire)
+            || dawWorkspace_.isRecordingTracks();
         const bool sessionActive = transportRunning_.load(std::memory_order_acquire);
         return j3::Updater::safeToInstall(liveMode, recording, sessionActive);
     };
@@ -1382,7 +1635,8 @@ void MainComponent::beginUpdateInstall()
             safe->updateButton_.setButtonText("INSTALAR " + update.versionText);
             const bool canInstall = j3::Updater::safeToInstall(
                 safe->liveMonitorEnabled_.load(std::memory_order_acquire),
-                safe->recordingEnabled_.load(std::memory_order_acquire),
+                safe->recordingEnabled_.load(std::memory_order_acquire)
+                    || safe->dawWorkspace_.isRecordingTracks(),
                 safe->transportRunning_.load(std::memory_order_acquire));
             if (!canInstall)
                 return;
@@ -1744,6 +1998,7 @@ void MainComponent::resized()
 {
     auto area = getLocalBounds();
     auto top = area.removeFromTop(74).reduced(14, 8);
+    top.removeFromLeft(64);
     brandLabel_.setBounds(top.removeFromLeft(190));
     versionLabel_.setBounds(top.removeFromLeft(62).reduced(0, 11));
 
@@ -1762,6 +2017,8 @@ void MainComponent::resized()
     {
         updateButton_.setBounds({});
     }
+    safetyLabel_.setBounds(top.removeFromRight(126).reduced(0, 5));
+    top.removeFromRight(8);
     statusLabel_.setBounds(top.reduced(4, 0));
     tabs_.setBounds(area.reduced(8));
 
@@ -1809,13 +2066,13 @@ void MainComponent::resized()
     setlistInfoLabel_.setBounds(setArea.removeFromTop(170));
 
     auto mixerArea = mixerPage_.getLocalBounds().reduced(9);
-    const int leftWidth = juce::jlimit(190, 248, mixerArea.getWidth() * 16 / 100);
-    const int rightWidth = juce::jlimit(218, 278, mixerArea.getWidth() * 18 / 100);
+    const int leftWidth = juce::jlimit(205, 252, mixerArea.getWidth() * 16 / 100);
+    const int rightWidth = juce::jlimit(238, 302, mixerArea.getWidth() * 19 / 100);
     auto dashboardLeft = mixerArea.removeFromLeft(leftWidth);
     mixerArea.removeFromLeft(8);
     auto dashboardRight = mixerArea.removeFromRight(rightWidth);
     mixerArea.removeFromRight(8);
-    auto dashboardBottom = mixerArea.removeFromBottom(118);
+    auto dashboardBottom = mixerArea.removeFromBottom(126);
     mixerArea.removeFromBottom(8);
 
     if (dashboardLeftCard_) dashboardLeftCard_->setBounds(dashboardLeft);
@@ -1847,9 +2104,14 @@ void MainComponent::resized()
     dashboardPluginsTitle_.setBounds(rightContent.removeFromTop(24));
     dashboardPluginsInfo_.setBounds(rightContent.removeFromTop(62));
 
-    auto mixerNav = mixerArea.removeFromTop(34);
-    mixerPrevButton_.setBounds(mixerNav.removeFromLeft(86).reduced(1));
-    mixerNextButton_.setBounds(mixerNav.removeFromRight(86).reduced(1));
+    const int sessionHeight = juce::jlimit(180, 250, mixerArea.getHeight() * 34 / 100);
+    if (sessionGrid_)
+        sessionGrid_->setBounds(mixerArea.removeFromTop(sessionHeight));
+    mixerArea.removeFromTop(6);
+
+    auto mixerNav = mixerArea.removeFromTop(32);
+    mixerPrevButton_.setBounds(mixerNav.removeFromLeft(82).reduced(1));
+    mixerNextButton_.setBounds(mixerNav.removeFromRight(82).reduced(1));
     mixerBankLabel_.setBounds(mixerNav);
     mixerArea.removeFromTop(4);
     const int stripW = std::max(1, mixerArea.getWidth() / kVisibleChannels);
@@ -2081,7 +2343,7 @@ void MainComponent::loadAppState()
     if (xml == nullptr || !xml->hasTagName("J3WorshipState"))
         return;
 
-    themeId_ = juce::jlimit(1, 5, xml->getIntAttribute("themeId", 1));
+    themeId_ = juce::jlimit(1, 6, xml->getIntAttribute("themeId", 1));
     themeBox_.setSelectedId(themeId_, juce::dontSendNotification);
     applyTheme(themeId_, false);
 
@@ -2370,8 +2632,18 @@ void MainComponent::startStopRecording()
         return;
     }
 
+    const auto root = recordingsRoot();
+    root.createDirectory();
+    const auto freeBytes = root.getBytesFreeOnVolume();
+    constexpr std::int64_t kMinimumRecordingFreeBytes = 1024LL * 1024LL * 1024LL;
+    if (freeBytes >= 0 && freeBytes < kMinimumRecordingFreeBytes)
+    {
+        showAudioError("Espacio insuficiente para una grabación segura. Liberá al menos 1 GB en el disco de grabaciones.");
+        return;
+    }
+
     const auto now = juce::Time::getCurrentTime();
-    const auto dir = recordingsRoot().getChildFile(now.formatted("%Y-%m-%d")).getChildFile(now.formatted("%H%M%S-Service"));
+    const auto dir = root.getChildFile(now.formatted("%Y-%m-%d")).getChildFile(now.formatted("%H%M%S-Service"));
     std::string error;
     if (!recorder_.start(dir.getFullPathName().toStdString(), static_cast<std::uint32_t>(sampleRate_.load()), channelNames, error))
     {
@@ -2409,7 +2681,12 @@ void MainComponent::updateRecordingUi()
     status << (active ? "● RECORDING\n" : "READY\n");
     status << "Folder: " << recordingsRoot().getFullPathName() << "\n";
     status << "Individual WAV files: " << recordChannelCount_.load() << "\n";
-    status << "Dropped recording blocks: " << recorder_.overflowCount() << "\n";
+    const auto drops = recorder_.overflowCount();
+    status << "Dropped recording blocks: " << drops << "\n";
+    if (recorder_.hasWorkerError())
+        status << "⚠ DISK WRITE ERROR — recording protection stopped the writer.\n";
+    else if (drops > 0)
+        status << "⚠ DISK TOO SLOW — el audio en vivo sigue protegido, revisá la grabación.\n";
     status << "Audio is copied into a lock-free queue; disk I/O stays off the real-time callback.";
     recordingStatusLabel_.setText(status, juce::dontSendNotification);
 }
@@ -2427,8 +2704,23 @@ void MainComponent::handleTapTempo()
 }
 
 
+bool MainComponent::pluginMutationLocked() const noexcept
+{
+    return liveMonitorEnabled_.load(std::memory_order_acquire)
+        || recordingEnabled_.load(std::memory_order_acquire)
+        || dawWorkspace_.isRecordingTracks()
+        || transportRunning_.load(std::memory_order_acquire)
+        || dawWorkspace_.isPlaying();
+}
+
 void MainComponent::scanVst3Plugins()
 {
+    if (pluginMutationLocked())
+    {
+        showAudioError("Por seguridad, el escaneo VST3 está bloqueado durante LIVE, reproducción o grabación. Detené el transporte y volvé a intentar.");
+        return;
+    }
+
     auto* format = pluginFormatManager_.getFormat(0);
     if (format == nullptr)
     {
@@ -2484,9 +2776,14 @@ void MainComponent::refreshPluginUi()
     if (loaded)
     {
         status << "Loaded: " << (pluginNames_[ch][slot].isNotEmpty() ? pluginNames_[ch][slot] : plugin->getName()) << "\n";
+        const auto faults = pluginFaults_[ch][slot].load(std::memory_order_relaxed);
         status << "Latency: " << plugin->getLatencySamples() << " samples · "
                << (pluginBypass_[ch][slot].load(std::memory_order_relaxed) ? "BYPASSED" : "ACTIVE") << "\n";
-        status << "Use OPEN PARAMETERS for the generic parameter editor.";
+        if (faults > 0)
+            status << "LIVE SAFE: auto-bypass por audio inválido/fallo (" << faults << ").\n";
+        status << (plugin->hasEditor()
+            ? "OPEN PLUGIN abre la interfaz nativa del VST3."
+            : "OPEN PLUGIN abre el editor genérico de parámetros.");
     }
     else if (pluginPaths_[ch][slot].isNotEmpty())
     {
@@ -2503,6 +2800,12 @@ void MainComponent::refreshPluginUi()
 
 void MainComponent::loadSelectedPlugin()
 {
+    if (pluginMutationLocked())
+    {
+        showAudioError("Por seguridad, no se cargan plugins nuevos durante LIVE, reproducción o grabación. Podés abrir o bypassar los que ya están cargados.");
+        return;
+    }
+
     const int selected = pluginCatalogBox_.getSelectedId() - 1;
     const auto& plugins = pluginCatalog_.plugins();
     if (selected < 0 || selected >= static_cast<int>(plugins.size()))
@@ -2581,6 +2884,7 @@ void MainComponent::loadPluginPathIntoSlot(const juce::String& path, int channel
             safe->pluginPaths_[channel][slot] = path;
             safe->pluginNames_[channel][slot] = shared->getName();
             safe->pluginBypass_[channel][slot].store(savedBypass, std::memory_order_release);
+            safe->pluginFaults_[channel][slot].store(0, std::memory_order_release);
             safe->channelPlugins_[channel][slot].store(shared, std::memory_order_release);
             safe->refreshPluginUi();
             safe->saveAppState();
@@ -2589,6 +2893,12 @@ void MainComponent::loadPluginPathIntoSlot(const juce::String& path, int channel
 
 void MainComponent::removeSelectedPlugin()
 {
+    if (pluginMutationLocked())
+    {
+        showAudioError("Por seguridad, no se quitan plugins durante LIVE, reproducción o grabación. Usá BYPASS si necesitás sacarlo de la cadena inmediatamente.");
+        return;
+    }
+
     const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
     const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
     channelPlugins_[ch][slot].store({}, std::memory_order_release);
@@ -2596,6 +2906,7 @@ void MainComponent::removeSelectedPlugin()
     pluginNames_[ch][slot].clear();
     pluginStateBase64_[ch][slot].clear();
     pluginBypass_[ch][slot].store(false, std::memory_order_release);
+    pluginFaults_[ch][slot].store(0, std::memory_order_release);
     refreshPluginUi();
     saveAppState();
 }
@@ -2645,30 +2956,55 @@ const float* MainComponent::processPluginChain(int channel, const float* input, 
         if (plugin == nullptr)
             continue;
 
+        const int channels = juce::jlimit(1, 2,
+            std::max(plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels()));
+        if (channels == 2)
+            pluginScratch_.copyFrom(1, 0, pluginScratch_, 0, 0, numSamples);
+        for (int ch = 0; ch < channels; ++ch)
+            pluginGuardScratch_.copyFrom(ch, 0, pluginScratch_, ch, 0, numSamples);
+
+        bool restoreAndBypass = false;
         try
         {
-            const int channels = juce::jlimit(1, 2,
-                std::max(plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels()));
-            if (channels == 2)
-                pluginScratch_.copyFrom(1, 0, pluginScratch_, 0, 0, numSamples);
-
             juce::AudioBuffer<float> view(pluginScratch_.getArrayOfWritePointers(), channels, numSamples);
             pluginMidiScratch_.clear();
             plugin->processBlock(view, pluginMidiScratch_);
 
-            if (plugin->getTotalNumOutputChannels() >= 2)
+            for (int ch = 0; ch < channels && !restoreAndBypass; ++ch)
+            {
+                const auto* data = pluginScratch_.getReadPointer(ch);
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    if (!std::isfinite(data[i]) || std::abs(data[i]) > 64.0f)
+                    {
+                        restoreAndBypass = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!restoreAndBypass && plugin->getTotalNumOutputChannels() >= 2)
             {
                 auto* mono = pluginScratch_.getWritePointer(0);
                 const auto* right = pluginScratch_.getReadPointer(1);
                 for (int i = 0; i < numSamples; ++i)
                     mono[i] = (mono[i] + right[i]) * 0.70710678f;
             }
-            pluginScratch_.copyFrom(1, 0, pluginScratch_, 0, 0, numSamples);
         }
         catch (...)
         {
-            pluginBypass_[channel][slot].store(true, std::memory_order_release);
+            restoreAndBypass = true;
         }
+
+        if (restoreAndBypass)
+        {
+            for (int ch = 0; ch < channels; ++ch)
+                pluginScratch_.copyFrom(ch, 0, pluginGuardScratch_, ch, 0, numSamples);
+            pluginBypass_[channel][slot].store(true, std::memory_order_release);
+            pluginFaults_[channel][slot].fetch_add(1, std::memory_order_relaxed);
+        }
+
+        pluginScratch_.copyFrom(1, 0, pluginScratch_, 0, 0, numSamples);
     }
 
     return pluginScratch_.getReadPointer(0);
@@ -2721,13 +3057,14 @@ void MainComponent::configureAudio()
         lastAudioError_ = error;
         statusLabel_.setText("Audio: requiere configuración", juce::dontSendNotification);
         statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
+        scheduleReconnect();
     }
-    else
+    else if (savedState == nullptr)
     {
-        if (savedState == nullptr)
-            preferAsioWhenAvailable(true);
-        deviceManager_.addAudioCallback(this);
+        preferAsioWhenAvailable(true);
     }
+
+    deviceManager_.addAudioCallback(this);
 
     scanAvailableDevices();
     refreshRoutingControls();
@@ -2966,6 +3303,40 @@ void MainComponent::updateDiagnostics()
         const auto activeOutputs = d->getActiveOutputChannels().countNumberOfSetBits();
         const auto xruns = deviceManager_.getXRunCount();
         const auto isAsio = deviceManager_.getCurrentAudioDeviceType().containsIgnoreCase("ASIO");
+        const bool safeRouting = routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load());
+        const auto outputFaults = outputSafetyEvents_.load(std::memory_order_relaxed);
+        const auto recordingDrops = recorder_.overflowCount();
+        bool pluginProtectionActive = false;
+        for (int ch = 0; ch < kMaxChannels && !pluginProtectionActive; ++ch)
+            for (int slot = 0; slot < kPluginSlots; ++slot)
+                if (pluginFaults_[ch][slot].load(std::memory_order_relaxed) > 0)
+                {
+                    pluginProtectionActive = true;
+                    break;
+                }
+
+        const bool hardUnsafe = !audioRunning_.load(std::memory_order_acquire) || !safeRouting;
+        const bool degraded = xruns > 0 || outputFaults > 0 || recordingDrops > 0
+            || recorder_.hasWorkerError() || pluginProtectionActive;
+
+        if (hardUnsafe)
+        {
+            safetyLabel_.setText("LIVE SAFE · CHECK", juce::dontSendNotification);
+            safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff4a151c));
+            safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffff7384));
+        }
+        else if (degraded)
+        {
+            safetyLabel_.setText("LIVE SAFE · WARN", juce::dontSendNotification);
+            safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff4a3612));
+            safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffffcf67));
+        }
+        else
+        {
+            safetyLabel_.setText("LIVE SAFE ✓", juce::dontSendNotification);
+            safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff123c2b));
+            safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff73e7ad));
+        }
 
         report << "✓ AUDIO DEVICE\n    " << d->getName() << "\n\n";
         report << (isAsio ? "✓" : "⚠") << " DRIVER TYPE\n    " << deviceManager_.getCurrentAudioDeviceType();
@@ -2978,6 +3349,10 @@ void MainComponent::updateDiagnostics()
         report << "✓ REPORTED I/O LATENCY\n    Input " << juce::String(inLatencyMs, 2)
                << " ms  ·  Output " << juce::String(outLatencyMs, 2) << " ms\n\n";
         report << (xruns == 0 ? "✓" : "⚠") << " XRUNS / DROPOUTS\n    " << xruns << "\n\n";
+        report << (pluginProtectionActive ? "⚠" : "✓") << " PLUGIN PROTECTION\n    "
+               << (pluginProtectionActive ? "Uno o más VST3 fueron auto-bypasseados para proteger el audio."
+                                          : "Sin fallos de plugins detectados.")
+               << "\n\n";
         report << (routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load()) ? "✓" : "✕")
                << " SAFE ROUTING\n    PA L " << (paLeft_.load() + 1) << "  ·  PA R " << (paRight_.load() + 1)
                << "  ·  CLICK " << (clickOutput_.load() < 0 ? juce::String("OFF") : juce::String(clickOutput_.load() + 1)) << "\n\n";
@@ -2997,6 +3372,9 @@ void MainComponent::updateDiagnostics()
             report << "\n\nLAST ERROR\n" << lastAudioError_;
         statusLabel_.setText("Audio: sin dispositivo", juce::dontSendNotification);
         statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
+        safetyLabel_.setText("LIVE SAFE · NO AUDIO", juce::dontSendNotification);
+        safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff4a151c));
+        safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffff7384));
     }
     diagnosticsLabel_.setText(report, juce::dontSendNotification);
 }
@@ -3039,6 +3417,26 @@ void MainComponent::stopLiveTransport()
     refreshDashboard();
 }
 
+void MainComponent::panicStopAll()
+{
+    liveMonitorEnabled_.store(false, std::memory_order_release);
+    liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
+
+    ambientPad_.setEnabled(false);
+    padEnabledButton_.setToggleState(false, juce::dontSendNotification);
+
+    stopLiveTransport();
+    dawWorkspace_.emergencyStop();
+
+    statusLabel_.setText("STOP ALL · salidas de show silenciadas · grabación preservada", juce::dontSendNotification);
+    statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
+    safetyLabel_.setText("LIVE SAFE · MUTED", juce::dontSendNotification);
+    safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff402a14));
+    safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffffc247));
+    refreshPadUi();
+    refreshDashboard();
+}
+
 void MainComponent::refreshLiveLabels()
 {
     nowLabel_.setText("NOW: " + juce::String(liveEngine_.now()), juce::dontSendNotification);
@@ -3061,6 +3459,8 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     for (int o = 0; o < numOutputChannels; ++o)
         if (outputChannelData[o] != nullptr)
             juce::FloatVectorOperations::clear(outputChannelData[o], numSamples);
+
+    dawWorkspace_.captureInputBlock(inputChannelData, numInputChannels, numSamples);
 
     const int left = paLeft_.load(std::memory_order_relaxed);
     const int right = paRight_.load(std::memory_order_relaxed);
@@ -3185,8 +3585,12 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     if (padAudible)
         ambientPad_.process(outputChannelData[left], outputChannelData[right], numSamples);
 
-    // Soft output protection is applied after live inputs and pads have been summed.
-    if (monitoring || padAudible)
+    const bool dawAudible = safePa && dawWorkspace_.isPlaying();
+    if (dawAudible)
+        dawWorkspace_.renderToMaster(outputChannelData[left], outputChannelData[right], numSamples);
+
+    // Soft output protection is applied after live inputs, pads and DAW playback have been summed.
+    if (monitoring || padAudible || dawAudible)
     {
         for (int o = 0; o < numOutputChannels; ++o)
         {
@@ -3194,7 +3598,17 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             if (out == nullptr || o == click)
                 continue;
             for (int i = 0; i < numSamples; ++i)
-                out[i] = std::tanh(out[i]);
+            {
+                if (!std::isfinite(out[i]))
+                {
+                    out[i] = 0.0f;
+                    outputSafetyEvents_.fetch_add(1, std::memory_order_relaxed);
+                }
+                else
+                {
+                    out[i] = std::tanh(out[i]);
+                }
+            }
         }
     }
 
@@ -3251,6 +3665,9 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     busScratch_.clear();
     pluginScratch_.setSize(2, preparedBlock, false, true, false);
     pluginScratch_.clear();
+    pluginGuardScratch_.setSize(2, preparedBlock, false, true, false);
+    pluginGuardScratch_.clear();
+    outputSafetyEvents_.store(0, std::memory_order_release);
     for (int ch = 0; ch < kMaxChannels; ++ch)
     {
         for (int slot = 0; slot < kPluginSlots; ++slot)
@@ -3277,6 +3694,7 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     }
     clickGenerator_.prepare(sr);
     ambientPad_.prepare(sr);
+    dawWorkspace_.prepare(sr, preparedBlock);
     clickGenerator_.setTempo(bpmSlider_.getValue());
     clickGenerator_.setEnabled(transportRunning_.load(std::memory_order_acquire));
     audioRunning_.store(true, std::memory_order_release);
@@ -3299,6 +3717,7 @@ void MainComponent::audioDeviceStopped()
     audioRunning_.store(false, std::memory_order_release);
     liveMonitorEnabled_.store(false, std::memory_order_release);
     recordingEnabled_.store(false, std::memory_order_release);
+    scheduleReconnect();
     juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this)]
     {
         if (safe != nullptr)
@@ -3358,6 +3777,9 @@ void MainComponent::timerCallback()
     ++ticks;
     if (ticks % 30 == 0)
     {
+        if (recordingEnabled_.load(std::memory_order_acquire) && recorder_.hasWorkerError())
+            stopRecordingAfterDeviceLoss("Grabación detenida por error de escritura en disco. El audio LIVE continúa protegido.");
+
         updateDiagnostics();
         updateClickUi();
         updateRecordingUi();
@@ -3366,8 +3788,7 @@ void MainComponent::timerCallback()
     if (ticks % 150 == 0)
         saveAppState();
 
-    if (!audioRunning_.load(std::memory_order_acquire) && !shuttingDown_.load(std::memory_order_acquire)
-        && deviceManager_.getCurrentAudioDevice() != nullptr)
+    if (!audioRunning_.load(std::memory_order_acquire) && !shuttingDown_.load(std::memory_order_acquire))
     {
         const auto now = static_cast<std::uint64_t>(juce::Time::getMillisecondCounterHiRes());
         const auto waitMs = static_cast<std::uint64_t>(std::min(10000, 2000 + reconnectAttempts_ * 1500));

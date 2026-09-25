@@ -8,7 +8,7 @@ Palette paletteForTheme(int id)
 {
     switch (id)
     {
-        case 2: // Ableton-inspired neutral studio
+        case 2: // Ableton-inspired: neutral, compact, warm highlight
             return {
                 juce::Colour(0xff202020), juce::Colour(0xff282828), juce::Colour(0xff303030),
                 juce::Colour(0xff393939), juce::Colour(0xff464646), juce::Colour(0xffffb84a),
@@ -16,15 +16,23 @@ Palette paletteForTheme(int id)
                 juce::Colour(0xffff5f64), juce::Colour(0xfff1f1f1), juce::Colour(0xffb7b7b7),
                 juce::Colour(0xff565656)
             };
-        case 3: // Studio Blue
+        case 3: // FL-inspired: deep charcoal with vivid green/orange accents
             return {
-                juce::Colour(0xff071018), juce::Colour(0xff0b1722), juce::Colour(0xff0e1d29),
-                juce::Colour(0xff132633), juce::Colour(0xff193343), juce::Colour(0xff208bff),
-                juce::Colour(0xff00c2ff), juce::Colour(0xff2ed47a), juce::Colour(0xffffc247),
-                juce::Colour(0xffff4d64), juce::Colour(0xfff0f7ff), juce::Colour(0xff94a9ba),
-                juce::Colour(0xff274354)
+                juce::Colour(0xff16191b), juce::Colour(0xff202428), juce::Colour(0xff252b2e),
+                juce::Colour(0xff30373a), juce::Colour(0xff394246), juce::Colour(0xffff8c42),
+                juce::Colour(0xff8ecf45), juce::Colour(0xff68dc7b), juce::Colour(0xffffc857),
+                juce::Colour(0xffff5c70), juce::Colour(0xfff4f4f0), juce::Colour(0xffadb7b6),
+                juce::Colour(0xff4a5559)
             };
-        case 4: // Midnight violet
+        case 4: // Studio One-inspired: cool blue, spacious console
+            return {
+                juce::Colour(0xff0c1118), juce::Colour(0xff111a24), juce::Colour(0xff162330),
+                juce::Colour(0xff1b2d3b), juce::Colour(0xff263d4e), juce::Colour(0xff3a9cff),
+                juce::Colour(0xff53c9ff), juce::Colour(0xff3fd48b), juce::Colour(0xffffc65c),
+                juce::Colour(0xffff5b70), juce::Colour(0xfff1f7ff), juce::Colour(0xff9aafc1),
+                juce::Colour(0xff30495c)
+            };
+        case 5: // Midnight violet
             return {
                 juce::Colour(0xff100d18), juce::Colour(0xff171120), juce::Colour(0xff1c1528),
                 juce::Colour(0xff261d34), juce::Colour(0xff332542), juce::Colour(0xffa76cff),
@@ -32,7 +40,7 @@ Palette paletteForTheme(int id)
                 juce::Colour(0xffff6178), juce::Colour(0xfff7f0ff), juce::Colour(0xffb4a6c6),
                 juce::Colour(0xff463557)
             };
-        case 5: // High contrast stage
+        case 6: // High contrast stage
             return {
                 juce::Colour(0xff050505), juce::Colour(0xff0c0c0c), juce::Colour(0xff121212),
                 juce::Colour(0xff1c1c1c), juce::Colour(0xff262626), juce::Colour(0xff00a8ff),
@@ -40,7 +48,7 @@ Palette paletteForTheme(int id)
                 juce::Colour(0xffff4560), juce::Colour(0xffffffff), juce::Colour(0xffc9c9c9),
                 juce::Colour(0xff444444)
             };
-        default: // J3 Dark
+        default: // J3 Worship Dark
             return {
                 juce::Colour(0xff080d12), juce::Colour(0xff0b131a), juce::Colour(0xff0e1820),
                 juce::Colour(0xff12222c), juce::Colour(0xff19303d), juce::Colour(0xff158cff),
@@ -56,10 +64,11 @@ juce::String themeName(int id)
     switch (id)
     {
         case 2: return "ABLETON STYLE";
-        case 3: return "STUDIO BLUE";
-        case 4: return "MIDNIGHT";
-        case 5: return "HIGH CONTRAST";
-        default: return "J3 DARK";
+        case 3: return "FL STUDIO STYLE";
+        case 4: return "STUDIO ONE STYLE";
+        case 5: return "MIDNIGHT";
+        case 6: return "HIGH CONTRAST / STAGE";
+        default: return "J3 WORSHIP DARK";
     }
 }
 
@@ -70,7 +79,7 @@ LookAndFeel::LookAndFeel()
 
 void LookAndFeel::setTheme(int id)
 {
-    themeId_ = juce::jlimit(1, 5, id);
+    themeId_ = juce::jlimit(1, 6, id);
     palette_ = paletteForTheme(themeId_);
     applyColours();
 }
@@ -145,7 +154,12 @@ void LookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int width, i
         g.setColour(track);
         g.fillRoundedRectangle(cx - 2.0f, sliderPos, 4.0f, bottom - sliderPos, 2.0f);
         g.setColour(thumb);
-        g.fillRoundedRectangle(cx - 9.0f, sliderPos - 5.0f, 18.0f, 10.0f, 3.0f);
+        if (themeId_ == 2)
+            g.fillRect(cx - 9.0f, sliderPos - 4.0f, 18.0f, 8.0f);
+        else if (themeId_ == 3)
+            g.fillRoundedRectangle(cx - 10.0f, sliderPos - 6.0f, 20.0f, 12.0f, 6.0f);
+        else
+            g.fillRoundedRectangle(cx - 9.0f, sliderPos - 5.0f, 18.0f, 10.0f, themeId_ == 6 ? 1.5f : 3.0f);
     }
     else
     {
