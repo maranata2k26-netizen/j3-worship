@@ -34,7 +34,7 @@ private:
             auto initialHeight = 960;
             if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
             {
-                const auto work = display->userArea;
+                const auto work = display->userBounds;
                 initialWidth = juce::jlimit(1080, 1600, std::max(1080, work.getWidth() - 40));
                 initialHeight = juce::jlimit(660, 960, std::max(660, work.getHeight() - 40));
             }
