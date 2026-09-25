@@ -1808,6 +1808,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             if (in == nullptr)
                 continue;
 
+            applyDspParameters(ch);
             const bool muted = channelMute_[ch].load(std::memory_order_relaxed);
             const int dca = channelDca_[ch].load(std::memory_order_relaxed);
             const bool dcaMuted = dca >= 0 && dca < kDcas && dcaMute_[dca].load(std::memory_order_relaxed);
@@ -1959,8 +1960,11 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     bufferSize_.store(device->getCurrentBufferSizeSamples(), std::memory_order_release);
     busScratch_.setSize(kBuses * 2, std::max(2048, device->getCurrentBufferSizeSamples()), false, true, false);
     busScratch_.clear();
-    for (auto& dsp : channelDsp_)
-        dsp.prepare(sr);
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+    {
+        channelDsp_[ch].prepare(sr);
+        dspAppliedRevision_[ch] = 0;
+    }
     clickGenerator_.prepare(sr);
     clickGenerator_.setTempo(bpmSlider_.getValue());
     clickGenerator_.setEnabled(transportRunning_.load(std::memory_order_acquire));
