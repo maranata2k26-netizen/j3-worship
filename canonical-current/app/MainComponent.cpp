@@ -2,22 +2,42 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <thread>
 #include <vector>
 
 namespace
 {
-constexpr auto background = 0xff0b0e13;
-constexpr auto topBar = 0xff11151c;
-constexpr auto panel = 0xff151a22;
-constexpr auto panel2 = 0xff1d2430;
-constexpr auto panel3 = 0xff252e3b;
-constexpr auto accent = 0xff4da3ff;
-constexpr auto accentDeep = 0xff286da8;
-constexpr auto good = 0xff43d17d;
-constexpr auto warning = 0xffffb84d;
-constexpr auto danger = 0xffff5b68;
-constexpr auto text = 0xfff3f6fa;
-constexpr auto mutedText = 0xff9da8b7;
+std::uint32_t background = 0xff080d12;
+std::uint32_t topBar = 0xff0b131a;
+std::uint32_t panel = 0xff0e1820;
+std::uint32_t panel2 = 0xff12222c;
+std::uint32_t panel3 = 0xff19303d;
+std::uint32_t accent = 0xff158cff;
+std::uint32_t accentDeep = 0xff0d67bf;
+std::uint32_t good = 0xff2ed47a;
+std::uint32_t warning = 0xffffc247;
+std::uint32_t danger = 0xffff4d64;
+std::uint32_t text = 0xffeff6fc;
+std::uint32_t mutedText = 0xff91a3b3;
+std::uint32_t border = 0xff263a47;
+
+void syncPaletteGlobals(const j3ui::Palette& p)
+{
+    background = p.background.getARGB();
+    topBar = p.topBar.getARGB();
+    panel = p.panel.getARGB();
+    panel2 = p.panel2.getARGB();
+    panel3 = p.panel3.getARGB();
+    accent = p.accent.getARGB();
+    accentDeep = p.accent.darker(0.25f).getARGB();
+    good = p.good.getARGB();
+    warning = p.warning.getARGB();
+    danger = p.danger.getARGB();
+    text = p.text.getARGB();
+    mutedText = p.mutedText.getARGB();
+    border = p.border.getARGB();
+}
 
 float dbToGain(double db)
 {
@@ -48,6 +68,21 @@ public:
 private:
     std::shared_ptr<juce::AudioPluginInstance> plugin_;
     std::unique_ptr<juce::GenericAudioProcessorEditor> editor_;
+};
+
+class DashboardCard final : public juce::Component
+{
+public:
+    void paint(juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced(0.5f);
+        const auto base = getLookAndFeel().findColour(juce::ComboBox::backgroundColourId);
+        const auto outline = getLookAndFeel().findColour(juce::ComboBox::outlineColourId);
+        g.setColour(base.darker(0.12f));
+        g.fillRoundedRectangle(r, 7.0f);
+        g.setColour(outline.withAlpha(0.85f));
+        g.drawRoundedRectangle(r, 7.0f, 1.0f);
+    }
 };
 }
 
@@ -245,6 +280,9 @@ void MainComponent::IemSendStrip::syncFromModel()
 
 MainComponent::MainComponent()
 {
+    lookAndFeel_ = std::make_unique<j3ui::LookAndFeel>();
+    setLookAndFeel(lookAndFeel_.get());
+    syncPaletteGlobals(lookAndFeel_->palette());
     setOpaque(true);
     pluginFormatManager_.addFormat(std::make_unique<juce::VST3PluginFormat>());
     for (int ch = 0; ch < kMaxChannels; ++ch)
@@ -303,7 +341,7 @@ MainComponent::MainComponent()
     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(brandLabel_);
 
-    versionLabel_.setText("1.0.0", juce::dontSendNotification);
+    versionLabel_.setText("1.1.0", juce::dontSendNotification);
     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
     addAndMakeVisible(versionLabel_);
@@ -312,6 +350,19 @@ MainComponent::MainComponent()
     statusLabel_.setJustificationType(juce::Justification::centredRight);
     statusLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
     addAndMakeVisible(statusLabel_);
+
+    for (int id = 1; id <= 5; ++id)
+        themeBox_.addItem(j3ui::themeName(id), id);
+    themeBox_.setSelectedId(1, juce::dontSendNotification);
+    themeBox_.setTooltip("Tema visual de J3 Worship");
+    themeBox_.onChange = [this] { applyTheme(themeBox_.getSelectedId()); };
+    addAndMakeVisible(themeBox_);
+
+    updateButton_.setVisible(false);
+    updateButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
+    updateButton_.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    updateButton_.onClick = [this] { beginUpdateInstall(); };
+    addAndMakeVisible(updateButton_);
 
     audioSettingsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     audioSettingsButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(text));
