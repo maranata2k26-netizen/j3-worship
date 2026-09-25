@@ -36,13 +36,12 @@ public:
     void captureInputBlock(const float* const* inputChannelData, int numInputChannels, int numSamples) noexcept;
 
     bool isPlaying() const noexcept { return playing_.load(std::memory_order_acquire); }
+    bool isRecordingTracks() const noexcept { return trackRecording_.load(std::memory_order_acquire); }
     double bpm() const noexcept { return bpm_.load(std::memory_order_relaxed); }
     void setTempoFromHost(double bpm);
 
     std::function<void(double)> onBpmChanged;
     std::function<void(bool)> onPlayStateChanged;
-    std::function<void()> onRecordToggle;
-    std::function<bool()> isRecording;
 
 private:
     static constexpr int kMaxTracks = 32;
