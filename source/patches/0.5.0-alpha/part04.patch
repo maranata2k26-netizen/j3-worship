@@ -1,0 +1,161 @@
++    void setTimeSignature(int numerator, int denominator) noexcept;
++    void setSubdivision(int pulsesPerBeat) noexcept;
++    void setAccentEnabled(bool enabled) noexcept { accentEnabled_.store(enabled, std::memory_order_release); }
++    void setLevel(float level) noexcept;
++    double tempo() const noexcept { return bpm_.load(std::memory_order_relaxed); }
++    int numerator() const noexcept { return numerator_.load(std::memory_order_relaxed); }
++    int denominator() const noexcept { return denominator_.load(std::memory_order_relaxed); }
++    int subdivision() const noexcept { return subdivision_.load(std::memory_order_relaxed); }
++    std::uint64_t beatCounter() const noexcept { return beatCounter_.load(std::memory_order_relaxed); }
++
++    // Advances the transport clock, optionally adds click signal to output, and returns quarter-note beat boundaries crossed.
++    // Passing output == nullptr advances timing silently.
++    int process(float* output, int numSamples) noexcept;
++
++private:
++    double sampleRate_ { 48000.0 };
++    double phase_ { 0.0 };
++    double samplesUntilPulse_ { 0.0 };
++    int pulseSamplesRemaining_ { 0 };
++    std::uint64_t pulseCounter_ { 0 };
++    std::atomic<std::uint64_t> beatCounter_ { 0 };
++    std::atomic<double> bpm_ { 120.0 };
++    std::atomic<int> numerator_ { 4 };
++    std::atomic<int> denominator_ { 4 };
++    std::atomic<int> subdivision_ { 1 };
++    std::atomic<float> level_ { 0.35f };
++    std::atomic<bool> enabled_ { false };
++    std::atomic<bool> accentEnabled_ { true };
++};
++}
+diff -ruN J3Worship-base04/installer/J3Worship.iss J3Worship-work/installer/J3Worship.iss
+--- J3Worship-base04/installer/J3Worship.iss	2026-09-24 19:31:22.000000000 +0000
++++ J3Worship-work/installer/J3Worship.iss	2026-09-25 02:42:38.069758225 +0000
+@@ -1,5 +1,5 @@
+ #define MyAppName "J3 Worship"
+-#define MyAppVersion "0.4.0-alpha"
++#define MyAppVersion "0.5.0-alpha"
+ #define MyAppPublisher "J3 Worship"
+ #define MyAppExeName "J3Worship.exe"
+ 
+@@ -18,7 +18,7 @@
+ ArchitecturesInstallIn64BitMode=x64compatible
+ WizardStyle=modern
+ UninstallDisplayIcon={app}\{#MyAppExeName}
+-VersionInfoVersion=0.4.0.0
++VersionInfoVersion=0.5.0.0
+ VersionInfoCompany=J3 Worship
+ VersionInfoDescription=J3 Worship Installer
+ VersionInfoProductName=J3 Worship
+diff -ruN J3Worship-base04/src/ClickGenerator.cpp J3Worship-work/src/ClickGenerator.cpp
+--- J3Worship-base04/src/ClickGenerator.cpp	1970-01-01 00:00:00.000000000 +0000
++++ J3Worship-work/src/ClickGenerator.cpp	2026-09-25 02:39:45.805946610 +0000
+@@ -0,0 +1,84 @@
++#include "j3/ClickGenerator.h"
++
++#include <algorithm>
++#include <cmath>
++#include <numbers>
++
++namespace j3 {
++void ClickGenerator::prepare(double sampleRate) noexcept {
++    sampleRate_ = std::clamp(sampleRate, 8000.0, 384000.0);
++    reset();
++}
++
++void ClickGenerator::reset() noexcept {
++    phase_ = 0.0;
++    samplesUntilPulse_ = 0.0;
++    pulseSamplesRemaining_ = 0;
++    pulseCounter_ = 0;
++    beatCounter_.store(0, std::memory_order_relaxed);
++}
++
++void ClickGenerator::setTempo(double bpm) noexcept {
++    bpm_.store(std::clamp(bpm, 20.0, 400.0), std::memory_order_relaxed);
++}
++
++void ClickGenerator::setTimeSignature(int numerator, int denominator) noexcept {
++    numerator_.store(std::clamp(numerator, 1, 16), std::memory_order_relaxed);
++    const int d = denominator == 2 || denominator == 8 || denominator == 16 ? denominator : 4;
++    denominator_.store(d, std::memory_order_relaxed);
++}
++
++void ClickGenerator::setSubdivision(int pulsesPerBeat) noexcept {
++    const int v = pulsesPerBeat >= 4 ? 4 : (pulsesPerBeat >= 2 ? 2 : 1);
++    subdivision_.store(v, std::memory_order_relaxed);
++}
++
++void ClickGenerator::setLevel(float level) noexcept {
++    level_.store(std::clamp(level, 0.0f, 1.0f), std::memory_order_relaxed);
++}
++
++int ClickGenerator::process(float* output, int numSamples) noexcept {
++    if (numSamples <= 0 || !enabled_.load(std::memory_order_acquire))
++        return 0;
++
++    const auto bpm = bpm_.load(std::memory_order_relaxed);
++    const auto subdivision = subdivision_.load(std::memory_order_relaxed);
++    const auto numerator = numerator_.load(std::memory_order_relaxed);
++    const auto level = level_.load(std::memory_order_relaxed);
++    const auto accentEnabled = accentEnabled_.load(std::memory_order_relaxed);
++    const double samplesPerPulse = sampleRate_ * 60.0 / (bpm * static_cast<double>(subdivision));
++    const int pulseLength = std::max(16, static_cast<int>(sampleRate_ * 0.022));
++    int beatEvents = 0;
++
++    for (int i = 0; i < numSamples; ++i) {
++        if (samplesUntilPulse_ <= 0.0) {
++            const bool beatBoundary = (pulseCounter_ % static_cast<std::uint64_t>(subdivision)) == 0;
++            if (beatBoundary) {
++                beatCounter_.fetch_add(1, std::memory_order_relaxed);
++                ++beatEvents;
++            }
++            pulseSamplesRemaining_ = pulseLength;
++            phase_ = 0.0;
++            samplesUntilPulse_ += samplesPerPulse;
++        }
++
++        if (pulseSamplesRemaining_ > 0) {
++            const auto beatIndex = beatCounter_.load(std::memory_order_relaxed);
++            const bool downbeat = accentEnabled && beatIndex > 0 && ((beatIndex - 1) % static_cast<std::uint64_t>(numerator) == 0);
++            const double frequency = downbeat ? 1760.0 : 1100.0;
++            const double env = static_cast<double>(pulseSamplesRemaining_) / static_cast<double>(pulseLength);
++            const double shaped = env * env;
++            if (output != nullptr)
++                output[i] += static_cast<float>(std::sin(phase_) * shaped * level);
++            phase_ += 2.0 * std::numbers::pi_v<double> * frequency / sampleRate_;
++            --pulseSamplesRemaining_;
++        }
++
++        samplesUntilPulse_ -= 1.0;
++        if (samplesUntilPulse_ <= 0.0) {
++            ++pulseCounter_;
++        }
++    }
++    return beatEvents;
++}
++}
+diff -ruN J3Worship-base04/tests/test_core.cpp J3Worship-work/tests/test_core.cpp
+--- J3Worship-base04/tests/test_core.cpp	2026-09-24 18:51:26.000000000 +0000
++++ J3Worship-work/tests/test_core.cpp	2026-09-25 02:39:01.532098113 +0000
+@@ -5,6 +5,7 @@
+ #include "j3/PluginCatalog.h"
+ #include "j3/AudioEngine.h"
+ #include "j3/ClickEngine.h"
++#include "j3/ClickGenerator.h"
+ #include "j3/Diagnostics.h"
+ #include "j3/Dsp.h"
+ #include "j3/LiveEngine.h"
+@@ -96,6 +97,12 @@
+         check(c.isAccent(0), "click accent on downbeat"); check(!c.isAccent(1), "click non-accent beat");
+         check(std::abs(c.secondsPerBeat()-0.6)<1e-9, "click tempo timing");
+ 
++        ClickGenerator clickGen; clickGen.prepare(48000); clickGen.setTempo(120); clickGen.setTimeSignature(4,4); clickGen.setSubdivision(1); clickGen.setLevel(0.4f); clickGen.setEnabled(true);
++        std::vector<float> clickAudio(48000); const int beatEvents=clickGen.process(clickAudio.data(),static_cast<int>(clickAudio.size()));
++        double clickEnergy=0.0; for(float v:clickAudio){check(std::isfinite(v),"click generator finite");clickEnergy+=std::abs(v);}
++        check(beatEvents==2,"click generator beat timing at 120 BPM"); check(clickEnergy>1.0,"click generator produces audible pulses");
++        clickGen.setEnabled(false); std::fill(clickAudio.begin(),clickAudio.end(),0.0f); check(clickGen.process(clickAudio.data(),static_cast<int>(clickAudio.size()))==0,"disabled click produces no beat events");
++
+         ChannelDsp dsp; dsp.prepare(48000); dsp.setHpf(80); dsp.setLpf(16000); dsp.setEqBand(0,250,1.2,3); dsp.setGate(-70); dsp.setCompressor(-12,3); dsp.setDenoise(0.3,-55);
+         double energy=0; for(int i=0;i<500000;++i){float x=0.2f*std::sin(2.0*3.141592653589793*440.0*i/48000.0); const float y=dsp.process(x); check(std::isfinite(y), "DSP finite output under stress"); energy += std::abs(y);} check(energy>1.0, "DSP produces audio");
+ 
