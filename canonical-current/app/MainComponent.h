@@ -141,6 +141,7 @@ private:
     void removeSelectedPlugin();
     void openSelectedPluginEditor();
     void restoreSavedPluginsAfterScan();
+    bool pluginMutationLocked() const noexcept;
     const float* processPluginChain(int channel, const float* input, int numSamples) noexcept;
     bool routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept;
     bool iemRouteIsSafe(int mix, int left, int right) const noexcept;
@@ -219,10 +220,12 @@ private:
     juce::AudioPluginFormatManager pluginFormatManager_;
     std::array<std::array<std::atomic<std::shared_ptr<juce::AudioPluginInstance>>, kPluginSlots>, kMaxChannels> channelPlugins_{};
     std::array<std::array<std::atomic<bool>, kPluginSlots>, kMaxChannels> pluginBypass_{};
+    std::array<std::array<std::atomic<std::uint32_t>, kPluginSlots>, kMaxChannels> pluginFaults_{};
     std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginPaths_{};
     std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginNames_{};
     std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginStateBase64_{};
     juce::AudioBuffer<float> pluginScratch_;
+    juce::AudioBuffer<float> pluginGuardScratch_;
     juce::MidiBuffer pluginMidiScratch_;
     bool pluginsScanned_ { false };
 
@@ -253,6 +256,7 @@ private:
     juce::Label brandLabel_;
     juce::Label versionLabel_;
     juce::Label statusLabel_;
+    juce::Label safetyLabel_;
     juce::ComboBox themeBox_;
     juce::TextButton updateButton_ { "ACTUALIZAR" };
     juce::TextButton audioSettingsButton_ { "AUDIO / MIDI" };
