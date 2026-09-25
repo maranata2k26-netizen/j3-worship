@@ -1903,7 +1903,7 @@ void MainComponent::scanVst3Plugins()
     std::vector<std::filesystem::path> roots;
     roots.reserve(static_cast<std::size_t>(searchPath.getNumPaths()));
     for (int i = 0; i < searchPath.getNumPaths(); ++i)
-        roots.emplace_back(searchPath[i].getFullPathName().toStdWString());
+        roots.emplace_back(std::filesystem::u8path(searchPath[i].getFullPathName().toStdString()));
 
     pluginStatusLabel_.setText("Scanning VST3 folders without loading plug-ins...", juce::dontSendNotification);
     pluginCatalog_.scan(roots);
