@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace
 {
@@ -1324,13 +1325,19 @@ void MainComponent::refreshRoutingControls()
     paLeftBox_.clear(juce::dontSendNotification);
     paRightBox_.clear(juce::dontSendNotification);
     clickBox_.clear(juce::dontSendNotification);
+    iemOutLeftBox_.clear(juce::dontSendNotification);
+    iemOutRightBox_.clear(juce::dontSendNotification);
     clickBox_.addItem("OFF / NOT ROUTED", 1);
+    iemOutLeftBox_.addItem("OFF", 1);
+    iemOutRightBox_.addItem("OFF", 1);
 
     auto* device = deviceManager_.getCurrentAudioDevice();
     if (device == nullptr)
     {
         setupDeviceLabel_.setText("No hay interfaz activa. Abrí AUDIO / MIDI para elegir un driver.", juce::dontSendNotification);
         clickBox_.setSelectedId(1, juce::dontSendNotification);
+        iemOutLeftBox_.setSelectedId(1, juce::dontSendNotification);
+        iemOutRightBox_.setSelectedId(1, juce::dontSendNotification);
         return;
     }
 
@@ -1342,29 +1349,57 @@ void MainComponent::refreshRoutingControls()
         paLeftBox_.addItem(label, i + 1);
         paRightBox_.addItem(label, i + 1);
         clickBox_.addItem(label, i + 2);
+        iemOutLeftBox_.addItem(label, i + 2);
+        iemOutRightBox_.addItem(label, i + 2);
     }
 
     const int left = juce::jlimit(0, std::max(0, outputCount - 1), paLeft_.load());
     const int rightDefault = outputCount > 1 ? 1 : 0;
-    const int right = juce::jlimit(0, std::max(0, outputCount - 1), paRight_.load() < outputCount ? paRight_.load() : rightDefault);
+    const int currentRight = paRight_.load();
+    const int right = juce::jlimit(0, std::max(0, outputCount - 1), currentRight >= 0 && currentRight < outputCount ? currentRight : rightDefault);
     paLeft_.store(left);
     paRight_.store(right);
     paLeftBox_.setSelectedId(outputCount > 0 ? left + 1 : 0, juce::dontSendNotification);
     paRightBox_.setSelectedId(outputCount > 0 ? right + 1 : 0, juce::dontSendNotification);
 
-    const int click = clickOutput_.load();
+    int click = clickOutput_.load();
     if (click >= 0 && click < outputCount && click != left && click != right)
         clickBox_.setSelectedId(click + 2, juce::dontSendNotification);
     else
     {
+        click = -1;
         clickOutput_.store(-1);
         clickBox_.setSelectedId(1, juce::dontSendNotification);
     }
 
-    setupDeviceLabel_.setText("ACTIVE DEVICE\n" + device->getName() + "  ·  " + deviceManager_.getCurrentAudioDeviceType()
-        + "\n" + juce::String(device->getActiveInputChannels().countNumberOfSetBits()) + " active inputs  ·  "
-        + juce::String(device->getActiveOutputChannels().countNumberOfSetBits()) + " active outputs\n"
-        + "PA and monitor routes remain muted until LIVE INPUTS is enabled.", juce::dontSendNotification);
+    std::vector<bool> occupied(static_cast<std::size_t>(std::max(0, outputCount)), false);
+    if (left >= 0 && left < outputCount) occupied[static_cast<std::size_t>(left)] = true;
+    if (right >= 0 && right < outputCount) occupied[static_cast<std::size_t>(right)] = true;
+    if (click >= 0 && click < outputCount) occupied[static_cast<std::size_t>(click)] = true;
+    for (int m = 0; m < kIemMixes; ++m)
+    {
+        const int l = iemOutLeft_[m].load(std::memory_order_relaxed);
+        const int r = iemOutRight_[m].load(std::memory_order_relaxed);
+        const bool valid = l >= 0 && r >= 0 && l < outputCount && r < outputCount && l != r
+            && !occupied[static_cast<std::size_t>(l)] && !occupied[static_cast<std::size_t>(r)];
+        if (valid)
+        {
+            occupied[static_cast<std::size_t>(l)] = true;
+            occupied[static_cast<std::size_t>(r)] = true;
+        }
+        else
+        {
+            iemOutLeft_[m].store(-1, std::memory_order_relaxed);
+            iemOutRight_[m].store(-1, std::memory_order_relaxed);
+        }
+    }
+
+    setupDeviceLabel_.setText("Device: " + device->getName() + "\nDriver: " + deviceManager_.getCurrentAudioDeviceType()
+        + "\nOutputs: " + juce::String(outputCount) + " · Inputs: " + juce::String(device->getInputChannelNames().size()),
+        juce::dontSendNotification);
+    refreshIemUi();
+    rebuildMixerBank();
+    rebuildIemBank();
 }
 
 void MainComponent::applyRoutingFromControls()
@@ -1375,17 +1410,30 @@ void MainComponent::applyRoutingFromControls()
 
     if (!routeIsSafe(newLeft, newRight, newClick))
     {
-        clickOutput_.store(-1);
-        clickBox_.setSelectedId(1, juce::dontSendNotification);
-        showAudioError("J3 SAFE ROUTING bloqueó esa selección: CLICK / GUIDE no puede ir a una salida usada por el PA.");
+        clickBox_.setSelectedId(clickOutput_.load() >= 0 ? clickOutput_.load() + 2 : 1, juce::dontSendNotification);
+        showAudioError("J3 SAFE ROUTING bloqueó esa selección: CLICK / GUIDE no puede compartir una salida usada por el PA.");
+        return;
     }
-    else
+
+    for (int m = 0; m < kIemMixes; ++m)
     {
-        paLeft_.store(newLeft);
-        paRight_.store(newRight);
-        clickOutput_.store(newClick);
+        const int l = iemOutLeft_[m].load(std::memory_order_relaxed);
+        const int r = iemOutRight_[m].load(std::memory_order_relaxed);
+        if (l < 0 || r < 0) continue;
+        if (l == newLeft || l == newRight || r == newLeft || r == newRight || l == newClick || r == newClick)
+        {
+            refreshRoutingControls();
+            showAudioError("J3 SAFE ROUTING bloqueó esa salida porque ya está dedicada a un IEM. Liberá primero ese IEM.");
+            return;
+        }
     }
+
+    paLeft_.store(newLeft);
+    paRight_.store(newRight);
+    clickOutput_.store(newClick);
+    saveAppState();
     updateDiagnostics();
+    updateClickUi();
 }
 
 void MainComponent::updateDiagnostics()
