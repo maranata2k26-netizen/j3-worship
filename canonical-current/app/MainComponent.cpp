@@ -2020,7 +2020,15 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             }
         }
 
-        // Soft protection on every live-routed output. CLICK is added afterwards and has its own conservative level.
+    }
+
+    const bool padAudible = ambientPad_.enabled() && padToPa_.load(std::memory_order_acquire) && safePa;
+    if (padAudible)
+        ambientPad_.process(outputChannelData[left], outputChannelData[right], numSamples);
+
+    // Soft output protection is applied after live inputs and pads have been summed.
+    if (monitoring || padAudible)
+    {
         for (int o = 0; o < numOutputChannels; ++o)
         {
             auto* out = outputChannelData[o];
@@ -2087,6 +2095,7 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
         dspAppliedRevision_[ch] = 0;
     }
     clickGenerator_.prepare(sr);
+    ambientPad_.prepare(sr);
     clickGenerator_.setTempo(bpmSlider_.getValue());
     clickGenerator_.setEnabled(transportRunning_.load(std::memory_order_acquire));
     audioRunning_.store(true, std::memory_order_release);
