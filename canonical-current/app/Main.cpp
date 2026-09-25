@@ -5,7 +5,7 @@ class J3WorshipApplication final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "J3 Worship"; }
-    const juce::String getApplicationVersion() override { return "1.0.0"; }
+    const juce::String getApplicationVersion() override { return "1.1.0"; }
     bool moreThanOneInstanceAllowed() override { return false; }
 
     void initialise(const juce::String&) override
@@ -26,9 +26,9 @@ private:
         {
             setUsingNativeTitleBar(true);
             setResizable(true, true);
-            setResizeLimits(1120, 700, 2560, 1600);
+            setResizeLimits(1180, 720, 2560, 1600);
             setContentOwned(new MainComponent(), true);
-            centreWithSize(1440, 900);
+            centreWithSize(1600, 960);
             setVisible(true);
         }
 
