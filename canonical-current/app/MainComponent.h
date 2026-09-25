@@ -88,10 +88,10 @@ private:
     private:
         int sourceIndex_{};
         std::atomic<float>& gain_;
-        std::atomic<float>& pan_;
+        std::atomic<float>& panValue_;
         juce::Label title_;
         juce::Slider level_;
-        juce::Slider pan_;
+        juce::Slider panSlider_;
     };
 
     void configureAudio();
