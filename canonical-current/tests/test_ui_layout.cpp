@@ -41,6 +41,21 @@ int main()
                   << " : " << report << std::endl;
         ok = ok && pass;
 
+        auto snapshotDir = juce::File::getCurrentWorkingDirectory().getChildFile("ui-snapshots");
+        snapshotDir.createDirectory();
+        juce::String safeName(testCase.label);
+        safeName = safeName.replaceCharacters(" @%", "___");
+        auto snapshotFile = snapshotDir.getChildFile(safeName + ".png");
+        juce::Image image(juce::Image::RGB, workspaceWidth, workspaceHeight, true);
+        juce::Graphics imageGraphics(image);
+        workspace.paintEntireComponent(imageGraphics, true);
+        juce::FileOutputStream output(snapshotFile);
+        juce::PNGImageFormat png;
+        const bool snapshotWritten = output.openedOk() && png.writeImageToStream(image, output);
+        std::cout << (snapshotWritten ? "[PASS] " : "[FAIL] ")
+                  << "snapshot " << snapshotFile.getFileName() << std::endl;
+        ok = ok && snapshotWritten;
+
         const int normalWidth = std::max(1080, static_cast<int>(std::lround(workspaceWidth * 0.86)));
         const int normalHeight = std::max(520, static_cast<int>(std::lround(workspaceHeight * 0.86)));
         workspace.setSize(normalWidth, normalHeight);
