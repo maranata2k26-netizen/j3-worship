@@ -48,22 +48,24 @@ int main()
         safeName = safeName.replaceCharacters(" @%", "___");
         auto snapshotFile = snapshotDir.getChildFile(safeName + ".png");
         juce::Image image(juce::Image::RGB, workspaceWidth, workspaceHeight, true);
-        juce::Graphics imageGraphics(image);
-
-        // Headless CI does not have a native peer, so paint the workspace and its
-        // direct controls explicitly instead of relying on OS-driven component painting.
-        workspace.paint(imageGraphics);
-        for (int childIndex = 0; childIndex < workspace.getNumChildComponents(); ++childIndex)
         {
-            auto* child = workspace.getChildComponent(childIndex);
-            if (child == nullptr || !child->isVisible() || child->getBounds().isEmpty())
-                continue;
+            juce::Graphics imageGraphics(image);
 
-            juce::Graphics::ScopedSaveState state(imageGraphics);
-            imageGraphics.setOrigin(child->getPosition());
-            imageGraphics.reduceClipRegion(child->getLocalBounds());
-            child->paintEntireComponent(imageGraphics, true);
-        }
+            // Headless CI does not have a native peer, so paint the workspace and its
+            // direct controls explicitly instead of relying on OS-driven component painting.
+            workspace.paint(imageGraphics);
+            for (int childIndex = 0; childIndex < workspace.getNumChildComponents(); ++childIndex)
+            {
+                auto* child = workspace.getChildComponent(childIndex);
+                if (child == nullptr || !child->isVisible() || child->getBounds().isEmpty())
+                    continue;
+
+                juce::Graphics::ScopedSaveState state(imageGraphics);
+                imageGraphics.setOrigin(child->getPosition());
+                imageGraphics.reduceClipRegion(child->getLocalBounds());
+                child->paintEntireComponent(imageGraphics, true);
+            }
+        } // Destroy Graphics before reading pixels / encoding PNG.
 
         bool hasVisualContent = false;
         const auto black = juce::Colours::black.getARGB();
