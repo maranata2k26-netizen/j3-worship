@@ -920,7 +920,7 @@ MainComponent::~MainComponent()
     deviceManager_.removeAudioCallback(this);
     std::string recordError;
     recorder_.stop(recordError);
-    saveAppState();
+    saveAppState(true);
     saveAudioState();
     deviceManager_.closeAudioDevice();
     getRuntimeLockFile().deleteFile();
@@ -1568,6 +1568,18 @@ void MainComponent::loadAppState()
         setlist_.select(static_cast<std::size_t>(juce::jlimit(0, static_cast<int>(setlist_.size()) - 1,
             xml->getIntAttribute("setlistIndex", 0))));
 
+    forEachXmlChildElementWithTagName(*xml, vst, "Vst3")
+    {
+        const int channel = vst->getIntAttribute("channel", -1);
+        const int slot = vst->getIntAttribute("slot", -1);
+        if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots)
+            continue;
+        pluginPaths_[channel][slot] = vst->getStringAttribute("path");
+        pluginNames_[channel][slot] = vst->getStringAttribute("name");
+        pluginStateBase64_[channel][slot] = vst->getStringAttribute("state");
+        pluginBypass_[channel][slot].store(vst->getBoolAttribute("bypass", false), std::memory_order_relaxed);
+    }
+
     forEachXmlChildElementWithTagName(*xml, ch, "Channel")
     {
         const int index = ch->getIntAttribute("index", -1);
@@ -1637,7 +1649,7 @@ void MainComponent::loadAppState()
     refreshSetlistUi();
 }
 
-void MainComponent::saveAppState()
+void MainComponent::saveAppState(bool capturePluginState)
 {
     juce::XmlElement xml("J3WorshipState");
     xml.setAttribute("version", "1.0.0");
@@ -1665,6 +1677,35 @@ void MainComponent::saveAppState()
         songXml->setAttribute("bpm", song->bpm);
         songXml->setAttribute("numerator", song->numerator);
         songXml->setAttribute("denominator", song->denominator);
+    }
+
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+    {
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+        {
+            auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
+            if (capturePluginState && plugin != nullptr)
+            {
+                try
+                {
+                    juce::MemoryBlock state;
+                    plugin->getStateInformation(state);
+                    pluginStateBase64_[ch][slot] = state.toBase64Encoding();
+                }
+                catch (...) {}
+            }
+
+            if (pluginPaths_[ch][slot].isEmpty())
+                continue;
+
+            auto* vst = xml.createNewChildElement("Vst3");
+            vst->setAttribute("channel", ch);
+            vst->setAttribute("slot", slot);
+            vst->setAttribute("path", pluginPaths_[ch][slot]);
+            vst->setAttribute("name", pluginNames_[ch][slot]);
+            vst->setAttribute("bypass", pluginBypass_[ch][slot].load(std::memory_order_relaxed));
+            vst->setAttribute("state", pluginStateBase64_[ch][slot]);
+        }
     }
 
     for (int i = 0; i < kMaxChannels; ++i)
