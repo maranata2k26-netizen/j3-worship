@@ -35,8 +35,10 @@ private:
             if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
             {
                 const auto work = display->userBounds;
-                initialWidth = juce::jlimit(1080, 1600, std::max(1080, work.getWidth() - 40));
-                initialHeight = juce::jlimit(660, 960, std::max(660, work.getHeight() - 40));
+                const int workWidth = static_cast<int>(std::lround(work.getWidth()));
+                const int workHeight = static_cast<int>(std::lround(work.getHeight()));
+                initialWidth = juce::jlimit(1080, 1600, std::max(1080, workWidth - 40));
+                initialHeight = juce::jlimit(660, 960, std::max(660, workHeight - 40));
             }
             centreWithSize(initialWidth, initialHeight);
             setVisible(true);
