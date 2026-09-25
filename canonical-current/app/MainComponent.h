@@ -36,7 +36,7 @@ private:
     static constexpr int kBuses = 8;
     static constexpr int kDcas = 8;
     static constexpr int kIemMixes = 16;
-    static constexpr int kPluginSlots = 4;
+    static constexpr int kPluginSlots = 8;
 
     class MixerStrip final : public juce::Component
     {
@@ -249,6 +249,7 @@ private:
     juce::File downloadedUpdateInstaller_;
     std::atomic<bool> updateBusy_ { false };
 
+    juce::Image brandLogo_;
     juce::Label brandLabel_;
     juce::Label versionLabel_;
     juce::Label statusLabel_;
