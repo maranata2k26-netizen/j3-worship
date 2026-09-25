@@ -761,6 +761,53 @@ juce::Rectangle<int> DawWorkspace::mixerBounds() const
     return { 0, std::max(toolbarHeight_, getHeight() - h), getWidth(), h };
 }
 
+bool DawWorkspace::validateLayoutForTesting(juce::String& report) const
+{
+    const auto local = getLocalBounds();
+    const auto browser = browserBounds();
+    const auto timeline = timelineBounds();
+    const auto inspector = inspectorBounds();
+    const auto mixer = mixerBounds();
+
+    auto fail = [&report](const juce::String& message)
+    {
+        report = message;
+        return false;
+    };
+
+    if (!local.contains(browser) || !local.contains(timeline) || !local.contains(inspector) || !local.contains(mixer))
+        return fail("major workspace region escaped the component bounds");
+    if (timeline.getWidth() < 360 || timeline.getHeight() < 180)
+        return fail("arranger viewport is too small");
+    if (browser.getWidth() < 140 || inspector.getWidth() < 220 || mixer.getHeight() < 96)
+        return fail("browser, inspector or mixer fell below its professional minimum");
+    if (browser.getRight() != timeline.getX() || inspector.getX() != timeline.getRight()
+        || mixer.getY() != timeline.getBottom() + rulerHeight_)
+        return fail("workspace regions overlap or leave an unintended gap");
+
+    for (int i = 0; i < getNumChildComponents(); ++i)
+    {
+        const auto* child = getChildComponent(i);
+        if (child == nullptr || !child->isVisible()) continue;
+        const auto bounds = child->getBounds();
+        if (bounds.getWidth() <= 0 || bounds.getHeight() <= 0)
+            return fail("visible control has an empty layout: " + child->getName());
+        if (!local.contains(bounds))
+            return fail("visible control escaped the viewport: " + child->getName());
+    }
+
+    if (!browser.contains(browserSearch_.getBounds()))
+        return fail("browser search escaped the browser panel");
+    if (!inspector.contains(trackNameEditor_.getBounds())
+        || !inspector.contains(trackVolumeSlider_.getBounds())
+        || !inspector.contains(trackPanSlider_.getBounds())
+        || !inspector.contains(clipGainSlider_.getBounds()))
+        return fail("inspector controls escaped the inspector panel");
+
+    report = "OK";
+    return true;
+}
+
 juce::Rectangle<int> DawWorkspace::trackHeaderBounds(int track) const
 {
     const auto tl = timelineBounds();

@@ -52,6 +52,8 @@ public:
     std::function<void()> onOpenPads;
     std::function<void()> onOpenIem;
 
+    bool validateLayoutForTesting(juce::String& report) const;
+
 private:
     static constexpr int kMaxTracks = 48;
     static constexpr int kMaxClips = 512;

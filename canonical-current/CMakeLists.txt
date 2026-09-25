@@ -116,4 +116,32 @@ if(J3_BUILD_DESKTOP_APP)
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/dist"
   )
+
+  juce_add_console_app(J3WorshipUiLayoutTests
+    PRODUCT_NAME "J3 Worship UI Layout Tests"
+  )
+  juce_generate_juce_header(J3WorshipUiLayoutTests)
+  target_sources(J3WorshipUiLayoutTests PRIVATE
+    tests/test_ui_layout.cpp
+    app/DawWorkspace.cpp
+    app/DawWorkspace.h
+  )
+  target_include_directories(J3WorshipUiLayoutTests PRIVATE include)
+  target_compile_definitions(J3WorshipUiLayoutTests PRIVATE
+    JUCE_ASIO=1
+    JUCE_WASAPI=1
+    JUCE_DIRECTSOUND=0
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+  )
+  target_link_libraries(J3WorshipUiLayoutTests PRIVATE
+    j3core
+    juce::juce_audio_utils
+    juce::juce_audio_formats
+    juce::juce_dsp
+    juce::juce_gui_extra
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags
+  )
+  add_test(NAME j3ui_layout_tests COMMAND J3WorshipUiLayoutTests)
 endif()
