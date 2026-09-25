@@ -368,7 +368,7 @@ MainComponent::MainComponent()
     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(brandLabel_);
 
-    versionLabel_.setText("1.1.0", juce::dontSendNotification);
+    versionLabel_.setText("1.2.0", juce::dontSendNotification);
     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
     addAndMakeVisible(versionLabel_);
@@ -1063,6 +1063,7 @@ MainComponent::MainComponent()
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(46);
     tabs_.addTab("MEZCLADOR", juce::Colour(panel), &mixerPage_, false);
+    tabs_.addTab("DAW", juce::Colour(panel), &dawWorkspace_, false);
     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
@@ -1077,6 +1078,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(tabs_);
     tabs_.setCurrentTabIndex(0);
 
+    dawWorkspace_.onRecordRequested = [this] { startStopRecording(); };
     recoveredAfterUncleanExit_ = getRuntimeLockFile().existsAsFile();
     getRuntimeLockFile().getParentDirectory().createDirectory();
     getRuntimeLockFile().replaceWithText("running");
@@ -1214,6 +1216,7 @@ void MainComponent::applyTheme(int themeId, bool persist)
             dashboardSectionButtons_[i]->setColour(juce::TextButton::buttonColourId, sectionColours[i]);
     }
 
+    dawWorkspace_.setThemeColours(p.background, p.panel, p.accent, p.text, p.border);
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, p.background);
     for (int i = 0; i < tabs_.getNumTabs(); ++i)
         tabs_.setTabBackgroundColour(i, p.panel);
@@ -2211,7 +2214,7 @@ void MainComponent::loadAppState()
 void MainComponent::saveAppState(bool capturePluginState)
 {
     juce::XmlElement xml("J3WorshipState");
-    xml.setAttribute("version", "1.1.0");
+    xml.setAttribute("version", "1.2.0");
     xml.setAttribute("themeId", themeId_);
     xml.setAttribute("paLeft", paLeft_.load());
     xml.setAttribute("paRight", paRight_.load());
@@ -2340,6 +2343,7 @@ void MainComponent::startStopRecording()
         if (!recorder_.stop(error) && !error.empty())
             showAudioError("No se pudo finalizar la grabación: " + juce::String(error));
         recordChannelCount_.store(0, std::memory_order_release);
+        dawWorkspace_.setExternalRecordState(false);
         updateRecordingUi();
         return;
     }
@@ -2380,6 +2384,7 @@ void MainComponent::startStopRecording()
     }
     recordChannelCount_.store(static_cast<int>(channelNames.size()), std::memory_order_release);
     recordingEnabled_.store(true, std::memory_order_release);
+    dawWorkspace_.setExternalRecordState(true);
     updateRecordingUi();
 }
 
@@ -2392,6 +2397,7 @@ void MainComponent::stopRecordingAfterDeviceLoss(const juce::String& reason)
     std::string error;
     recorder_.stop(error);
     recordChannelCount_.store(0, std::memory_order_release);
+    dawWorkspace_.setExternalRecordState(false);
     updateRecordingUi();
 
     juce::String message = reason;
@@ -2403,6 +2409,7 @@ void MainComponent::stopRecordingAfterDeviceLoss(const juce::String& reason)
 void MainComponent::updateRecordingUi()
 {
     const bool active = recordingEnabled_.load(std::memory_order_acquire);
+    dawWorkspace_.setExternalRecordState(active);
     recordButton_.setButtonText(active ? "STOP RECORDING" : "RECORD SERVICE");
     recordButton_.setColour(juce::TextButton::buttonColourId, active ? juce::Colour(danger) : juce::Colour(0xff9b2430));
     juce::String status;
@@ -3185,8 +3192,12 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     if (padAudible)
         ambientPad_.process(outputChannelData[left], outputChannelData[right], numSamples);
 
-    // Soft output protection is applied after live inputs and pads have been summed.
-    if (monitoring || padAudible)
+    const bool dawAudible = safePa && dawWorkspace_.isPlaying();
+    if (dawAudible)
+        dawWorkspace_.processAudio(outputChannelData[left], outputChannelData[right], numSamples);
+
+    // Soft output protection is applied after live inputs, pads and DAW playback have been summed.
+    if (monitoring || padAudible || dawAudible)
     {
         for (int o = 0; o < numOutputChannels; ++o)
         {
@@ -3277,6 +3288,7 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     }
     clickGenerator_.prepare(sr);
     ambientPad_.prepare(sr);
+    dawWorkspace_.prepare(sr, device->getCurrentBufferSizeSamples());
     clickGenerator_.setTempo(bpmSlider_.getValue());
     clickGenerator_.setEnabled(transportRunning_.load(std::memory_order_acquire));
     audioRunning_.store(true, std::memory_order_release);
@@ -3296,6 +3308,7 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
 
 void MainComponent::audioDeviceStopped()
 {
+    dawWorkspace_.releaseResources();
     audioRunning_.store(false, std::memory_order_release);
     liveMonitorEnabled_.store(false, std::memory_order_release);
     recordingEnabled_.store(false, std::memory_order_release);
