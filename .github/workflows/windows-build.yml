@@ -50,7 +50,7 @@ jobs:
           $parts = Get-ChildItem "source/patches/0.5.0-alpha/part*.patch" | Sort-Object Name
           if ($parts.Count -ne 5) { throw "Expected 5 patch parts, found $($parts.Count)" }
           $combined = Join-Path $env:RUNNER_TEMP "0.5.0-alpha.patch"
-          $content = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw) + "`n" }) -join ''
+          $content = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
           [IO.File]::WriteAllText($combined, $content, [Text.UTF8Encoding]::new($false))
           & "C:\Program Files\Git\usr\bin\patch.exe" -p1 -d work -i $combined
           if ($LASTEXITCODE -ne 0) { throw "0.5.0 patch failed with exit code $LASTEXITCODE" }
