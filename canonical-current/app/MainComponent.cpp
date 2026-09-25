@@ -3102,6 +3102,8 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
         if (outputChannelData[o] != nullptr)
             juce::FloatVectorOperations::clear(outputChannelData[o], numSamples);
 
+    dawWorkspace_.captureInputBlock(inputChannelData, numInputChannels, numSamples);
+
     const int left = paLeft_.load(std::memory_order_relaxed);
     const int right = paRight_.load(std::memory_order_relaxed);
     const int click = clickOutput_.load(std::memory_order_relaxed);
