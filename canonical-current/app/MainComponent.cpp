@@ -2117,7 +2117,7 @@ void MainComponent::loadAppState()
     if (xml == nullptr || !xml->hasTagName("J3WorshipState"))
         return;
 
-    themeId_ = juce::jlimit(1, 5, xml->getIntAttribute("themeId", 1));
+    themeId_ = juce::jlimit(1, 6, xml->getIntAttribute("themeId", 1));
     themeBox_.setSelectedId(themeId_, juce::dontSendNotification);
     applyTheme(themeId_, false);
 
