@@ -31,6 +31,24 @@ juce::String outputName(juce::AudioIODevice& device, int index)
         return names[index];
     return "OUT " + juce::String(index + 1);
 }
+
+class GenericPluginEditorHolder final : public juce::Component
+{
+public:
+    explicit GenericPluginEditorHolder(std::shared_ptr<juce::AudioPluginInstance> plugin)
+        : plugin_(std::move(plugin)), editor_(std::make_unique<juce::GenericAudioProcessorEditor>(*plugin_))
+    {
+        addAndMakeVisible(*editor_);
+        setSize(juce::jlimit(480, 980, editor_->getWidth()),
+                juce::jlimit(420, 760, editor_->getHeight()));
+    }
+
+    void resized() override { editor_->setBounds(getLocalBounds()); }
+
+private:
+    std::shared_ptr<juce::AudioPluginInstance> plugin_;
+    std::unique_ptr<juce::GenericAudioProcessorEditor> editor_;
+};
 }
 
 MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
