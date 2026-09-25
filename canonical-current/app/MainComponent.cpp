@@ -205,7 +205,7 @@ public:
         selectedTrack_ = col;
         if (onTrack_) onTrack_(col);
 
-        if (e.y >= headerH)
+        if (e.y >= headerH && col == 0)
         {
             const int rowH = std::max(18, (getHeight() - headerH) / rows);
             const int row = juce::jlimit(0, rows - 1, (e.y - headerH) / rowH);
@@ -751,7 +751,10 @@ MainComponent::MainComponent()
 
     dashboardLiveTitle_.setText("LIVE · SECCIONES", juce::dontSendNotification);
     dashboardLiveTitle_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
-    dashboardStopButton_.onClick = [this] { stopLiveTransport(); };
+    dashboardStopButton_.setButtonText("STOP ALL");
+    dashboardStopButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff7d1f2b));
+    dashboardStopButton_.setTooltip("Silencia PA, pads, click y reproducción inmediatamente. La grabación continúa.");
+    dashboardStopButton_.onClick = [this] { panicStopAll(); };
     mixerPage_.addAndMakeVisible(dashboardStopButton_);
     dashboardPadButton_.onClick = [this]
     {
@@ -3396,6 +3399,26 @@ void MainComponent::stopLiveTransport()
     clickGenerator_.reset();
     refreshLiveLabels();
     updateClickUi();
+    refreshDashboard();
+}
+
+void MainComponent::panicStopAll()
+{
+    liveMonitorEnabled_.store(false, std::memory_order_release);
+    liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
+
+    ambientPad_.setEnabled(false);
+    padEnabledButton_.setToggleState(false, juce::dontSendNotification);
+
+    stopLiveTransport();
+    dawWorkspace_.emergencyStop();
+
+    statusLabel_.setText("STOP ALL · salidas de show silenciadas · grabación preservada", juce::dontSendNotification);
+    statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
+    safetyLabel_.setText("LIVE SAFE · MUTED", juce::dontSendNotification);
+    safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff402a14));
+    safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffffc247));
+    refreshPadUi();
     refreshDashboard();
 }
 
