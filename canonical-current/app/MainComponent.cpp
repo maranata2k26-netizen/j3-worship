@@ -161,8 +161,7 @@ void MainComponent::MixerStrip::paint(juce::Graphics& g)
     {
         const float x = graph.getX() + step * static_cast<float>(i);
         const float amplitude = juce::jlimit(0.0f, 1.0f, meterHistory_[i]);
-        const float phase = static_cast<float>(i) * 1.73f + static_cast<float>(index_) * 0.41f;
-        const float y = mid - std::sin(phase) * amplitude * graph.getHeight() * 0.42f;
+        const float y = graph.getBottom() - amplitude * graph.getHeight();
         if (i == 0) waveform.startNewSubPath(x, y);
         else waveform.lineTo(x, y);
     }
@@ -368,7 +367,7 @@ MainComponent::MainComponent()
     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(brandLabel_);
 
-    versionLabel_.setText("1.1.0", juce::dontSendNotification);
+    versionLabel_.setText("1.2.0", juce::dontSendNotification);
     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
     addAndMakeVisible(versionLabel_);
@@ -378,7 +377,7 @@ MainComponent::MainComponent()
     statusLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
     addAndMakeVisible(statusLabel_);
 
-    for (int id = 1; id <= 5; ++id)
+    for (int id = 1; id <= 6; ++id)
         themeBox_.addItem(j3ui::themeName(id), id);
     themeBox_.setSelectedId(1, juce::dontSendNotification);
     themeBox_.setTooltip("Tema visual de J3 Worship");
@@ -921,7 +920,9 @@ MainComponent::MainComponent()
     bpmSlider_.onValueChange = [this]
     {
         clickGenerator_.setTempo(bpmSlider_.getValue());
+        dawWorkspace_.setTempoFromHost(bpmSlider_.getValue());
         if (liveStarted_) liveEngine_.setTempo(bpmSlider_.getValue(), clickGenerator_.numerator());
+        updateClickUi();
     };
     clickPage_.addAndMakeVisible(bpmSlider_);
 
@@ -1060,9 +1061,42 @@ MainComponent::MainComponent()
     };
     diagnosticsPage_.addAndMakeVisible(runCheckButton_);
 
+    dawWorkspace_.onBpmChanged = [this](double value)
+    {
+        if (std::abs(bpmSlider_.getValue() - value) > 0.001)
+            bpmSlider_.setValue(value, juce::dontSendNotification);
+        clickGenerator_.setTempo(value);
+        if (liveStarted_)
+            liveEngine_.setTempo(value, clickGenerator_.numerator());
+        updateClickUi();
+        refreshDashboard();
+    };
+    dawWorkspace_.onPlayStateChanged = [this](bool playing)
+    {
+        if (playing)
+        {
+            transportRunning_.store(true, std::memory_order_release);
+            clickGenerator_.setTempo(dawWorkspace_.bpm());
+            clickGenerator_.setEnabled(clickEnabledButton_.getToggleState());
+        }
+        else if (!liveStarted_)
+        {
+            transportRunning_.store(false, std::memory_order_release);
+            clickGenerator_.setEnabled(false);
+            pendingBeatEvents_.store(0, std::memory_order_release);
+        }
+        updateClickUi();
+    };
+    dawWorkspace_.onRecordToggle = [this] { startStopRecording(); };
+    dawWorkspace_.isRecording = [this]
+    {
+        return recordingEnabled_.load(std::memory_order_acquire);
+    };
+
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(46);
     tabs_.addTab("MEZCLADOR", juce::Colour(panel), &mixerPage_, false);
+    tabs_.addTab("DAW", juce::Colour(panel), &dawWorkspace_, false);
     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
@@ -1128,7 +1162,7 @@ void MainComponent::paint(juce::Graphics& g)
 
 void MainComponent::applyTheme(int themeId, bool persist)
 {
-    themeId_ = juce::jlimit(1, 5, themeId);
+    themeId_ = juce::jlimit(1, 6, themeId);
     if (lookAndFeel_ == nullptr)
         lookAndFeel_ = std::make_unique<j3ui::LookAndFeel>();
 
@@ -3185,8 +3219,12 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     if (padAudible)
         ambientPad_.process(outputChannelData[left], outputChannelData[right], numSamples);
 
-    // Soft output protection is applied after live inputs and pads have been summed.
-    if (monitoring || padAudible)
+    const bool dawAudible = safePa && dawWorkspace_.isPlaying();
+    if (dawAudible)
+        dawWorkspace_.renderToMaster(outputChannelData[left], outputChannelData[right], numSamples);
+
+    // Soft output protection is applied after live inputs, pads and DAW playback have been summed.
+    if (monitoring || padAudible || dawAudible)
     {
         for (int o = 0; o < numOutputChannels; ++o)
         {
@@ -3277,6 +3315,7 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     }
     clickGenerator_.prepare(sr);
     ambientPad_.prepare(sr);
+    dawWorkspace_.prepare(sr, preparedBlock);
     clickGenerator_.setTempo(bpmSlider_.getValue());
     clickGenerator_.setEnabled(transportRunning_.load(std::memory_order_acquire));
     audioRunning_.store(true, std::memory_order_release);
