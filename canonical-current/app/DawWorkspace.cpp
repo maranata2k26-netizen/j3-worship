@@ -569,7 +569,7 @@ juce::Rectangle<int> DawWorkspace::rulerBounds() const
 juce::Rectangle<int> DawWorkspace::trackHeaderBounds(int track) const
 {
     const auto tl = timelineBounds();
-    return { 0, tl.getY() + track * trackHeight_, headerWidth_, trackHeight_ };
+    return { 0, tl.getY() + (track - firstVisibleTrack_) * trackHeight_, headerWidth_, trackHeight_ };
 }
 
 juce::Rectangle<float> DawWorkspace::clipBounds(const Clip& clip) const
@@ -577,7 +577,7 @@ juce::Rectangle<float> DawWorkspace::clipBounds(const Clip& clip) const
     const auto tl = timelineBounds();
     const float x = xForBeat(clip.startBeat);
     const float w = std::max(8.0f, static_cast<float>(clip.lengthBeats * pixelsPerBeat()));
-    const float y = static_cast<float>(tl.getY() + clip.track * trackHeight_ + 7);
+    const float y = static_cast<float>(tl.getY() + (clip.track - firstVisibleTrack_) * trackHeight_ + 7);
     return { x, y, w, static_cast<float>(trackHeight_ - 14) };
 }
 
@@ -588,7 +588,7 @@ juce::Rectangle<float> DawWorkspace::midiNoteBounds(const MidiNote& note) const
     const float w = std::max(7.0f, static_cast<float>(note.lengthBeats * pixelsPerBeat()));
     const int lo = 36;
     const int hi = 84;
-    const float laneTop = static_cast<float>(tl.getY() + note.track * trackHeight_ + 5);
+    const float laneTop = static_cast<float>(tl.getY() + (note.track - firstVisibleTrack_) * trackHeight_ + 5);
     const float laneHeight = static_cast<float>(trackHeight_ - 10);
     const float normalized = static_cast<float>(juce::jlimit(lo, hi, note.note) - lo)
         / static_cast<float>(hi - lo);
@@ -617,7 +617,7 @@ int DawWorkspace::midiPitchAtY(int track, int y) const noexcept
     const auto tl = timelineBounds();
     const int lo = 36;
     const int hi = 84;
-    const int top = tl.getY() + track * trackHeight_ + 5;
+    const int top = tl.getY() + (track - firstVisibleTrack_) * trackHeight_ + 5;
     const int height = std::max(1, trackHeight_ - 10);
     const float normalized = 1.0f - juce::jlimit(0.0f, 1.0f,
         static_cast<float>(y - top) / static_cast<float>(height));
@@ -628,7 +628,9 @@ int DawWorkspace::trackAtY(int y) const
 {
     const auto tl = timelineBounds();
     if (y < tl.getY() || y >= tl.getBottom()) return -1;
-    return juce::jlimit(0, trackCount_ - 1, (y - tl.getY()) / trackHeight_);
+    const int row = (y - tl.getY()) / trackHeight_;
+    const int track = firstVisibleTrack_ + row;
+    return track >= 0 && track < trackCount_ ? track : -1;
 }
 
 DawWorkspace::Clip* DawWorkspace::clipAt(juce::Point<int> point)
@@ -870,9 +872,18 @@ void DawWorkspace::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWh
         zoom_ = juce::jlimit(0.5, 4.0, zoom_ + wheel.deltaY * 0.35);
         zoomSlider_.setValue(zoom_, juce::dontSendNotification);
     }
+    else if (e.mods.isShiftDown() || std::abs(wheel.deltaX) > std::abs(wheel.deltaY))
+    {
+        const float amount = std::abs(wheel.deltaX) > 0.001f ? wheel.deltaX : wheel.deltaY;
+        viewStartBeat_ = std::max(0.0, viewStartBeat_ - amount * 8.0 / zoom_);
+    }
     else
     {
-        viewStartBeat_ = std::max(0.0, viewStartBeat_ - (wheel.deltaY + wheel.deltaX) * 8.0 / zoom_);
+        const auto tl = timelineBounds();
+        const int visible = std::max(1, tl.getHeight() / std::max(1, trackHeight_));
+        const int maxFirst = std::max(0, trackCount_ - visible);
+        const int delta = wheel.deltaY > 0.0f ? -2 : (wheel.deltaY < 0.0f ? 2 : 0);
+        firstVisibleTrack_ = juce::jlimit(0, maxFirst, firstVisibleTrack_ + delta);
     }
     repaint();
 }
@@ -910,7 +921,7 @@ void DawWorkspace::addTrack()
 {
     if (trackCount_ >= kMaxTracks)
     {
-        refreshStatus("Máximo de 32 pistas alcanzado");
+        refreshStatus("Máximo de 48 pistas alcanzado");
         return;
     }
     const int i = trackCount_++;
@@ -918,6 +929,8 @@ void DawWorkspace::addTrack()
     tracks_[i].name = "Pista " + juce::String(i + 1);
     tracks_[i].colour = trackColour(i);
     selectedTrack_ = i;
+    const int visible = std::max(1, timelineBounds().getHeight() / std::max(1, trackHeight_));
+    firstVisibleTrack_ = std::max(0, i - visible + 1);
     projectDirty_ = true;
     markRenderDirty();
     syncInspector();
@@ -928,7 +941,7 @@ void DawWorkspace::addMidiTrack()
 {
     if (trackCount_ >= kMaxTracks)
     {
-        refreshStatus("Máximo de 32 pistas alcanzado");
+        refreshStatus("Máximo de 48 pistas alcanzado");
         return;
     }
     const int i = trackCount_++;
@@ -939,6 +952,8 @@ void DawWorkspace::addMidiTrack()
     selectedTrack_ = i;
     selectedClipId_ = -1;
     selectedMidiNoteId_ = -1;
+    const int visible = std::max(1, timelineBounds().getHeight() / std::max(1, trackHeight_));
+    firstVisibleTrack_ = std::max(0, i - visible + 1);
     projectDirty_ = true;
     markRenderDirty();
     syncInspector();
@@ -1783,6 +1798,7 @@ juce::String DawWorkspace::serializeProject() const
     root.setAttribute("trackCount", trackCount_);
     root.setAttribute("viewStartBeat", viewStartBeat_);
     root.setAttribute("zoom", zoom_);
+    root.setAttribute("firstVisibleTrack", firstVisibleTrack_);
 
     auto* tracksXml = root.createNewChildElement("Tracks");
     for (int i = 0; i < trackCount_; ++i)
@@ -1850,6 +1866,8 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
     viewStartBeat_ = std::max(0.0, xml->getDoubleAttribute("viewStartBeat", 0.0));
     zoom_ = juce::jlimit(0.5, 4.0, xml->getDoubleAttribute("zoom", 1.0));
     zoomSlider_.setValue(zoom_, juce::dontSendNotification);
+    firstVisibleTrack_ = juce::jlimit(0, std::max(0, trackCount_ - 1),
+        xml->getIntAttribute("firstVisibleTrack", 0));
 
     if (auto* tracksXml = xml->getChildByName("Tracks"))
     {
@@ -2010,6 +2028,7 @@ void DawWorkspace::newProject()
     bpm_.store(120.0);
     bpmSlider_.setValue(120.0, juce::dontSendNotification);
     viewStartBeat_ = 0.0;
+    firstVisibleTrack_ = 0;
     projectDirty_ = false;
     recoveryFile().deleteFile();
     markRenderDirty();
