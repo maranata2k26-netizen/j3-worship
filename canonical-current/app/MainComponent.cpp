@@ -175,7 +175,7 @@ void MainComponent::GroupStrip::syncFromModel()
 
 MainComponent::IemSendStrip::IemSendStrip(int sourceIndex, const juce::String& title,
                                           std::atomic<float>& gain, std::atomic<float>& pan)
-    : sourceIndex_(sourceIndex), gain_(gain), pan_(pan)
+    : sourceIndex_(sourceIndex), gain_(gain), panValue_(pan)
 {
     title_.setText(title, juce::dontSendNotification);
     title_.setJustificationType(juce::Justification::centred);
@@ -190,13 +190,13 @@ MainComponent::IemSendStrip::IemSendStrip(int sourceIndex, const juce::String& t
     level_.onValueChange = [this] { gain_.store(dbToGain(level_.getValue()), std::memory_order_relaxed); };
     addAndMakeVisible(level_);
 
-    pan_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    pan_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 20);
-    pan_.setRange(-1.0, 1.0, 0.01);
-    pan_.setDoubleClickReturnValue(true, 0.0);
-    pan_.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(accent));
-    pan_.onValueChange = [this] { pan_.setValue(pan_.getValue(), juce::dontSendNotification); pan_.repaint(); };
-    addAndMakeVisible(pan_);
+    panSlider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    panSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 58, 20);
+    panSlider_.setRange(-1.0, 1.0, 0.01);
+    panSlider_.setDoubleClickReturnValue(true, 0.0);
+    panSlider_.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(accent));
+    panSlider_.onValueChange = [this] { panValue_.store(static_cast<float>(panSlider_.getValue()), std::memory_order_relaxed); };
+    addAndMakeVisible(panSlider_);
     syncFromModel();
 }
 
@@ -213,7 +213,7 @@ void MainComponent::IemSendStrip::resized()
 {
     auto r = getLocalBounds().reduced(8);
     title_.setBounds(r.removeFromTop(26));
-    pan_.setBounds(r.removeFromBottom(86));
+    panSlider_.setBounds(r.removeFromBottom(86));
     level_.setBounds(r.reduced(2, 4));
 }
 
@@ -221,7 +221,7 @@ void MainComponent::IemSendStrip::syncFromModel()
 {
     const auto gain = std::max(1.0e-8f, gain_.load(std::memory_order_relaxed));
     level_.setValue(juce::Decibels::gainToDecibels(gain, -80.0f), juce::dontSendNotification);
-    pan_.setValue(pan_.load(std::memory_order_relaxed), juce::dontSendNotification);
+    panSlider_.setValue(panValue_.load(std::memory_order_relaxed), juce::dontSendNotification);
 }
 
 MainComponent::MainComponent()
