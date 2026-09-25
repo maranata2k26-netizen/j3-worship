@@ -1788,6 +1788,19 @@ juce::String DawWorkspace::serializeProject() const
         t->setAttribute("solo", tracks_[i].solo);
         t->setAttribute("armed", tracks_[i].armed);
         t->setAttribute("monitor", tracks_[i].monitor);
+        t->setAttribute("midi", tracks_[i].midi);
+    }
+
+    auto* midiXml = root.createNewChildElement("MidiNotes");
+    for (const auto& n : midiNotes_)
+    {
+        auto* x = midiXml->createNewChildElement("Note");
+        x->setAttribute("id", n.id);
+        x->setAttribute("track", n.track);
+        x->setAttribute("startBeat", n.startBeat);
+        x->setAttribute("lengthBeats", n.lengthBeats);
+        x->setAttribute("note", n.note);
+        x->setAttribute("velocity", n.velocity);
     }
 
     auto* clipsXml = root.createNewChildElement("Clips");
@@ -1817,8 +1830,12 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
     if (xml == nullptr || !xml->hasTagName("J3DAW")) return false;
 
     stopTransport(true);
+    if (trackRecording_.load(std::memory_order_acquire))
+        stopTrackRecording(false);
     clips_.clear();
+    midiNotes_.clear();
     nextClipId_ = 1;
+    nextMidiNoteId_ = 1;
     trackCount_ = juce::jlimit(1, kMaxTracks, xml->getIntAttribute("trackCount", 8));
     bpm_.store(juce::jlimit(40.0, 240.0, xml->getDoubleAttribute("bpm", 120.0)));
     bpmSlider_.setValue(bpm(), juce::dontSendNotification);
@@ -1840,6 +1857,25 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
             tracks_[i].solo = t->getBoolAttribute("solo", false);
             tracks_[i].armed = t->getBoolAttribute("armed", false);
             tracks_[i].monitor = t->getBoolAttribute("monitor", false);
+            tracks_[i].midi = t->getBoolAttribute("midi", false);
+        }
+    }
+
+    if (auto* midiXml = xml->getChildByName("MidiNotes"))
+    {
+        forEachXmlChildElementWithTagName(*midiXml, x, "Note")
+        {
+            if (static_cast<int>(midiNotes_.size()) >= kMaxMidiNotes) break;
+            MidiNote n;
+            n.id = x->getIntAttribute("id", nextMidiNoteId_++);
+            nextMidiNoteId_ = std::max(nextMidiNoteId_, n.id + 1);
+            n.track = juce::jlimit(0, trackCount_ - 1, x->getIntAttribute("track", 0));
+            n.startBeat = std::max(0.0, x->getDoubleAttribute("startBeat", 0.0));
+            n.lengthBeats = std::max(0.125, x->getDoubleAttribute("lengthBeats", 1.0));
+            n.note = juce::jlimit(0, 127, x->getIntAttribute("note", 60));
+            n.velocity = juce::jlimit(0.01f, 1.0f, static_cast<float>(x->getDoubleAttribute("velocity", 0.8)));
+            tracks_[n.track].midi = true;
+            midiNotes_.push_back(n);
         }
     }
 
@@ -1875,6 +1911,7 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
     if (updateProjectFile && sourceFile != juce::File()) projectFile_ = sourceFile;
     selectedTrack_ = 0;
     selectedClipId_ = -1;
+    selectedMidiNoteId_ = -1;
     projectDirty_ = false;
     markRenderDirty();
     rebuildRenderState();
@@ -1938,10 +1975,30 @@ void DawWorkspace::newProject()
 {
     checkpointUndo();
     stopTransport(true);
+    if (trackRecording_.load(std::memory_order_acquire))
+        stopTrackRecording(false);
     clips_.clear();
+    midiNotes_.clear();
+    nextClipId_ = 1;
+    nextMidiNoteId_ = 1;
     trackCount_ = 8;
+    for (int i = 0; i < kMaxTracks; ++i)
+    {
+        tracks_[i] = {};
+        tracks_[i].name = "Pista " + juce::String(i + 1);
+        tracks_[i].colour = trackColour(i);
+    }
+    tracks_[0].name = "Voz";
+    tracks_[1].name = "Batería";
+    tracks_[2].name = "Bajo";
+    tracks_[3].name = "Guitarra";
+    tracks_[4].name = "Teclado";
+    tracks_[5].name = "Secuencias";
+    tracks_[6].name = "Pads";
+    tracks_[7].name = "FX";
     selectedTrack_ = 0;
     selectedClipId_ = -1;
+    selectedMidiNoteId_ = -1;
     projectFile_ = {};
     bpm_.store(120.0);
     bpmSlider_.setValue(120.0, juce::dontSendNotification);
@@ -1964,7 +2021,7 @@ juce::File DawWorkspace::recoveryFile() const
 
 void DawWorkspace::autosaveRecovery()
 {
-    if (clips_.empty() && !projectDirty_) return;
+    if (clips_.empty() && midiNotes_.empty() && !projectDirty_) return;
     auto f = recoveryFile();
     f.getParentDirectory().createDirectory();
     f.replaceWithText(serializeProject());
