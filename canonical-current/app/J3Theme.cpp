@@ -40,6 +40,14 @@ Palette paletteForTheme(int id)
                 juce::Colour(0xffff4560), juce::Colour(0xffffffff), juce::Colour(0xffc9c9c9),
                 juce::Colour(0xff444444)
             };
+        case 6: // FL-inspired colourful production workspace
+            return {
+                juce::Colour(0xff14181d), juce::Colour(0xff1b2026), juce::Colour(0xff232a31),
+                juce::Colour(0xff2b343d), juce::Colour(0xff35414b), juce::Colour(0xffff8a35),
+                juce::Colour(0xff57c7ff), juce::Colour(0xff62d68a), juce::Colour(0xffffd15a),
+                juce::Colour(0xffff5c73), juce::Colour(0xfff4f6f8), juce::Colour(0xffaeb8c2),
+                juce::Colour(0xff46535f)
+            };
         default: // J3 Dark
             return {
                 juce::Colour(0xff080d12), juce::Colour(0xff0b131a), juce::Colour(0xff0e1820),
@@ -59,6 +67,7 @@ juce::String themeName(int id)
         case 3: return "STUDIO BLUE";
         case 4: return "MIDNIGHT";
         case 5: return "HIGH CONTRAST";
+        case 6: return "FL STUDIO STYLE";
         default: return "J3 DARK";
     }
 }
@@ -70,7 +79,7 @@ LookAndFeel::LookAndFeel()
 
 void LookAndFeel::setTheme(int id)
 {
-    themeId_ = juce::jlimit(1, 5, id);
+    themeId_ = juce::jlimit(1, 6, id);
     palette_ = paletteForTheme(themeId_);
     applyColours();
 }
