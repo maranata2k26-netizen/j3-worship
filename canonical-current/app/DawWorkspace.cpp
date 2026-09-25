@@ -425,7 +425,8 @@ void DawWorkspace::paint(juce::Graphics& g)
         g.setColour(juce::Colour(kText));
         g.setFont(juce::FontOptions(10.0f, selected ? juce::Font::bold : juce::Font::plain));
         g.drawFittedText(tracks_[i].name, strip.removeFromTop(20).reduced(4, 0), juce::Justification::centred, 1);
-        const float normGain = juce::jlimit(0.0f, 1.0f, (gainToDb(tracks_[i].gain) + 60.0f) / 72.0f);
+        const float normGain = juce::jlimit(0.0f, 1.0f,
+            static_cast<float>((gainToDb(tracks_[i].gain) + 60.0) / 72.0));
         auto meter = strip.reduced(6, 5);
         g.setColour(juce::Colour(0xff1a2b35));
         g.fillRoundedRectangle(meter.toFloat(), 2.0f);
