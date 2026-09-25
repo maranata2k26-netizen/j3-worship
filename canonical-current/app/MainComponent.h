@@ -249,6 +249,7 @@ private:
     juce::File downloadedUpdateInstaller_;
     std::atomic<bool> updateBusy_ { false };
 
+    juce::ImageComponent logoImage_;
     juce::Label brandLabel_;
     juce::Label versionLabel_;
     juce::Label statusLabel_;
