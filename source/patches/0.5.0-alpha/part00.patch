@@ -1,0 +1,183 @@
+diff -ruN J3Worship-base04/CMakeLists.txt J3Worship-work/CMakeLists.txt
+--- J3Worship-base04/CMakeLists.txt	2026-09-24 19:33:52.000000000 +0000
++++ J3Worship-work/CMakeLists.txt	2026-09-25 02:42:38.069711736 +0000
+@@ -2,7 +2,7 @@
+ if(POLICY CMP0091)
+   cmake_policy(SET CMP0091 NEW)
+ endif()
+-project(J3Worship VERSION 0.4.0 LANGUAGES C CXX)
++project(J3Worship VERSION 0.5.0 LANGUAGES C CXX)
+ 
+ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+@@ -28,6 +28,7 @@
+   src/Routing.cpp
+   src/LiveEngine.cpp
+   src/ClickEngine.cpp
++  src/ClickGenerator.cpp
+   src/Session.cpp
+   src/Diagnostics.cpp
+   src/Updater.cpp
+@@ -63,7 +64,7 @@
+     PRODUCT_NAME "J3 Worship"
+     COMPANY_NAME "J3 Worship"
+     BUNDLE_ID "com.j3worship.desktop"
+-    VERSION "0.4.0"
++    VERSION "0.5.0"
+     NEEDS_CURL FALSE
+     NEEDS_WEB_BROWSER FALSE
+   )
+diff -ruN J3Worship-base04/app/Main.cpp J3Worship-work/app/Main.cpp
+--- J3Worship-base04/app/Main.cpp	2026-09-24 19:31:22.000000000 +0000
++++ J3Worship-work/app/Main.cpp	2026-09-25 02:42:38.069603646 +0000
+@@ -5,7 +5,7 @@
+ {
+ public:
+     const juce::String getApplicationName() override { return "J3 Worship"; }
+-    const juce::String getApplicationVersion() override { return "0.4.0-alpha"; }
++    const juce::String getApplicationVersion() override { return "0.5.0-alpha"; }
+     bool moreThanOneInstanceAllowed() override { return false; }
+ 
+     void initialise(const juce::String&) override
+diff -ruN J3Worship-base04/app/MainComponent.cpp J3Worship-work/app/MainComponent.cpp
+--- J3Worship-base04/app/MainComponent.cpp	2026-09-24 19:31:22.000000000 +0000
++++ J3Worship-work/app/MainComponent.cpp	2026-09-25 02:42:37.519828800 +0000
+@@ -102,6 +102,14 @@
+     meterValue_ = std::max(target, meterValue_ * 0.86);
+ }
+ 
++void MainComponent::MixerStrip::syncFromModel()
++{
++    const auto gain = std::max(1.0e-6f, gain_.load(std::memory_order_relaxed));
++    fader_.setValue(juce::Decibels::gainToDecibels(gain, -60.0f), juce::dontSendNotification);
++    panSlider_.setValue(pan_.load(std::memory_order_relaxed), juce::dontSendNotification);
++    muteButton_.setToggleState(muted_.load(std::memory_order_relaxed), juce::dontSendNotification);
++}
++
+ MainComponent::MainComponent()
+ {
+     setOpaque(true);
+@@ -118,7 +126,7 @@
+     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
+     addAndMakeVisible(brandLabel_);
+ 
+-    versionLabel_.setText("0.4.0 ALPHA", juce::dontSendNotification);
++    versionLabel_.setText("0.5.0 ALPHA", juce::dontSendNotification);
+     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
+     addAndMakeVisible(versionLabel_);
+@@ -194,6 +202,121 @@
+         mixerPage_.addAndMakeVisible(*strips_[i]);
+     }
+ 
++    clickTitle_.setText("J3 CLICK", juce::dontSendNotification);
++    clickTitle_.setFont(juce::FontOptions(28.0f, juce::Font::bold));
++    clickTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
++    clickPage_.addAndMakeVisible(clickTitle_);
++
++    clickEnabledButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
++    clickEnabledButton_.onClick = [this]
++    {
++        clickAudible_.store(clickEnabledButton_.getToggleState(), std::memory_order_release);
++        if (clickAudible_.load())
++        {
++            transportRunning_.store(true, std::memory_order_release);
++            clickGenerator_.setEnabled(true);
++        }
++        if (clickAudible_.load() && clickOutput_.load() < 0)
++        {
++            clickEnabledButton_.setToggleState(false, juce::dontSendNotification);
++            clickAudible_.store(false, std::memory_order_release);
++            if (!liveStarted_)
++            {
++                transportRunning_.store(false, std::memory_order_release);
++                clickGenerator_.setEnabled(false);
++            }
++            showAudioError("Elegí una salida CLICK / GUIDE distinta del PA antes de activar el click.");
++        }
++        updateClickUi();
++        saveAppState();
++    };
++    clickPage_.addAndMakeVisible(clickEnabledButton_);
++
++    bpmSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
++    bpmSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 90, 28);
++    bpmSlider_.setRange(40.0, 240.0, 0.1);
++    bpmSlider_.setValue(120.0, juce::dontSendNotification);
++    bpmSlider_.setTextValueSuffix(" BPM");
++    bpmSlider_.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
++    bpmSlider_.onValueChange = [this]
++    {
++        clickGenerator_.setTempo(bpmSlider_.getValue());
++        if (liveStarted_) liveEngine_.setTempo(bpmSlider_.getValue(), clickGenerator_.numerator());
++    };
++    clickPage_.addAndMakeVisible(bpmSlider_);
++
++    tapTempoButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
++    tapTempoButton_.onClick = [this] { handleTapTempo(); };
++    clickPage_.addAndMakeVisible(tapTempoButton_);
++
++    timeSignatureBox_.addItem("4/4", 1);
++    timeSignatureBox_.addItem("3/4", 2);
++    timeSignatureBox_.addItem("6/8", 3);
++    timeSignatureBox_.addItem("2/4", 4);
++    timeSignatureBox_.setSelectedId(1, juce::dontSendNotification);
++    timeSignatureBox_.onChange = [this]
++    {
++        const int id = timeSignatureBox_.getSelectedId();
++        const int n = id == 2 ? 3 : (id == 3 ? 6 : (id == 4 ? 2 : 4));
++        const int d = id == 3 ? 8 : 4;
++        clickGenerator_.setTimeSignature(n, d);
++        if (liveStarted_) liveEngine_.setTempo(bpmSlider_.getValue(), n);
++        saveAppState();
++    };
++    clickPage_.addAndMakeVisible(timeSignatureBox_);
++
++    subdivisionBox_.addItem("Quarter", 1);
++    subdivisionBox_.addItem("Eighth", 2);
++    subdivisionBox_.addItem("Sixteenth", 3);
++    subdivisionBox_.setSelectedId(1, juce::dontSendNotification);
++    subdivisionBox_.onChange = [this]
++    {
++        const int id = subdivisionBox_.getSelectedId();
++        clickGenerator_.setSubdivision(id == 3 ? 4 : (id == 2 ? 2 : 1));
++        saveAppState();
++    };
++    clickPage_.addAndMakeVisible(subdivisionBox_);
++
++    accentButton_.setToggleState(true, juce::dontSendNotification);
++    accentButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
++    accentButton_.onClick = [this]
++    {
++        clickGenerator_.setAccentEnabled(accentButton_.getToggleState());
++        saveAppState();
++    };
++    clickPage_.addAndMakeVisible(accentButton_);
++
++    clickVolumeSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
++    clickVolumeSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 80, 26);
++    clickVolumeSlider_.setRange(0.0, 1.0, 0.01);
++    clickVolumeSlider_.setValue(0.35, juce::dontSendNotification);
++    clickVolumeSlider_.onValueChange = [this]
++    {
++        clickGenerator_.setLevel(static_cast<float>(clickVolumeSlider_.getValue()));
++    };
++    clickPage_.addAndMakeVisible(clickVolumeSlider_);
++
++    clickRouteLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
++    clickRouteLabel_.setFont(juce::FontOptions(16.0f));
++    clickRouteLabel_.setJustificationType(juce::Justification::topLeft);
++    clickPage_.addAndMakeVisible(clickRouteLabel_);
++
++    recordingTitle_.setText("RECORD SERVICE", juce::dontSendNotification);
++    recordingTitle_.setFont(juce::FontOptions(28.0f, juce::Font::bold));
++    recordingTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
++    recordingPage_.addAndMakeVisible(recordingTitle_);
++    recordButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff9b2430));
++    recordButton_.onClick = [this] { startStopRecording(); };
++    recordingPage_.addAndMakeVisible(recordButton_);
++    recordingStatusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd4dbe5));
++    recordingStatusLabel_.setFont(juce::FontOptions(17.0f));
++    recordingStatusLabel_.setJustificationType(juce::Justification::topLeft);
++    recordingPage_.addAndMakeVisible(recordingStatusLabel_);
++
