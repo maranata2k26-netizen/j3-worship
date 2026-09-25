@@ -1006,6 +1006,41 @@ void MainComponent::resized()
     for (int i = 0; i < kVisibleChannels; ++i)
         if (strips_[i]) strips_[i]->setBounds(mixerArea.removeFromLeft(stripW).reduced(3));
 
+    auto dspArea = dspPage_.getLocalBounds().reduced(20);
+    auto dspHeader = dspArea.removeFromTop(42);
+    dspTitle_.setBounds(dspHeader.removeFromLeft(std::min(480, dspHeader.getWidth() / 2)));
+    dspChannelBox_.setBounds(dspHeader.removeFromLeft(160).reduced(4, 3));
+    auto presetRow = dspHeader;
+    const int presetW = std::max(64, presetRow.getWidth() / 6);
+    vocalPresetButton_.setBounds(presetRow.removeFromLeft(presetW).reduced(2));
+    kickPresetButton_.setBounds(presetRow.removeFromLeft(presetW).reduced(2));
+    snarePresetButton_.setBounds(presetRow.removeFromLeft(presetW).reduced(2));
+    guitarPresetButton_.setBounds(presetRow.removeFromLeft(presetW).reduced(2));
+    bassPresetButton_.setBounds(presetRow.removeFromLeft(presetW).reduced(2));
+    resetDspButton_.setBounds(presetRow.reduced(2));
+    dspArea.removeFromTop(10);
+
+    auto dynamics = dspArea.removeFromLeft(dspArea.getWidth() / 2).reduced(8);
+    auto eqArea = dspArea.reduced(8);
+    const int dynH = std::max(36, dynamics.getHeight() / 7);
+    hpfSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    lpfSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    gateSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    compThresholdSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    compRatioSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    denoiseSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    denoiseThresholdSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+
+    const int eqH = std::max(70, eqArea.getHeight() / 4);
+    for (int band = 0; band < 4; ++band)
+    {
+        auto row = eqArea.removeFromTop(eqH).reduced(4);
+        eqBandLabels_[band].setBounds(row.removeFromLeft(54));
+        auto freqArea = row.removeFromLeft(row.getWidth() / 2);
+        eqFreqSliders_[band].setBounds(freqArea.reduced(3));
+        eqGainSliders_[band].setBounds(row.reduced(3));
+    }
+
     auto groupsArea = groupsPage_.getLocalBounds().reduced(18);
     groupsTitle_.setBounds(groupsArea.removeFromTop(38));
     groupsArea.removeFromTop(8);
