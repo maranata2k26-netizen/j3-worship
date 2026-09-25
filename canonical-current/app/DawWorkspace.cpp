@@ -124,7 +124,7 @@ void DawWorkspace::configureControls()
                 juce::StringArray paths;
                 for (const auto& f : c.getResults()) paths.add(f.getFullPathName());
                 if (!paths.isEmpty())
-                    importFiles(paths, selectedTrack_, beatAtX(static_cast<float>(headerWidth_ + 12)));
+                    importFiles(paths, selectedTrack_, beatAtX(static_cast<float>(timelineBounds().getX() + headerWidth_ + 12)));
             });
     };
     addTrackButton_.onClick = [this] { checkpointUndo(); addTrack(); };
@@ -452,6 +452,8 @@ void DawWorkspace::paint(juce::Graphics& g)
         }
     }
 
+    g.saveState();
+    g.reduceClipRegion(tl);
     g.setColour(juce::Colour(0xff0b1720));
     g.fillRect(tl.withWidth(headerWidth_));
     g.setColour(juce::Colour(kBorder));
@@ -602,6 +604,8 @@ void DawWorkspace::paint(juce::Graphics& g)
                        nb.reduced(4.0f, 0.0f), juce::Justification::centredLeft);
         }
     }
+
+    g.restoreState();
 
     const double posBeat = (static_cast<double>(transportSamples_.load(std::memory_order_relaxed))
         / std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed))) * bpm() / 60.0;
