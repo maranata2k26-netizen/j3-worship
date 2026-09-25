@@ -377,6 +377,7 @@ void DawWorkspace::paint(juce::Graphics& g)
         if (tracks_[t].solo) flags << "S ";
         if (tracks_[t].armed) flags << "REC ";
         if (tracks_[t].monitor) flags << "MON ";
+        if (tracks_[t].midi) flags << "MIDI · PIANO ROLL ";
         flags << juce::String(gainToDb(tracks_[t].gain), 1) << " dB";
         g.drawText(flags, header.reduced(9, 7).withTrimmedTop(25), juce::Justification::centredLeft);
     }
@@ -462,6 +463,30 @@ void DawWorkspace::paint(juce::Graphics& g)
         }
     }
 
+    for (const auto& note : midiNotes_)
+    {
+        if (note.track < 0 || note.track >= trackCount_ || !tracks_[note.track].midi)
+            continue;
+        const auto nb = midiNoteBounds(note);
+        if (!nb.intersects(tl.toFloat()))
+            continue;
+
+        const bool selected = note.id == selectedMidiNoteId_;
+        auto colour = tracks_[note.track].colour.brighter(0.12f);
+        g.setColour(colour.withAlpha(selected ? 0.98f : 0.78f));
+        g.fillRoundedRectangle(nb, 2.5f);
+        g.setColour(selected ? juce::Colours::white : colour.brighter(0.35f));
+        g.drawRoundedRectangle(nb, 2.5f, selected ? 1.8f : 0.8f);
+
+        if (nb.getWidth() > 34.0f)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.88f));
+            g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+            g.drawText(juce::MidiMessage::getMidiNoteName(note.note, true, true, 3),
+                       nb.reduced(4.0f, 0.0f), juce::Justification::centredLeft);
+        }
+    }
+
     const double posBeat = (static_cast<double>(transportSamples_.load(std::memory_order_relaxed))
         / std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed))) * bpm() / 60.0;
     const float playX = xForBeat(posBeat);
@@ -478,7 +503,7 @@ void DawWorkspace::paint(juce::Graphics& g)
 
     g.setColour(juce::Colour(kMuted));
     g.setFont(juce::FontOptions(10.5f));
-    g.drawText("ARRANGER · arrastrá WAV / MP3 / FLAC / AIFF · Space Play/Stop · Ctrl+S · Ctrl+Z/Y · Ctrl+D · Delete",
+    g.drawText("ARRANGER · audio + MIDI/piano roll · doble clic en pista MIDI agrega nota · PATTERN 16 · Space Play/Stop · Ctrl+S · Ctrl+Z/Y · Delete",
                8, getHeight() - 18, getWidth() - 16, 15, juce::Justification::centredLeft);
 }
 
@@ -561,6 +586,49 @@ juce::Rectangle<float> DawWorkspace::clipBounds(const Clip& clip) const
     const float w = std::max(8.0f, static_cast<float>(clip.lengthBeats * pixelsPerBeat()));
     const float y = static_cast<float>(tl.getY() + clip.track * trackHeight_ + 7);
     return { x, y, w, static_cast<float>(trackHeight_ - 14) };
+}
+
+juce::Rectangle<float> DawWorkspace::midiNoteBounds(const MidiNote& note) const
+{
+    const auto tl = timelineBounds();
+    const float x = xForBeat(note.startBeat);
+    const float w = std::max(7.0f, static_cast<float>(note.lengthBeats * pixelsPerBeat()));
+    const int lo = 36;
+    const int hi = 84;
+    const float laneTop = static_cast<float>(tl.getY() + note.track * trackHeight_ + 5);
+    const float laneHeight = static_cast<float>(trackHeight_ - 10);
+    const float normalized = static_cast<float>(juce::jlimit(lo, hi, note.note) - lo)
+        / static_cast<float>(hi - lo);
+    const float y = laneTop + (1.0f - normalized) * (laneHeight - 6.0f);
+    return { x, y, w, 6.0f };
+}
+
+DawWorkspace::MidiNote* DawWorkspace::midiNoteAt(juce::Point<int> point)
+{
+    for (auto it = midiNotes_.rbegin(); it != midiNotes_.rend(); ++it)
+        if (midiNoteBounds(*it).expanded(1.0f, 2.0f).contains(point.toFloat()))
+            return &*it;
+    return nullptr;
+}
+
+const DawWorkspace::MidiNote* DawWorkspace::midiNoteAt(juce::Point<int> point) const
+{
+    for (auto it = midiNotes_.rbegin(); it != midiNotes_.rend(); ++it)
+        if (midiNoteBounds(*it).expanded(1.0f, 2.0f).contains(point.toFloat()))
+            return &*it;
+    return nullptr;
+}
+
+int DawWorkspace::midiPitchAtY(int track, int y) const noexcept
+{
+    const auto tl = timelineBounds();
+    const int lo = 36;
+    const int hi = 84;
+    const int top = tl.getY() + track * trackHeight_ + 5;
+    const int height = std::max(1, trackHeight_ - 10);
+    const float normalized = 1.0f - juce::jlimit(0.0f, 1.0f,
+        static_cast<float>(y - top) / static_cast<float>(height));
+    return juce::jlimit(lo, hi, static_cast<int>(std::lround(lo + normalized * (hi - lo))));
 }
 
 int DawWorkspace::trackAtY(int y) const
