@@ -523,6 +523,9 @@ MainComponent::MainComponent()
     safetyLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff402a14));
     safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffffc247));
+    safetyLabel_.setTooltip("LIVE SAFE: estado global de audio, routing, XRUNs, grabación y protección de plugins.");
+    safetyLabel_.setInterceptsMouseClicks(true, false);
+    safetyLabel_.addMouseListener(this, false);
     addAndMakeVisible(safetyLabel_);
 
     for (int id = 1; id <= 6; ++id)
@@ -1341,6 +1344,35 @@ MainComponent::~MainComponent()
     deviceManager_.closeAudioDevice();
     getRuntimeLockFile().deleteFile();
     setLookAndFeel(nullptr);
+}
+
+void MainComponent::mouseUp(const juce::MouseEvent& e)
+{
+    if (e.eventComponent != &safetyLabel_)
+        return;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(safetyLabel_.getText());
+    const auto label = safetyLabel_.getText();
+    const juce::String summary = label.containsIgnoreCase("NO AUDIO")
+        ? "No hay interfaz de audio activa."
+        : (label.containsIgnoreCase("WARN")
+            ? "Hay una advertencia de rendimiento, grabación, plugin o salida."
+            : (label.containsIgnoreCase("CHECK")
+                ? "Revisá interfaz y routing antes del show."
+                : "Audio y routing sin alertas detectadas."));
+    menu.addItem(100, summary, false);
+    menu.addSeparator();
+    menu.addItem(1, "Abrir diagnóstico completo");
+
+    juce::Component::SafePointer<MainComponent> safe(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&safetyLabel_),
+        [safe](int result)
+        {
+            if (safe == nullptr || result != 1) return;
+            safe->updateDiagnostics();
+            safe->tabs_.setCurrentTabIndex(11);
+        });
 }
 
 void MainComponent::paint(juce::Graphics& g)
