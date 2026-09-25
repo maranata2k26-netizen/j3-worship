@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "j3/Recording.h"
 
 #include <array>
 #include <atomic>
@@ -32,6 +33,7 @@ public:
 
     void prepare(double sampleRate, int maximumBlockSize);
     void renderToMaster(float* left, float* right, int numSamples) noexcept;
+    void captureInputBlock(const float* const* inputChannelData, int numInputChannels, int numSamples) noexcept;
 
     bool isPlaying() const noexcept { return playing_.load(std::memory_order_acquire); }
     double bpm() const noexcept { return bpm_.load(std::memory_order_relaxed); }
@@ -148,6 +150,11 @@ private:
     void stopTransport(bool returnToStart);
     void togglePlay();
     void setTransportBeat(double beat) noexcept;
+    void toggleTrackRecording();
+    bool startTrackRecording();
+    void stopTrackRecording(bool importTake);
+    juce::File trackRecordingRoot() const;
+    void importRecordedTake();
 
     void checkpointUndo();
     void pushUndoSnapshot(const juce::String& snapshot);
@@ -186,6 +193,15 @@ private:
     std::atomic<std::int64_t> transportSamples_ { 0 };
     std::atomic<std::int64_t> loopStartSamples_ { 0 };
     std::atomic<std::int64_t> loopEndSamples_ { 0 };
+
+    j3::MultiTrackRecorder trackRecorder_;
+    std::atomic<bool> trackRecording_ { false };
+    std::array<int, kMaxTracks> recordInputMap_ {};
+    std::array<int, kMaxTracks> recordTrackMap_ {};
+    int recordArmedCount_ { 0 };
+    double recordStartBeat_ { 0.0 };
+    juce::File currentTakeDirectory_;
+    juce::StringArray currentTakeFiles_;
 
     double viewStartBeat_ { 0.0 };
     double zoom_ { 1.0 };
