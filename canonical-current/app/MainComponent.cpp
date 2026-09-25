@@ -70,8 +70,10 @@ public:
         if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
         {
             const auto work = display->userBounds;
-            maxWidth = std::max(420, std::min(1180, work.getWidth() - 80));
-            maxHeight = std::max(320, std::min(820, work.getHeight() - 100));
+            const int workWidth = static_cast<int>(std::lround(work.getWidth()));
+            const int workHeight = static_cast<int>(std::lround(work.getHeight()));
+            maxWidth = std::max(420, std::min(1180, workWidth - 80));
+            maxHeight = std::max(320, std::min(820, workHeight - 100));
         }
 
         if (editor_ != nullptr)
