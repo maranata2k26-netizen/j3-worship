@@ -156,3 +156,23 @@
 +            const auto gl = gain * std::cos(angle);
 +            const auto gr = gain * std::sin(angle);
 +            float peak = 0.0f;
+ 
+-        const auto gain = channelGain_[ch].load(std::memory_order_relaxed) * master;
+-        const auto pan = juce::jlimit(-1.0f, 1.0f, channelPan_[ch].load(std::memory_order_relaxed));
+-        const auto angle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+-        const auto gl = gain * std::cos(angle);
+-        const auto gr = gain * std::sin(angle);
+-        float peak = 0.0f;
++            for (int i = 0; i < numSamples; ++i)
++            {
++                auto x = channelDsp_[ch].process(in[i]);
++                peak = std::max(peak, std::abs(x));
++                if (mono)
++                    outL[i] += x * gain;
++                else
++                {
++                    outL[i] += x * gl;
++                    outR[i] += x * gr;
++                }
++            }
++            auto previous = channelMeter_[ch].load(std::memory_order_relaxed);
