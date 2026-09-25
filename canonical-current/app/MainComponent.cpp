@@ -1148,6 +1148,22 @@ void MainComponent::resized()
     for (int i = 0; i < kVisibleChannels; ++i)
         if (iemStrips_[i]) iemStrips_[i]->setBounds(iemArea.removeFromLeft(iemW).reduced(3));
 
+    auto padArea = padPage_.getLocalBounds().reduced(42);
+    padTitle_.setBounds(padArea.removeFromTop(54));
+    padArea.removeFromTop(18);
+    auto padControls = padArea.removeFromTop(52);
+    padKeyBox_.setBounds(padControls.removeFromLeft(150).reduced(3));
+    padControls.removeFromLeft(14);
+    padMinorButton_.setBounds(padControls.removeFromLeft(130));
+    padControls.removeFromLeft(14);
+    padEnabledButton_.setBounds(padControls.removeFromLeft(150));
+    padControls.removeFromLeft(14);
+    padToPaButton_.setBounds(padControls.removeFromLeft(170));
+    padArea.removeFromTop(24);
+    padVolumeSlider_.setBounds(padArea.removeFromTop(52).removeFromLeft(std::min(620, padArea.getWidth())));
+    padArea.removeFromTop(28);
+    padInfoLabel_.setBounds(padArea.removeFromTop(160));
+
     auto clickArea = clickPage_.getLocalBounds().reduced(36);
     clickTitle_.setBounds(clickArea.removeFromTop(48));
     clickArea.removeFromTop(18);
