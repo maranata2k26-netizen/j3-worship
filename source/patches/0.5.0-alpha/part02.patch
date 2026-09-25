@@ -1,0 +1,158 @@
++{
++    if (recordingEnabled_.load(std::memory_order_acquire))
++    {
++        recordingEnabled_.store(false, std::memory_order_release);
++        std::string error;
++        if (!recorder_.stop(error) && !error.empty())
++            showAudioError("No se pudo finalizar la grabación: " + juce::String(error));
++        recordChannelCount_.store(0, std::memory_order_release);
++        updateRecordingUi();
++        return;
++    }
++
++    auto* device = deviceManager_.getCurrentAudioDevice();
++    if (device == nullptr)
++    {
++        showAudioError("No hay una interfaz de audio activa.");
++        return;
++    }
++    const auto active = device->getActiveInputChannels();
++    const auto names = device->getInputChannelNames();
++    std::vector<std::string> channelNames;
++    channelNames.reserve(j3::kRecordMaxChannels);
++    for (int i = 0; i < active.getHighestBit() + 1 && channelNames.size() < j3::kRecordMaxChannels; ++i)
++        if (active[i])
++            channelNames.push_back((i < names.size() && names[i].isNotEmpty() ? names[i] : "Input " + juce::String(i + 1)).toStdString());
++    if (channelNames.empty())
++    {
++        showAudioError("No hay entradas activas para grabar. Activá entradas desde AUDIO / MIDI.");
++        return;
++    }
++
++    const auto now = juce::Time::getCurrentTime();
++    const auto dir = recordingsRoot().getChildFile(now.formatted("%Y-%m-%d")).getChildFile(now.formatted("%H%M%S-Service"));
++    std::string error;
++    if (!recorder_.start(dir.getFullPathName().toStdString(), static_cast<std::uint32_t>(sampleRate_.load()), channelNames, error))
++    {
++        showAudioError("No se pudo iniciar RECORD SERVICE: " + juce::String(error));
++        return;
++    }
++    recordChannelCount_.store(static_cast<int>(channelNames.size()), std::memory_order_release);
++    recordingEnabled_.store(true, std::memory_order_release);
++    updateRecordingUi();
++}
++
++void MainComponent::updateRecordingUi()
++{
++    const bool active = recordingEnabled_.load(std::memory_order_acquire);
++    recordButton_.setButtonText(active ? "STOP RECORDING" : "RECORD SERVICE");
++    recordButton_.setColour(juce::TextButton::buttonColourId, active ? juce::Colour(danger) : juce::Colour(0xff9b2430));
++    juce::String status;
++    status << (active ? "● RECORDING\n" : "READY\n");
++    status << "Folder: " << recordingsRoot().getFullPathName() << "\n";
++    status << "Individual WAV files: " << recordChannelCount_.load() << "\n";
++    status << "Dropped recording blocks: " << recorder_.overflowCount() << "\n";
++    status << "Audio is copied into a lock-free queue; disk I/O stays off the real-time callback.";
++    recordingStatusLabel_.setText(status, juce::dontSendNotification);
++}
++
++void MainComponent::handleTapTempo()
++{
++    const double now = juce::Time::getMillisecondCounterHiRes();
++    if (lastTapMs_ > 0.0)
++    {
++        const double interval = now - lastTapMs_;
++        if (interval >= 250.0 && interval <= 2000.0)
++            bpmSlider_.setValue(60000.0 / interval, juce::sendNotificationSync);
++    }
++    lastTapMs_ = now;
++}
++
++void MainComponent::updateClickUi()
++{
++    const int out = clickOutput_.load(std::memory_order_relaxed);
++    juce::String route = "CLICK routing: ";
++    if (out < 0) route << "OFF — choose an output in AUDIO / ROUTING.";
++    else route << "Output " << (out + 1) << ". J3 Safe Routing blocks this output if it is also used by PA.";
++    route << "\nTempo: " << juce::String(bpmSlider_.getValue(), 1) << " BPM · "
++          << clickGenerator_.numerator() << "/" << clickGenerator_.denominator();
++    clickRouteLabel_.setText(route, juce::dontSendNotification);
++}
++
+ void MainComponent::configureAudio()
+ {
+     deviceManager_.addChangeListener(this);
+@@ -619,12 +955,15 @@
+ 
+ void MainComponent::setLiveSection(const juce::String& name, j3::SectionKind kind, int bars)
+ {
+-    j3::Section s { name.toStdString(), kind, bars };
++    j3::Section section { name.toStdString(), kind, bars };
+     if (!liveStarted_)
+     {
+-        liveEngine_.setTempo(120.0, 4);
+-        liveEngine_.start(s);
++        liveEngine_.setTempo(bpmSlider_.getValue(), clickGenerator_.numerator());
++        liveEngine_.start(section);
+         liveStarted_ = true;
++        transportRunning_.store(true, std::memory_order_release);
++        clickGenerator_.setEnabled(true);
++        clickGenerator_.reset();
+     }
+     else if (kind == j3::SectionKind::FreePad)
+     {
+@@ -632,7 +971,7 @@
+     }
+     else
+     {
+-        liveEngine_.request(s, j3::Quantize::Bar);
++        liveEngine_.request(section, j3::Quantize::Bar);
+     }
+     refreshLiveLabels();
+ }
+@@ -659,57 +998,89 @@
+         if (outputChannelData[o] != nullptr)
+             juce::FloatVectorOperations::clear(outputChannelData[o], numSamples);
+ 
+-    if (!liveMonitorEnabled_.load(std::memory_order_acquire))
+-        return;
+-
+     const int left = paLeft_.load(std::memory_order_relaxed);
+     const int right = paRight_.load(std::memory_order_relaxed);
+     const int click = clickOutput_.load(std::memory_order_relaxed);
+-    if (left < 0 || right < 0 || left >= numOutputChannels || right >= numOutputChannels || !routeIsSafe(left, right, click))
+-        return;
+-
+-    auto* outL = outputChannelData[left];
+-    auto* outR = outputChannelData[right];
+-    if (outL == nullptr || outR == nullptr)
+-        return;
++    const bool safePa = left >= 0 && right >= 0 && left < numOutputChannels && right < numOutputChannels
++        && routeIsSafe(left, right, click) && outputChannelData[left] != nullptr && outputChannelData[right] != nullptr;
+ 
+-    const bool mono = left == right;
+-    const auto master = masterGain_.load(std::memory_order_relaxed);
+-    const int channels = std::min({ numInputChannels, kMaxChannels, kVisibleChannels });
+-    for (int ch = 0; ch < channels; ++ch)
++    if (liveMonitorEnabled_.load(std::memory_order_acquire) && safePa)
+     {
+-        const auto* in = inputChannelData[ch];
+-        if (in == nullptr || channelMute_[ch].load(std::memory_order_relaxed))
+-            continue;
++        auto* outL = outputChannelData[left];
++        auto* outR = outputChannelData[right];
++        const bool mono = left == right;
++        const auto master = masterGain_.load(std::memory_order_relaxed);
++        const int channels = std::min({ numInputChannels, kMaxChannels, kVisibleChannels });
++        for (int ch = 0; ch < channels; ++ch)
++        {
++            const auto* in = inputChannelData[ch];
++            if (in == nullptr || channelMute_[ch].load(std::memory_order_relaxed))
++                continue;
++
++            const auto gain = channelGain_[ch].load(std::memory_order_relaxed) * master;
++            const auto pan = juce::jlimit(-1.0f, 1.0f, channelPan_[ch].load(std::memory_order_relaxed));
++            const auto angle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
++            const auto gl = gain * std::cos(angle);
++            const auto gr = gain * std::sin(angle);
++            float peak = 0.0f;
