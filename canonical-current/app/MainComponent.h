@@ -244,6 +244,7 @@ private:
     std::atomic<bool> shuttingDown_ { false };
     std::uint64_t lastReconnectAttemptMs_ { 0 };
     int reconnectAttempts_ { 0 };
+    std::atomic<std::uint64_t> outputSafetyEvents_ { 0 };
     juce::String lastAudioError_;
     juce::String deviceInventory_;
 
