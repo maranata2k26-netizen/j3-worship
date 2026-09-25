@@ -285,6 +285,7 @@ private:
     std::unique_ptr<juce::Component> dashboardLeftCard_;
     std::unique_ptr<juce::Component> dashboardRightCard_;
     std::unique_ptr<juce::Component> dashboardBottomCard_;
+    std::unique_ptr<juce::Component> sessionGrid_;
     juce::Label dashboardSetlistTitle_;
     juce::ComboBox dashboardSongBox_;
     juce::TextButton dashboardLoadSongButton_ { "CARGAR EN LIVE" };
