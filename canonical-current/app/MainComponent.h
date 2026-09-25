@@ -125,6 +125,10 @@ private:
 
     void rebuildMixerBank();
     void setMixerBank(int firstChannel);
+    void applyDspParameters(int channel) noexcept;
+    void markDspDirty(int channel) noexcept;
+    void refreshDspUi();
+    void applyDspPreset(int preset);
     void rebuildIemBank();
     void refreshIemUi();
     void applyIemRoutingFromControls();
@@ -163,6 +167,18 @@ private:
     std::array<std::atomic<int>, kMaxChannels> channelBus_{};
     std::array<std::atomic<int>, kMaxChannels> channelDca_{};
     std::array<j3::ChannelDsp, kMaxChannels> channelDsp_{};
+    std::array<std::atomic<float>, kMaxChannels> channelHpf_{};
+    std::array<std::atomic<float>, kMaxChannels> channelLpf_{};
+    std::array<std::atomic<float>, kMaxChannels> channelGate_{};
+    std::array<std::atomic<float>, kMaxChannels> channelCompThreshold_{};
+    std::array<std::atomic<float>, kMaxChannels> channelCompRatio_{};
+    std::array<std::atomic<float>, kMaxChannels> channelDenoise_{};
+    std::array<std::atomic<float>, kMaxChannels> channelDenoiseThreshold_{};
+    std::array<std::array<std::atomic<float>, 4>, kMaxChannels> channelEqFreq_{};
+    std::array<std::array<std::atomic<float>, 4>, kMaxChannels> channelEqGain_{};
+    std::array<std::array<std::atomic<float>, 4>, kMaxChannels> channelEqQ_{};
+    std::array<std::atomic<std::uint32_t>, kMaxChannels> dspRevision_{};
+    std::array<std::uint32_t, kMaxChannels> dspAppliedRevision_{};
 
     std::array<std::atomic<float>, kBuses> busGain_{};
     std::array<std::atomic<bool>, kBuses> busMute_{};
@@ -208,6 +224,27 @@ private:
     juce::Label mixerBankLabel_;
     int mixerBankStart_ { 0 };
     std::array<std::unique_ptr<MixerStrip>, kVisibleChannels> strips_;
+
+    juce::Component dspPage_;
+    juce::Label dspTitle_;
+    juce::ComboBox dspChannelBox_;
+    juce::Slider hpfSlider_;
+    juce::Slider lpfSlider_;
+    juce::Slider gateSlider_;
+    juce::Slider compThresholdSlider_;
+    juce::Slider compRatioSlider_;
+    juce::Slider denoiseSlider_;
+    juce::Slider denoiseThresholdSlider_;
+    std::array<juce::Slider, 4> eqFreqSliders_;
+    std::array<juce::Slider, 4> eqGainSliders_;
+    std::array<juce::Label, 4> eqBandLabels_;
+    juce::TextButton vocalPresetButton_ { "VOCAL" };
+    juce::TextButton kickPresetButton_ { "KICK" };
+    juce::TextButton snarePresetButton_ { "SNARE" };
+    juce::TextButton guitarPresetButton_ { "GUITAR" };
+    juce::TextButton bassPresetButton_ { "BASS" };
+    juce::TextButton resetDspButton_ { "RESET" };
+    int selectedDspChannel_ { 0 };
 
     juce::Component groupsPage_;
     juce::Label groupsTitle_;
