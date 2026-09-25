@@ -1258,20 +1258,36 @@ bool DawWorkspace::startTrackRecording()
 
     for (int t = 0; t < trackCount_ && recordArmedCount_ < kMaxTracks; ++t)
     {
-        if (!tracks_[t].armed)
+        if (!tracks_[t].armed || tracks_[t].midi)
             continue;
         recordTrackMap_[recordArmedCount_] = t;
         recordInputMap_[recordArmedCount_] = recordArmedCount_;
         ++recordArmedCount_;
     }
 
-    if (recordArmedCount_ == 0 && selectedTrack_ >= 0 && selectedTrack_ < trackCount_)
+    if (recordArmedCount_ == 0 && selectedTrack_ >= 0 && selectedTrack_ < trackCount_
+        && !tracks_[selectedTrack_].midi)
     {
         tracks_[selectedTrack_].armed = true;
         recordTrackMap_[0] = selectedTrack_;
         recordInputMap_[0] = 0;
         recordArmedCount_ = 1;
         syncInspector();
+    }
+
+    if (recordArmedCount_ == 0)
+    {
+        for (int t = 0; t < trackCount_; ++t)
+        {
+            if (tracks_[t].midi) continue;
+            tracks_[t].armed = true;
+            recordTrackMap_[0] = t;
+            recordInputMap_[0] = 0;
+            recordArmedCount_ = 1;
+            selectedTrack_ = t;
+            syncInspector();
+            break;
+        }
     }
 
     if (recordArmedCount_ <= 0)
@@ -1464,17 +1480,18 @@ void DawWorkspace::captureInputBlock(const float* const* inputChannelData,
         if (inputChannelData[ch] != nullptr)
             activeInputs[activeCount++] = inputChannelData[ch];
 
-    const int wanted = std::min(recordArmedCount_, activeCount);
+    const int wanted = recordArmedCount_;
     if (wanted <= 0)
         return;
 
+    static constexpr std::array<float, j3::kRecordMaxFrames> silence {};
     int offset = 0;
     while (offset < numSamples)
     {
         const int frames = std::min<int>(static_cast<int>(j3::kRecordMaxFrames), numSamples - offset);
         std::array<const float*, kMaxTracks> block {};
         for (int i = 0; i < wanted; ++i)
-            block[i] = activeInputs[i] + offset;
+            block[i] = i < activeCount ? activeInputs[i] + offset : silence.data();
         trackRecorder_.submit(block.data(), static_cast<std::size_t>(wanted),
                               static_cast<std::size_t>(frames));
         offset += frames;
