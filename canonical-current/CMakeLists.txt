@@ -13,6 +13,7 @@ endif()
 
 add_library(j3core
   src/AudioEngine.cpp
+  src/AmbientPad.cpp
   src/AudioDevice.cpp
   src/Dsp.cpp
   src/PadEngine.cpp

@@ -236,6 +236,22 @@ MainComponent::MainComponent()
         channelMeter_[i].store(0.0f);
         channelBus_[i].store(-1);
         channelDca_[i].store(-1);
+        channelHpf_[i].store(20.0f);
+        channelLpf_[i].store(20000.0f);
+        channelGate_[i].store(-60.0f);
+        channelCompThreshold_[i].store(-18.0f);
+        channelCompRatio_[i].store(3.0f);
+        channelDenoise_[i].store(0.0f);
+        channelDenoiseThreshold_[i].store(-60.0f);
+        const float defaultEqFreq[4] { 200.0f, 600.0f, 1800.0f, 5400.0f };
+        for (int band = 0; band < 4; ++band)
+        {
+            channelEqFreq_[i][band].store(defaultEqFreq[band]);
+            channelEqGain_[i][band].store(0.0f);
+            channelEqQ_[i][band].store(1.0f);
+        }
+        dspRevision_[i].store(1);
+        dspAppliedRevision_[i] = 0;
     }
     for (int i = 0; i < kBuses; ++i)
     {
@@ -347,6 +363,79 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(mixerBankLabel_);
     rebuildMixerBank();
 
+    dspTitle_.setText("J3 CHANNEL DSP · EQ · GATE · COMP · DENOISE", juce::dontSendNotification);
+    dspTitle_.setFont(juce::FontOptions(23.0f, juce::Font::bold));
+    dspTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+    dspPage_.addAndMakeVisible(dspTitle_);
+
+    for (int i = 0; i < kMaxChannels; ++i)
+        dspChannelBox_.addItem("IN " + juce::String(i + 1), i + 1);
+    dspChannelBox_.setSelectedId(1, juce::dontSendNotification);
+    dspChannelBox_.onChange = [this]
+    {
+        selectedDspChannel_ = juce::jlimit(0, kMaxChannels - 1, dspChannelBox_.getSelectedId() - 1);
+        refreshDspUi();
+    };
+    dspPage_.addAndMakeVisible(dspChannelBox_);
+
+    auto setupHorizontal = [this](juce::Slider& s, double lo, double hi, double step, const juce::String& suffix)
+    {
+        s.setSliderStyle(juce::Slider::LinearHorizontal);
+        s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 82, 24);
+        s.setRange(lo, hi, step);
+        s.setTextValueSuffix(suffix);
+        s.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
+        dspPage_.addAndMakeVisible(s);
+    };
+    setupHorizontal(hpfSlider_, 20.0, 500.0, 1.0, " Hz HPF");
+    setupHorizontal(lpfSlider_, 2000.0, 20000.0, 10.0, " Hz LPF");
+    setupHorizontal(gateSlider_, -80.0, -20.0, 0.5, " dB GATE");
+    setupHorizontal(compThresholdSlider_, -40.0, 0.0, 0.5, " dB COMP");
+    setupHorizontal(compRatioSlider_, 1.0, 10.0, 0.1, ":1");
+    setupHorizontal(denoiseSlider_, 0.0, 1.0, 0.01, " DENOISE");
+    setupHorizontal(denoiseThresholdSlider_, -80.0, -30.0, 0.5, " dB NOISE");
+
+    hpfSlider_.onValueChange = [this] { channelHpf_[selectedDspChannel_].store(static_cast<float>(hpfSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    lpfSlider_.onValueChange = [this] { channelLpf_[selectedDspChannel_].store(static_cast<float>(lpfSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    gateSlider_.onValueChange = [this] { channelGate_[selectedDspChannel_].store(static_cast<float>(gateSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    compThresholdSlider_.onValueChange = [this] { channelCompThreshold_[selectedDspChannel_].store(static_cast<float>(compThresholdSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    compRatioSlider_.onValueChange = [this] { channelCompRatio_[selectedDspChannel_].store(static_cast<float>(compRatioSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    denoiseSlider_.onValueChange = [this] { channelDenoise_[selectedDspChannel_].store(static_cast<float>(denoiseSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+    denoiseThresholdSlider_.onValueChange = [this] { channelDenoiseThreshold_[selectedDspChannel_].store(static_cast<float>(denoiseThresholdSlider_.getValue())); markDspDirty(selectedDspChannel_); };
+
+    for (int band = 0; band < 4; ++band)
+    {
+        eqBandLabels_[band].setText("EQ " + juce::String(band + 1), juce::dontSendNotification);
+        eqBandLabels_[band].setJustificationType(juce::Justification::centred);
+        eqBandLabels_[band].setColour(juce::Label::textColourId, juce::Colour(text));
+        dspPage_.addAndMakeVisible(eqBandLabels_[band]);
+        setupHorizontal(eqFreqSliders_[band], 40.0, 18000.0, 1.0, " Hz");
+        setupHorizontal(eqGainSliders_[band], -18.0, 18.0, 0.1, " dB");
+        eqFreqSliders_[band].onValueChange = [this, band]
+        {
+            channelEqFreq_[selectedDspChannel_][band].store(static_cast<float>(eqFreqSliders_[band].getValue()));
+            markDspDirty(selectedDspChannel_);
+        };
+        eqGainSliders_[band].onValueChange = [this, band]
+        {
+            channelEqGain_[selectedDspChannel_][band].store(static_cast<float>(eqGainSliders_[band].getValue()));
+            markDspDirty(selectedDspChannel_);
+        };
+    }
+
+    for (auto* b : { &vocalPresetButton_, &kickPresetButton_, &snarePresetButton_, &guitarPresetButton_, &bassPresetButton_, &resetDspButton_ })
+    {
+        b->setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+        dspPage_.addAndMakeVisible(*b);
+    }
+    vocalPresetButton_.onClick = [this] { applyDspPreset(1); };
+    kickPresetButton_.onClick = [this] { applyDspPreset(2); };
+    snarePresetButton_.onClick = [this] { applyDspPreset(3); };
+    guitarPresetButton_.onClick = [this] { applyDspPreset(4); };
+    bassPresetButton_.onClick = [this] { applyDspPreset(5); };
+    resetDspButton_.onClick = [this] { applyDspPreset(0); };
+    refreshDspUi();
+
     groupsTitle_.setText("8 SUBGROUPS + 8 DCA", juce::dontSendNotification);
     groupsTitle_.setFont(juce::FontOptions(24.0f, juce::Font::bold));
     groupsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
@@ -416,6 +505,80 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemNextButton_);
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
+
+    padTitle_.setText("J3 PADS", juce::dontSendNotification);
+    padTitle_.setFont(juce::FontOptions(30.0f, juce::Font::bold));
+    padTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+    padPage_.addAndMakeVisible(padTitle_);
+
+    const std::array<juce::String, 12> padKeys { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    for (int i = 0; i < static_cast<int>(padKeys.size()); ++i)
+        padKeyBox_.addItem(padKeys[static_cast<std::size_t>(i)], i + 1);
+    padKeyBox_.setSelectedId(1, juce::dontSendNotification);
+    padKeyBox_.onChange = [this]
+    {
+        ambientPad_.setRootMidi(60 + juce::jlimit(0, 11, padKeyBox_.getSelectedId() - 1));
+        refreshPadUi();
+        saveAppState();
+    };
+    padPage_.addAndMakeVisible(padKeyBox_);
+
+    padMinorButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
+    padMinorButton_.onClick = [this]
+    {
+        ambientPad_.setMinor(padMinorButton_.getToggleState());
+        refreshPadUi();
+        saveAppState();
+    };
+    padPage_.addAndMakeVisible(padMinorButton_);
+
+    padEnabledButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
+    padEnabledButton_.onClick = [this]
+    {
+        if (padEnabledButton_.getToggleState() && !padToPa_.load(std::memory_order_relaxed))
+        {
+            padEnabledButton_.setToggleState(false, juce::dontSendNotification);
+            showAudioError("J3 PADS no tiene una ruta activa. Habilitá ROUTE TO PA.");
+            return;
+        }
+        ambientPad_.setEnabled(padEnabledButton_.getToggleState());
+        refreshPadUi();
+    };
+    padPage_.addAndMakeVisible(padEnabledButton_);
+
+    padToPaButton_.setToggleState(true, juce::dontSendNotification);
+    padToPaButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
+    padToPaButton_.onClick = [this]
+    {
+        padToPa_.store(padToPaButton_.getToggleState(), std::memory_order_release);
+        if (!padToPaButton_.getToggleState())
+        {
+            ambientPad_.setEnabled(false);
+            padEnabledButton_.setToggleState(false, juce::dontSendNotification);
+        }
+        refreshPadUi();
+        saveAppState();
+    };
+    padPage_.addAndMakeVisible(padToPaButton_);
+
+    padVolumeSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+    padVolumeSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 80, 26);
+    padVolumeSlider_.setRange(0.0, 1.0, 0.01);
+    padVolumeSlider_.setValue(0.18, juce::dontSendNotification);
+    padVolumeSlider_.setTextValueSuffix(" VOL");
+    padVolumeSlider_.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
+    padVolumeSlider_.onValueChange = [this]
+    {
+        ambientPad_.setVolume(static_cast<float>(padVolumeSlider_.getValue()));
+        refreshPadUi();
+    };
+    padPage_.addAndMakeVisible(padVolumeSlider_);
+
+    padInfoLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+    padInfoLabel_.setFont(juce::FontOptions(17.0f));
+    padInfoLabel_.setJustificationType(juce::Justification::topLeft);
+    padPage_.addAndMakeVisible(padInfoLabel_);
+    refreshPadUi();
 
     clickTitle_.setText("J3 CLICK", juce::dontSendNotification);
     clickTitle_.setFont(juce::FontOptions(28.0f, juce::Font::bold));
@@ -599,8 +762,10 @@ MainComponent::MainComponent()
     tabs_.setTabBarDepth(46);
     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
     tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
+    tabs_.addTab("CHANNEL DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GROUPS", juce::Colour(panel), &groupsPage_, false);
     tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
+    tabs_.addTab("PADS", juce::Colour(panel), &padPage_, false);
     tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
     tabs_.addTab("RECORD", juce::Colour(panel), &recordingPage_, false);
     tabs_.addTab("AUDIO / ROUTING", juce::Colour(panel), &setupPage_, false);
@@ -656,6 +821,105 @@ juce::String MainComponent::inputChannelName(int channel) const
             return names[channel];
     }
     return "IN " + juce::String(channel + 1);
+}
+
+void MainComponent::markDspDirty(int channel) noexcept
+{
+    if (channel >= 0 && channel < kMaxChannels)
+        dspRevision_[channel].fetch_add(1, std::memory_order_release);
+}
+
+void MainComponent::applyDspParameters(int channel) noexcept
+{
+    if (channel < 0 || channel >= kMaxChannels)
+        return;
+    const auto revision = dspRevision_[channel].load(std::memory_order_acquire);
+    if (dspAppliedRevision_[channel] == revision)
+        return;
+
+    auto& dsp = channelDsp_[channel];
+    dsp.setHpf(channelHpf_[channel].load(std::memory_order_relaxed));
+    dsp.setLpf(channelLpf_[channel].load(std::memory_order_relaxed));
+    for (int band = 0; band < 4; ++band)
+        dsp.setEqBand(static_cast<std::size_t>(band),
+                      channelEqFreq_[channel][band].load(std::memory_order_relaxed),
+                      channelEqQ_[channel][band].load(std::memory_order_relaxed),
+                      channelEqGain_[channel][band].load(std::memory_order_relaxed));
+    dsp.setGate(channelGate_[channel].load(std::memory_order_relaxed));
+    dsp.setCompressor(channelCompThreshold_[channel].load(std::memory_order_relaxed),
+                      channelCompRatio_[channel].load(std::memory_order_relaxed));
+    dsp.setDenoise(channelDenoise_[channel].load(std::memory_order_relaxed),
+                   channelDenoiseThreshold_[channel].load(std::memory_order_relaxed));
+    dspAppliedRevision_[channel] = revision;
+}
+
+void MainComponent::refreshDspUi()
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, selectedDspChannel_);
+    dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+    hpfSlider_.setValue(channelHpf_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    lpfSlider_.setValue(channelLpf_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    gateSlider_.setValue(channelGate_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    compThresholdSlider_.setValue(channelCompThreshold_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    compRatioSlider_.setValue(channelCompRatio_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    denoiseSlider_.setValue(channelDenoise_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    denoiseThresholdSlider_.setValue(channelDenoiseThreshold_[ch].load(std::memory_order_relaxed), juce::dontSendNotification);
+    for (int band = 0; band < 4; ++band)
+    {
+        eqFreqSliders_[band].setValue(channelEqFreq_[ch][band].load(std::memory_order_relaxed), juce::dontSendNotification);
+        eqGainSliders_[band].setValue(channelEqGain_[ch][band].load(std::memory_order_relaxed), juce::dontSendNotification);
+    }
+    dspTitle_.setText("J3 CHANNEL DSP · " + inputChannelName(ch), juce::dontSendNotification);
+}
+
+void MainComponent::applyDspPreset(int preset)
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, selectedDspChannel_);
+    float hpf = 20.0f, lpf = 20000.0f, gate = -60.0f, comp = -18.0f, ratio = 3.0f, denoise = 0.0f, noise = -60.0f;
+    float freq[4] { 200.0f, 600.0f, 1800.0f, 5400.0f };
+    float gain[4] { 0.0f, 0.0f, 0.0f, 0.0f };
+
+    switch (preset)
+    {
+        case 1: // Vocal
+            hpf = 80.0f; lpf = 18000.0f; gate = -55.0f; comp = -16.0f; ratio = 3.0f; denoise = 0.22f; noise = -58.0f;
+            freq[0] = 180.0f; gain[0] = -1.0f; freq[1] = 450.0f; gain[1] = -2.0f;
+            freq[2] = 3000.0f; gain[2] = 2.0f; freq[3] = 10000.0f; gain[3] = 1.0f; break;
+        case 2: // Kick
+            hpf = 25.0f; lpf = 12000.0f; gate = -45.0f; comp = -12.0f; ratio = 4.0f; denoise = 0.04f;
+            freq[0] = 60.0f; gain[0] = 3.0f; freq[1] = 300.0f; gain[1] = -3.0f;
+            freq[2] = 3200.0f; gain[2] = 2.0f; freq[3] = 8000.0f; gain[3] = 0.5f; break;
+        case 3: // Snare
+            hpf = 70.0f; lpf = 16000.0f; gate = -48.0f; comp = -14.0f; ratio = 4.0f; denoise = 0.04f;
+            freq[0] = 180.0f; gain[0] = 1.5f; freq[1] = 650.0f; gain[1] = -2.0f;
+            freq[2] = 4200.0f; gain[2] = 2.5f; freq[3] = 9000.0f; gain[3] = 1.0f; break;
+        case 4: // Guitar
+            hpf = 75.0f; lpf = 15000.0f; gate = -65.0f; comp = -20.0f; ratio = 2.5f; denoise = 0.08f;
+            freq[0] = 140.0f; gain[0] = -1.0f; freq[1] = 450.0f; gain[1] = -1.5f;
+            freq[2] = 2500.0f; gain[2] = 1.0f; freq[3] = 7500.0f; gain[3] = 0.5f; break;
+        case 5: // Bass
+            hpf = 30.0f; lpf = 9000.0f; gate = -65.0f; comp = -14.0f; ratio = 4.0f; denoise = 0.03f;
+            freq[0] = 80.0f; gain[0] = 2.0f; freq[1] = 250.0f; gain[1] = -1.0f;
+            freq[2] = 900.0f; gain[2] = 1.0f; freq[3] = 4500.0f; gain[3] = 0.5f; break;
+        default: break;
+    }
+
+    channelHpf_[ch].store(hpf);
+    channelLpf_[ch].store(lpf);
+    channelGate_[ch].store(gate);
+    channelCompThreshold_[ch].store(comp);
+    channelCompRatio_[ch].store(ratio);
+    channelDenoise_[ch].store(denoise);
+    channelDenoiseThreshold_[ch].store(noise);
+    for (int band = 0; band < 4; ++band)
+    {
+        channelEqFreq_[ch][band].store(freq[band]);
+        channelEqGain_[ch][band].store(gain[band]);
+        channelEqQ_[ch][band].store(1.0f);
+    }
+    markDspDirty(ch);
+    refreshDspUi();
+    saveAppState();
 }
 
 void MainComponent::setMixerBank(int firstChannel)
@@ -817,6 +1081,41 @@ void MainComponent::resized()
     for (int i = 0; i < kVisibleChannels; ++i)
         if (strips_[i]) strips_[i]->setBounds(mixerArea.removeFromLeft(stripW).reduced(3));
 
+    auto dspArea = dspPage_.getLocalBounds().reduced(20);
+    auto dspHeader = dspArea.removeFromTop(42);
+    dspTitle_.setBounds(dspHeader.removeFromLeft(std::min(480, dspHeader.getWidth() / 2)));
+    dspChannelBox_.setBounds(dspHeader.removeFromLeft(160).reduced(4, 3));
+    auto presetRow = dspHeader;
+    const int presetW = std::max(64, presetRow.getWidth() / 6);
+    vocalPresetButton_.setBounds(presetRow.removeFromLeft(presetW).reduced(2));
+    kickPresetButton_.setBounds(presetRow.removeFromLeft(presetW).reduced(2));
+    snarePresetButton_.setBounds(presetRow.removeFromLeft(presetW).reduced(2));
+    guitarPresetButton_.setBounds(presetRow.removeFromLeft(presetW).reduced(2));
+    bassPresetButton_.setBounds(presetRow.removeFromLeft(presetW).reduced(2));
+    resetDspButton_.setBounds(presetRow.reduced(2));
+    dspArea.removeFromTop(10);
+
+    auto dynamics = dspArea.removeFromLeft(dspArea.getWidth() / 2).reduced(8);
+    auto eqArea = dspArea.reduced(8);
+    const int dynH = std::max(36, dynamics.getHeight() / 7);
+    hpfSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    lpfSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    gateSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    compThresholdSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    compRatioSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    denoiseSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+    denoiseThresholdSlider_.setBounds(dynamics.removeFromTop(dynH).reduced(4));
+
+    const int eqH = std::max(70, eqArea.getHeight() / 4);
+    for (int band = 0; band < 4; ++band)
+    {
+        auto row = eqArea.removeFromTop(eqH).reduced(4);
+        eqBandLabels_[band].setBounds(row.removeFromLeft(54));
+        auto freqArea = row.removeFromLeft(row.getWidth() / 2);
+        eqFreqSliders_[band].setBounds(freqArea.reduced(3));
+        eqGainSliders_[band].setBounds(row.reduced(3));
+    }
+
     auto groupsArea = groupsPage_.getLocalBounds().reduced(18);
     groupsTitle_.setBounds(groupsArea.removeFromTop(38));
     groupsArea.removeFromTop(8);
@@ -848,6 +1147,22 @@ void MainComponent::resized()
     const int iemW = std::max(1, iemArea.getWidth() / kVisibleChannels);
     for (int i = 0; i < kVisibleChannels; ++i)
         if (iemStrips_[i]) iemStrips_[i]->setBounds(iemArea.removeFromLeft(iemW).reduced(3));
+
+    auto padArea = padPage_.getLocalBounds().reduced(42);
+    padTitle_.setBounds(padArea.removeFromTop(54));
+    padArea.removeFromTop(18);
+    auto padControls = padArea.removeFromTop(52);
+    padKeyBox_.setBounds(padControls.removeFromLeft(150).reduced(3));
+    padControls.removeFromLeft(14);
+    padMinorButton_.setBounds(padControls.removeFromLeft(130));
+    padControls.removeFromLeft(14);
+    padEnabledButton_.setBounds(padControls.removeFromLeft(150));
+    padControls.removeFromLeft(14);
+    padToPaButton_.setBounds(padControls.removeFromLeft(170));
+    padArea.removeFromTop(24);
+    padVolumeSlider_.setBounds(padArea.removeFromTop(52).removeFromLeft(std::min(620, padArea.getWidth())));
+    padArea.removeFromTop(28);
+    padInfoLabel_.setBounds(padArea.removeFromTop(160));
 
     auto clickArea = clickPage_.getLocalBounds().reduced(36);
     clickTitle_.setBounds(clickArea.removeFromTop(48));
@@ -957,6 +1272,12 @@ void MainComponent::loadAppState()
     subdivisionBox_.setSelectedId(xml->getIntAttribute("subdivisionId", 1), juce::dontSendNotification);
     accentButton_.setToggleState(xml->getBoolAttribute("accent", true), juce::dontSendNotification);
     clickVolumeSlider_.setValue(xml->getDoubleAttribute("clickVolume", 0.35), juce::dontSendNotification);
+    ambientPad_.setRootMidi(xml->getIntAttribute("padRootMidi", 60));
+    ambientPad_.setMinor(xml->getBoolAttribute("padMinor", false));
+    ambientPad_.setVolume(static_cast<float>(xml->getDoubleAttribute("padVolume", 0.18)));
+    padToPa_.store(xml->getBoolAttribute("padToPa", true), std::memory_order_release);
+    ambientPad_.setEnabled(false);
+    padEnabledButton_.setToggleState(false, juce::dontSendNotification);
     clickAudible_.store(false, std::memory_order_release);
     clickEnabledButton_.setToggleState(false, juce::dontSendNotification);
 
@@ -977,6 +1298,21 @@ void MainComponent::loadAppState()
         channelMute_[index].store(ch->getBoolAttribute("mute", false), std::memory_order_relaxed);
         channelBus_[index].store(juce::jlimit(-1, kBuses - 1, ch->getIntAttribute("bus", -1)), std::memory_order_relaxed);
         channelDca_[index].store(juce::jlimit(-1, kDcas - 1, ch->getIntAttribute("dca", -1)), std::memory_order_relaxed);
+        channelHpf_[index].store(static_cast<float>(ch->getDoubleAttribute("hpf", 20.0)));
+        channelLpf_[index].store(static_cast<float>(ch->getDoubleAttribute("lpf", 20000.0)));
+        channelGate_[index].store(static_cast<float>(ch->getDoubleAttribute("gate", -60.0)));
+        channelCompThreshold_[index].store(static_cast<float>(ch->getDoubleAttribute("compThreshold", -18.0)));
+        channelCompRatio_[index].store(static_cast<float>(ch->getDoubleAttribute("compRatio", 3.0)));
+        channelDenoise_[index].store(static_cast<float>(ch->getDoubleAttribute("denoise", 0.0)));
+        channelDenoiseThreshold_[index].store(static_cast<float>(ch->getDoubleAttribute("denoiseThreshold", -60.0)));
+        for (int band = 0; band < 4; ++band)
+        {
+            const auto b = juce::String(band);
+            channelEqFreq_[index][band].store(static_cast<float>(ch->getDoubleAttribute("eq" + b + "Freq", channelEqFreq_[index][band].load())));
+            channelEqGain_[index][band].store(static_cast<float>(ch->getDoubleAttribute("eq" + b + "Gain", 0.0)));
+            channelEqQ_[index][band].store(static_cast<float>(ch->getDoubleAttribute("eq" + b + "Q", 1.0)));
+        }
+        markDspDirty(index);
     }
 
     forEachXmlChildElementWithTagName(*xml, bus, "Bus")
@@ -1017,6 +1353,8 @@ void MainComponent::loadAppState()
     rebuildIemBank();
     refreshRoutingControls();
     refreshIemUi();
+    refreshDspUi();
+    refreshPadUi();
 }
 
 void MainComponent::saveAppState()
@@ -1031,6 +1369,10 @@ void MainComponent::saveAppState()
     xml.setAttribute("subdivisionId", subdivisionBox_.getSelectedId());
     xml.setAttribute("accent", accentButton_.getToggleState());
     xml.setAttribute("clickVolume", clickVolumeSlider_.getValue());
+    xml.setAttribute("padRootMidi", ambientPad_.rootMidi());
+    xml.setAttribute("padMinor", ambientPad_.minor());
+    xml.setAttribute("padVolume", static_cast<double>(ambientPad_.volume()));
+    xml.setAttribute("padToPa", padToPa_.load(std::memory_order_relaxed));
 
     for (int i = 0; i < kMaxChannels; ++i)
     {
@@ -1041,6 +1383,20 @@ void MainComponent::saveAppState()
         ch->setAttribute("mute", channelMute_[i].load(std::memory_order_relaxed));
         ch->setAttribute("bus", channelBus_[i].load(std::memory_order_relaxed));
         ch->setAttribute("dca", channelDca_[i].load(std::memory_order_relaxed));
+        ch->setAttribute("hpf", static_cast<double>(channelHpf_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("lpf", static_cast<double>(channelLpf_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("gate", static_cast<double>(channelGate_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("compThreshold", static_cast<double>(channelCompThreshold_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("compRatio", static_cast<double>(channelCompRatio_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("denoise", static_cast<double>(channelDenoise_[i].load(std::memory_order_relaxed)));
+        ch->setAttribute("denoiseThreshold", static_cast<double>(channelDenoiseThreshold_[i].load(std::memory_order_relaxed)));
+        for (int band = 0; band < 4; ++band)
+        {
+            const auto b = juce::String(band);
+            ch->setAttribute("eq" + b + "Freq", static_cast<double>(channelEqFreq_[i][band].load(std::memory_order_relaxed)));
+            ch->setAttribute("eq" + b + "Gain", static_cast<double>(channelEqGain_[i][band].load(std::memory_order_relaxed)));
+            ch->setAttribute("eq" + b + "Q", static_cast<double>(channelEqQ_[i][band].load(std::memory_order_relaxed)));
+        }
     }
     for (int i = 0; i < kBuses; ++i)
     {
@@ -1174,6 +1530,25 @@ void MainComponent::handleTapTempo()
             bpmSlider_.setValue(60000.0 / interval, juce::sendNotificationSync);
     }
     lastTapMs_ = now;
+}
+
+void MainComponent::refreshPadUi()
+{
+    static const std::array<juce::String, 12> keys { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    const int note = ambientPad_.rootMidi();
+    const int keyIndex = juce::jlimit(0, 11, note - 60);
+    padKeyBox_.setSelectedId(keyIndex + 1, juce::dontSendNotification);
+    padMinorButton_.setToggleState(ambientPad_.minor(), juce::dontSendNotification);
+    padVolumeSlider_.setValue(ambientPad_.volume(), juce::dontSendNotification);
+    padToPaButton_.setToggleState(padToPa_.load(std::memory_order_relaxed), juce::dontSendNotification);
+    padEnabledButton_.setToggleState(ambientPad_.enabled(), juce::dontSendNotification);
+
+    juce::String info;
+    info << "Chord: " << keys[static_cast<std::size_t>(keyIndex)] << (ambientPad_.minor() ? " minor" : " major") << "\n";
+    info << "Stereo ambient generator · continuous sustain · click-free fade in/out\n";
+    info << "Route: " << (padToPa_.load(std::memory_order_relaxed) ? "PA master" : "OFF")
+         << " · Output protection remains active.";
+    padInfoLabel_.setText(info, juce::dontSendNotification);
 }
 
 void MainComponent::updateClickUi()
@@ -1554,6 +1929,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             if (in == nullptr)
                 continue;
 
+            applyDspParameters(ch);
             const bool muted = channelMute_[ch].load(std::memory_order_relaxed);
             const int dca = channelDca_[ch].load(std::memory_order_relaxed);
             const bool dcaMuted = dca >= 0 && dca < kDcas && dcaMute_[dca].load(std::memory_order_relaxed);
@@ -1644,7 +2020,15 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             }
         }
 
-        // Soft protection on every live-routed output. CLICK is added afterwards and has its own conservative level.
+    }
+
+    const bool padAudible = ambientPad_.enabled() && padToPa_.load(std::memory_order_acquire) && safePa;
+    if (padAudible)
+        ambientPad_.process(outputChannelData[left], outputChannelData[right], numSamples);
+
+    // Soft output protection is applied after live inputs and pads have been summed.
+    if (monitoring || padAudible)
+    {
         for (int o = 0; o < numOutputChannels; ++o)
         {
             auto* out = outputChannelData[o];
@@ -1705,9 +2089,13 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     bufferSize_.store(device->getCurrentBufferSizeSamples(), std::memory_order_release);
     busScratch_.setSize(kBuses * 2, std::max(2048, device->getCurrentBufferSizeSamples()), false, true, false);
     busScratch_.clear();
-    for (auto& dsp : channelDsp_)
-        dsp.prepare(sr);
+    for (int ch = 0; ch < kMaxChannels; ++ch)
+    {
+        channelDsp_[ch].prepare(sr);
+        dspAppliedRevision_[ch] = 0;
+    }
     clickGenerator_.prepare(sr);
+    ambientPad_.prepare(sr);
     clickGenerator_.setTempo(bpmSlider_.getValue());
     clickGenerator_.setEnabled(transportRunning_.load(std::memory_order_acquire));
     audioRunning_.store(true, std::memory_order_release);
