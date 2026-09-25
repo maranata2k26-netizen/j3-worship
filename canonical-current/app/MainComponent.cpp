@@ -351,6 +351,54 @@ MainComponent::MainComponent()
         liveButtons_[i] = std::move(b);
     }
 
+    setlistTitle_.setText("WORSHIP SETLIST", juce::dontSendNotification);
+    setlistTitle_.setFont(juce::FontOptions(27.0f, juce::Font::bold));
+    setlistTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
+    setlistPage_.addAndMakeVisible(setlistTitle_);
+
+    setlistSongBox_.onChange = [this]
+    {
+        const int index = setlistSongBox_.getSelectedId() - 1;
+        if (index >= 0 && setlist_.select(static_cast<std::size_t>(index)))
+            refreshSetlistUi();
+    };
+    setlistPage_.addAndMakeVisible(setlistSongBox_);
+
+    songNameEditor_.setTextToShowWhenEmpty("Song name", juce::Colour(mutedText));
+    songArtistEditor_.setTextToShowWhenEmpty("Artist (optional)", juce::Colour(mutedText));
+    songKeyEditor_.setTextToShowWhenEmpty("Key, e.g. G", juce::Colour(mutedText));
+    for (auto* e : { &songNameEditor_, &songArtistEditor_, &songKeyEditor_ })
+    {
+        e->setColour(juce::TextEditor::backgroundColourId, juce::Colour(panel2));
+        e->setColour(juce::TextEditor::textColourId, juce::Colour(text));
+        e->setColour(juce::TextEditor::outlineColourId, juce::Colour(0xff303946));
+        setlistPage_.addAndMakeVisible(*e);
+    }
+
+    songBpmSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+    songBpmSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 92, 26);
+    songBpmSlider_.setRange(40.0, 240.0, 0.1);
+    songBpmSlider_.setValue(120.0, juce::dontSendNotification);
+    songBpmSlider_.setTextValueSuffix(" BPM");
+    songBpmSlider_.setColour(juce::Slider::thumbColourId, juce::Colour(accent));
+    setlistPage_.addAndMakeVisible(songBpmSlider_);
+
+    addSongButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
+    removeSongButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    loadSongButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
+    addSongButton_.onClick = [this] { addSetlistSong(); };
+    removeSongButton_.onClick = [this] { removeSetlistSong(); };
+    loadSongButton_.onClick = [this] { loadSelectedSong(); };
+    setlistPage_.addAndMakeVisible(addSongButton_);
+    setlistPage_.addAndMakeVisible(removeSongButton_);
+    setlistPage_.addAndMakeVisible(loadSongButton_);
+
+    setlistInfoLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd4dbe5));
+    setlistInfoLabel_.setFont(juce::FontOptions(18.0f));
+    setlistInfoLabel_.setJustificationType(juce::Justification::topLeft);
+    setlistPage_.addAndMakeVisible(setlistInfoLabel_);
+    refreshSetlistUi();
+
     mixerPrevButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     mixerNextButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     mixerPrevButton_.onClick = [this] { setMixerBank(mixerBankStart_ - kVisibleChannels); };
@@ -761,6 +809,7 @@ MainComponent::MainComponent()
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(46);
     tabs_.addTab("LIVE", juce::Colour(panel), &livePage_, false);
+    tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
     tabs_.addTab("CHANNEL DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GROUPS", juce::Colour(panel), &groupsPage_, false);
