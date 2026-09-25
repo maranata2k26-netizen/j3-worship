@@ -10,6 +10,7 @@
 #include "j3/PluginCatalog.h"
 #include "J3Theme.h"
 #include "UpdateService.h"
+#include "DawWorkspace.h"
 
 #include <array>
 #include <atomic>
@@ -256,6 +257,7 @@ private:
     juce::TextButton audioSettingsButton_ { "AUDIO / MIDI" };
     juce::ToggleButton liveMonitorButton_ { "LIVE INPUTS" };
     juce::TabbedComponent tabs_ { juce::TabbedButtonBar::TabsAtTop };
+    DawWorkspace dawWorkspace_;
 
     juce::Component livePage_;
     juce::Label nowLabel_;
