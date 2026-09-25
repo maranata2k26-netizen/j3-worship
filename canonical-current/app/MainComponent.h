@@ -126,6 +126,7 @@ private:
     juce::String inputChannelName(int channel) const;
     void setLiveSection(const juce::String& name, j3::SectionKind kind, int bars = 4);
     void stopLiveTransport();
+    void panicStopAll();
     void refreshLiveLabels();
     void updateClickUi();
     void handleTapTempo();
