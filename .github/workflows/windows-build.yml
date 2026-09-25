@@ -2,7 +2,7 @@ name: Windows Release Build
 
 on:
   push:
-    branches: [main, finish-daw, finish-daw-polish, ui-updater-1.1.0]
+    branches: [main, finish-daw, finish-daw-polish, finish-daw-1.2.0, ui-updater-1.1.0]
     paths:
       - "canonical-current/**"
       - ".github/workflows/windows-build.yml"
@@ -81,14 +81,14 @@ jobs:
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.1.0
+          name: J3Worship-Windows-1.2.0
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Setup-1.1.0
+          name: J3Worship-Setup-1.2.0
           path: canonical-current/dist-installer/J3Worship-Setup.exe
           if-no-files-found: error
       - name: Publish official GitHub Release
