@@ -9,6 +9,7 @@ class LiveEngine {
 public:
     void setTempo(double bpm, int beatsPerBar=4);
     void start(Section s);
+    void stop();
     void request(Section next, Quantize q);
     void tickBeat();
     void enterFreePad();
