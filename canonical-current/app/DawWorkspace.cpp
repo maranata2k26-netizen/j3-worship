@@ -1790,6 +1790,12 @@ void DawWorkspace::timerCallback()
     }
 }
 
+void DawWorkspace::emergencyStop()
+{
+    stopTransport(false);
+    refreshStatus("STOP ALL · reproducción detenida");
+}
+
 void DawWorkspace::setTempoFromHost(double value)
 {
     value = juce::jlimit(40.0, 240.0, value);
