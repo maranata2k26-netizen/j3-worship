@@ -44,8 +44,8 @@ public:
     std::function<void(bool)> onPlayStateChanged;
 
 private:
-    static constexpr int kMaxTracks = 32;
-    static constexpr int kMaxClips = 128;
+    static constexpr int kMaxTracks = 48;
+    static constexpr int kMaxClips = 512;
     static constexpr int kMaxMidiNotes = 1024;
     static constexpr int kRenderBuffers = 3;
 
@@ -237,6 +237,7 @@ private:
     double viewStartBeat_ { 0.0 };
     double zoom_ { 1.0 };
     int trackHeight_ { 82 };
+    int firstVisibleTrack_ { 0 };
     int headerWidth_ { 190 };
     int rulerHeight_ { 30 };
     int toolbarHeight_ { 48 };
