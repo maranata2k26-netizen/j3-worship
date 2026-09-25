@@ -8,6 +8,7 @@ int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
     DawWorkspace workspace;
+    workspace.setVisible(true);
 
     struct Case
     {
