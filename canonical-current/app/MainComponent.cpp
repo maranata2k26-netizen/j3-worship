@@ -1014,8 +1014,11 @@ MainComponent::MainComponent()
     pluginsPage_.addAndMakeVisible(favoritePluginButton_);
 
     scanPluginsButton_.setButtonText("SCAN PLUGINS");
+    pluginLocationsButton_.setButtonText("ADD VST3 FOLDER");
     loadPluginButton_.setButtonText("ADD FX");
     scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    pluginLocationsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    pluginLocationsButton_.setTooltip(juce::String::fromUTF8("Agregá una carpeta VST3 adicional. J3 ya busca automáticamente las ubicaciones estándar de Windows."));
     loadPluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
     removePluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     movePluginUpButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
@@ -1024,6 +1027,7 @@ MainComponent::MainComponent()
     openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
     bypassPluginButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
     scanPluginsButton_.onClick = [this] { scanVst3Plugins(); };
+    pluginLocationsButton_.onClick = [this] { chooseAdditionalVst3Folder(); };
     loadPluginButton_.onClick = [this] { loadSelectedPlugin(); };
     removePluginButton_.onClick = [this] { removeSelectedPlugin(); };
     movePluginUpButton_.onClick = [this] { moveSelectedPlugin(-1); };
@@ -1038,6 +1042,7 @@ MainComponent::MainComponent()
         refreshPluginUi();
     };
     pluginsPage_.addAndMakeVisible(scanPluginsButton_);
+    pluginsPage_.addAndMakeVisible(pluginLocationsButton_);
     pluginsPage_.addAndMakeVisible(loadPluginButton_);
     pluginsPage_.addAndMakeVisible(removePluginButton_);
     pluginsPage_.addAndMakeVisible(movePluginUpButton_);
@@ -1405,6 +1410,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(tabs_);
     tabs_.setCurrentTabIndex(0);
 
+    const bool firstRunSetup = !getAudioStateFile().existsAsFile() && !getAppStateFile().existsAsFile();
     recoveredAfterUncleanExit_ = getRuntimeLockFile().existsAsFile();
     getRuntimeLockFile().getParentDirectory().createDirectory();
     getRuntimeLockFile().replaceWithText("running");
@@ -1424,6 +1430,11 @@ MainComponent::MainComponent()
     refreshDashboard();
     startTimerHz(30);
     setSize(1600, 960);
+    if (firstRunSetup)
+        juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this)]
+        {
+            if (safe != nullptr) safe->showFirstRunSetup();
+        });
     checkForUpdatesAsync();
 }
 
@@ -2379,7 +2390,9 @@ void MainComponent::resized()
     pluginBrowserRow.removeFromLeft(8);
     pluginCategoryBox_.setBounds(pluginBrowserRow.removeFromLeft(std::min(210, pluginBrowserRow.getWidth())).reduced(3));
     pluginBrowserRow.removeFromLeft(8);
-    favoritePluginButton_.setBounds(pluginBrowserRow.removeFromLeft(std::min(150, pluginBrowserRow.getWidth())));
+    favoritePluginButton_.setBounds(pluginBrowserRow.removeFromLeft(std::min(145, pluginBrowserRow.getWidth())));
+    pluginBrowserRow.removeFromLeft(8);
+    pluginLocationsButton_.setBounds(pluginBrowserRow.removeFromLeft(std::min(170, pluginBrowserRow.getWidth())).reduced(2));
     pluginsArea.removeFromTop(8);
     auto pluginSelectRow = pluginsArea.removeFromTop(44);
     pluginChannelBox_.setBounds(pluginSelectRow.removeFromLeft(180).reduced(3));
@@ -2573,6 +2586,12 @@ void MainComponent::loadAppState()
 
     favoritePluginPaths_.clear();
     recentPluginPaths_.clear();
+    pluginCustomLocations_.clear();
+    forEachXmlChildElementWithTagName(*xml, location, "PluginLocation")
+    {
+        const auto path = location->getStringAttribute("path").trim();
+        if (path.isNotEmpty()) pluginCustomLocations_.addIfNotAlreadyThere(path);
+    }
     forEachXmlChildElementWithTagName(*xml, fav, "PluginFavorite")
     {
         const auto path = fav->getStringAttribute("path").trim();
@@ -2712,6 +2731,11 @@ void MainComponent::saveAppState(bool capturePluginState)
         songXml->setAttribute("denominator", song->denominator);
     }
 
+    for (const auto& path : pluginCustomLocations_)
+    {
+        auto* location = xml.createNewChildElement("PluginLocation");
+        location->setAttribute("path", path);
+    }
     for (const auto& path : favoritePluginPaths_)
     {
         auto* fav = xml.createNewChildElement("PluginFavorite");
@@ -2955,14 +2979,56 @@ void MainComponent::scanVst3Plugins()
     roots.reserve(static_cast<std::size_t>(searchPath.getNumPaths()));
     for (int i = 0; i < searchPath.getNumPaths(); ++i)
         roots.emplace_back(std::filesystem::u8path(searchPath[i].getFullPathName().toStdString()));
+    for (const auto& custom : pluginCustomLocations_)
+    {
+        const juce::File folder(custom);
+        if (folder.isDirectory())
+            roots.emplace_back(std::filesystem::u8path(folder.getFullPathName().toStdString()));
+    }
 
-    pluginStatusLabel_.setText("Scanning VST3 folders without loading plug-ins...", juce::dontSendNotification);
+    pluginStatusLabel_.setText(
+        "Scanning VST3 folders... standard Windows locations + "
+            + juce::String(pluginCustomLocations_.size()) + " custom",
+        juce::dontSendNotification);
     pluginCatalog_.scan(roots);
 
     pluginsScanned_ = true;
     refreshPluginBrowser();
     restoreSavedPluginsAfterScan();
     refreshPluginUi();
+}
+
+void MainComponent::chooseAdditionalVst3Folder()
+{
+    if (pluginMutationLocked())
+    {
+        showAudioError(juce::String::fromUTF8("Detené LIVE, reproducción o grabación antes de modificar ubicaciones VST3."));
+        return;
+    }
+
+    juce::File start = juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory);
+   #if JUCE_WINDOWS
+    const juce::File standard("C:\\Program Files\\Common Files\\VST3");
+    if (standard.isDirectory())
+        start = standard;
+   #endif
+
+    pluginFolderChooser_ = std::make_unique<juce::FileChooser>(
+        juce::String::fromUTF8("Elegí una carpeta VST3 adicional"), start);
+    auto safe = juce::Component::SafePointer<MainComponent>(this);
+    pluginFolderChooser_->launchAsync(
+        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+        [safe](const juce::FileChooser& chooser)
+        {
+            if (safe == nullptr)
+                return;
+            const auto folder = chooser.getResult();
+            if (!folder.isDirectory())
+                return;
+            safe->pluginCustomLocations_.addIfNotAlreadyThere(folder.getFullPathName());
+            safe->saveAppState();
+            safe->scanVst3Plugins();
+        });
 }
 
 void MainComponent::restoreSavedPluginsAfterScan()
@@ -3601,6 +3667,31 @@ void MainComponent::saveAudioState()
         if (result.wasOk())
             file.replaceWithText(state->toString(), false, false, "\n");
     }
+}
+
+void MainComponent::showFirstRunSetup()
+{
+    auto safe = juce::Component::SafePointer<MainComponent>(this);
+    auto* alert = new juce::AlertWindow(
+        "WELCOME TO J3 WORSHIP",
+        juce::String::fromUTF8(
+            "Configuración inicial rápida\n\n"
+            "1. Elegí tu interfaz (ASIO recomendado cuando esté disponible).\n"
+            "2. Volvé a RUTEO y elegí PA L/R y CLICK / GUIDE.\n"
+            "3. En PLUGINS tocá SCAN PLUGINS.\n\n"
+            "Podés omitirlo y configurarlo más tarde. J3 no bloquea el inicio."),
+        juce::MessageBoxIconType::InfoIcon);
+    alert->addButton("SET UP AUDIO", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("SKIP FOR NOW", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enterModalState(true,
+        juce::ModalCallbackFunction::create([safe](int result)
+        {
+            if (safe == nullptr || result != 1)
+                return;
+            safe->tabs_.setCurrentTabIndex(10);
+            safe->openAudioSettings();
+        }),
+        true);
 }
 
 void MainComponent::openAudioSettings()
