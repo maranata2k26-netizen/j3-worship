@@ -3876,12 +3876,16 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     }
 
     // Soft output protection is applied after live inputs, pads and DAW playback have been summed.
+    // Only exclude CLICK when it actually owns a dedicated safe output; a stale conflicting
+    // click route must never remove protection from a PA output.
+    const bool dedicatedClickOutput = click >= 0 && click < numOutputChannels
+        && routeIsSafe(left, right, click);
     if (monitoring || padAudible || dawAudible)
     {
         for (int o = 0; o < numOutputChannels; ++o)
         {
             auto* out = outputChannelData[o];
-            if (out == nullptr || o == click)
+            if (out == nullptr || (dedicatedClickOutput && o == click))
                 continue;
             for (int i = 0; i < numSamples; ++i)
             {
