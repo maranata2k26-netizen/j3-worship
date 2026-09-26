@@ -108,7 +108,7 @@ public:
 
 private:
     static constexpr int kMaxTracks = 48;
-    static constexpr int kMaxClips = 512;
+    static constexpr int kMaxClips = 1024;
     static constexpr int kMaxMidiNotes = 1024;
     static constexpr int kRenderBuffers = 3;
 
