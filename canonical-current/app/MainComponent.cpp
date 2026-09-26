@@ -786,7 +786,9 @@ public:
             return;
         }
 
-        if (!layout.grid.contains(e.getPosition()))
+        const bool inSceneLabel = layout.sceneLabels.contains(e.getPosition());
+        const bool inClipGrid = layout.grid.contains(e.getPosition());
+        if (!inSceneLabel && !inClipGrid)
             return;
 
         const int visibleRow = (e.y - layout.grid.getY()) / std::max(1, layout.rowHeight);
@@ -795,7 +797,7 @@ public:
             return;
         selectedScene_ = scene;
 
-        if (e.x < layout.grid.getX())
+        if (inSceneLabel)
         {
             workspace_.launchLiveScene(scene);
             repaint();
