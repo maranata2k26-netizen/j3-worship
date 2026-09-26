@@ -211,6 +211,10 @@ private:
     std::array<std::atomic<int>, kMaxChannels> channelBus_{};
     std::array<std::atomic<int>, kMaxChannels> channelDca_{};
     std::array<j3::ChannelDsp, kMaxChannels> channelDsp_{};
+    // Stereo native EQ for DAW mixer inserts. This mirrors the J3 EQ settings
+    // without applying the live-input gate/compressor/denoise to imported tracks.
+    std::array<j3::ParametricEq, kMaxChannels> insertEqLeft_{};
+    std::array<j3::ParametricEq, kMaxChannels> insertEqRight_{};
     std::array<std::atomic<float>, kMaxChannels> channelHpf_{};
     std::array<std::atomic<float>, kMaxChannels> channelLpf_{};
     std::array<std::atomic<float>, kMaxChannels> channelGate_{};
@@ -351,6 +355,7 @@ private:
     juce::Slider denoiseThresholdSlider_;
     std::array<juce::Slider, 4> eqFreqSliders_;
     std::array<juce::Slider, 4> eqGainSliders_;
+    std::array<juce::Slider, 4> eqQSliders_;
     std::array<juce::Label, 4> eqBandLabels_;
     juce::TextButton vocalPresetButton_ { "VOCAL" };
     juce::TextButton kickPresetButton_ { "KICK" };
@@ -382,6 +387,10 @@ private:
 
     juce::Component pluginsPage_;
     juce::Label pluginsTitle_;
+    juce::Label pluginChainTitle_;
+    juce::Label pluginBrowserTitle_;
+    juce::TextButton nativeEqButton_ { "J3 PARAMETRIC EQ  ·  NATIVE" };
+    std::array<std::unique_ptr<juce::TextButton>, kPluginSlots> pluginSlotButtons_;
     juce::ComboBox pluginChannelBox_;
     juce::ComboBox pluginSlotBox_;
     juce::TextEditor pluginSearch_;

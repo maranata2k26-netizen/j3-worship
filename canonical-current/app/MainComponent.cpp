@@ -274,6 +274,7 @@ MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
     muteButton_.onClick = [this] { muted_.store(muteButton_.getToggleState(), std::memory_order_relaxed); };
     addAndMakeVisible(muteButton_);
 
+    fxButton_.setButtonText("FX / PLUGINS");
     fxButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173246));
     fxButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(text));
     fxButton_.setTooltip(juce::String::fromUTF8("Abrir los 8 slots de efectos de este Mixer Insert"));
@@ -822,7 +823,7 @@ MainComponent::MainComponent()
     dspPage_.addAndMakeVisible(dspTitle_);
 
     for (int i = 0; i < kMaxChannels; ++i)
-        dspChannelBox_.addItem("IN " + juce::String(i + 1), i + 1);
+        dspChannelBox_.addItem("MIXER INSERT " + juce::String(i + 1), i + 1);
     dspChannelBox_.setSelectedId(1, juce::dontSendNotification);
     dspChannelBox_.onChange = [this]
     {
@@ -864,6 +865,7 @@ MainComponent::MainComponent()
         dspPage_.addAndMakeVisible(eqBandLabels_[band]);
         setupHorizontal(eqFreqSliders_[band], 40.0, 18000.0, 1.0, " Hz");
         setupHorizontal(eqGainSliders_[band], -18.0, 18.0, 0.1, " dB");
+        setupHorizontal(eqQSliders_[band], 0.20, 12.0, 0.05, " Q");
         eqFreqSliders_[band].onValueChange = [this, band]
         {
             channelEqFreq_[selectedDspChannel_][band].store(static_cast<float>(eqFreqSliders_[band].getValue()));
@@ -872,6 +874,11 @@ MainComponent::MainComponent()
         eqGainSliders_[band].onValueChange = [this, band]
         {
             channelEqGain_[selectedDspChannel_][band].store(static_cast<float>(eqGainSliders_[band].getValue()));
+            markDspDirty(selectedDspChannel_);
+        };
+        eqQSliders_[band].onValueChange = [this, band]
+        {
+            channelEqQ_[selectedDspChannel_][band].store(static_cast<float>(eqQSliders_[band].getValue()));
             markDspDirty(selectedDspChannel_);
         };
     }
@@ -959,12 +966,53 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
 
-    pluginsTitle_.setText(juce::String::fromUTF8("PLUGIN BROWSER · MIXER FX · 8 SLOTS"), juce::dontSendNotification);
+    pluginsTitle_.setText(juce::String::fromUTF8("MIXER FX RACK · FL-STYLE WORKFLOW"), juce::dontSendNotification);
     pluginsTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
     pluginsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
     pluginsPage_.addAndMakeVisible(pluginsTitle_);
 
-    pluginSearch_.setTextToShowWhenEmpty("SEARCH PLUGINS...", juce::Colour(mutedText));
+    pluginChainTitle_.setText("FX CHAIN", juce::dontSendNotification);
+    pluginChainTitle_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+    pluginChainTitle_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+    pluginsPage_.addAndMakeVisible(pluginChainTitle_);
+
+    pluginBrowserTitle_.setText("ADD EFFECT", juce::dontSendNotification);
+    pluginBrowserTitle_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+    pluginBrowserTitle_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+    pluginsPage_.addAndMakeVisible(pluginBrowserTitle_);
+
+    nativeEqButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173f54));
+    nativeEqButton_.setTooltip("J3 native 4-band parametric EQ + HPF/LPF. Runs before the VST3 slots on DAW mixer inserts.");
+    nativeEqButton_.onClick = [this]
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+        selectedDspChannel_ = ch;
+        dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        refreshDspUi();
+        tabs_.setCurrentTabIndex(3);
+    };
+    pluginsPage_.addAndMakeVisible(nativeEqButton_);
+
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+    {
+        auto button = std::make_unique<juce::TextButton>();
+        button->setTooltip("FX Slot " + juce::String(slot + 1) + ": click an empty slot to add an effect; click a loaded plugin to open it.");
+        button->setClickingTogglesState(false);
+        button->onClick = [this, slot]
+        {
+            pluginSlotBox_.setSelectedId(slot + 1, juce::dontSendNotification);
+            refreshPluginUi();
+            const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+            if (channelPlugins_[ch][slot].load(std::memory_order_acquire) != nullptr)
+                openSelectedPluginEditor();
+            else
+                pluginSearch_.grabKeyboardFocus();
+        };
+        pluginsPage_.addAndMakeVisible(*button);
+        pluginSlotButtons_[slot] = std::move(button);
+    }
+
+    pluginSearch_.setTextToShowWhenEmpty("BUSCAR PLUGIN POR NOMBRE...", juce::Colour(mutedText));
     pluginSearch_.setTooltip(juce::String::fromUTF8("Buscá por nombre o fabricante. El resultado se filtra mientras escribís."));
     pluginSearch_.onTextChange = [this] { refreshPluginBrowser(); };
     pluginsPage_.addAndMakeVisible(pluginSearch_);
@@ -1014,9 +1062,9 @@ MainComponent::MainComponent()
     };
     pluginsPage_.addAndMakeVisible(favoritePluginButton_);
 
-    scanPluginsButton_.setButtonText("SCAN PLUGINS");
-    pluginLocationsButton_.setButtonText("ADD VST3 FOLDER");
-    loadPluginButton_.setButtonText("ADD FX");
+    scanPluginsButton_.setButtonText("BUSCAR VST3");
+    pluginLocationsButton_.setButtonText("CARPETA VST3");
+    loadPluginButton_.setButtonText("AÑADIR AL SLOT");
     scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     pluginLocationsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     pluginLocationsButton_.setTooltip(juce::String::fromUTF8("Agregá una carpeta VST3 adicional. J3 ya busca automáticamente las ubicaciones estándar de Windows."));
@@ -1024,7 +1072,7 @@ MainComponent::MainComponent()
     removePluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     movePluginUpButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     movePluginDownButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
-    openPluginEditorButton_.setButtonText("OPEN PLUGIN");
+    openPluginEditorButton_.setButtonText("ABRIR PLUGIN");
     openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
     bypassPluginButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
     scanPluginsButton_.onClick = [this] { scanVst3Plugins(); };
@@ -1393,6 +1441,17 @@ MainComponent::MainComponent()
     {
         const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
         pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        int targetSlot = 0;
+        for (int slot = 0; slot < kPluginSlots; ++slot)
+        {
+            if (pluginPaths_[ch][slot].isEmpty()
+                && channelPlugins_[ch][slot].load(std::memory_order_acquire) == nullptr)
+            {
+                targetSlot = slot;
+                break;
+            }
+        }
+        pluginSlotBox_.setSelectedId(targetSlot + 1, juce::dontSendNotification);
         setMixerBank((ch / kVisibleChannels) * kVisibleChannels);
         tabs_.setCurrentTabIndex(6);
         refreshPluginUi();
@@ -1432,7 +1491,7 @@ MainComponent::MainComponent()
     tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GRUPOS", juce::Colour(panel), &groupsPage_, false);
     tabs_.addTab("PADS", juce::Colour(panel), &padPage_, false);
-    tabs_.addTab("PLUGINS", juce::Colour(panel), &pluginsPage_, false);
+    tabs_.addTab("FX RACK", juce::Colour(panel), &pluginsPage_, false);
     tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
     tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
     tabs_.addTab(juce::String::fromUTF8("GRABACIÓN"), juce::Colour(panel), &recordingPage_, false);
@@ -1605,6 +1664,7 @@ void MainComponent::applyTheme(int themeId, bool persist)
     dashboardRecordButton_.setColour(juce::TextButton::buttonColourId, p.danger.darker(0.35f));
     dashboardStopButton_.setColour(juce::TextButton::buttonColourId, p.danger.darker(0.45f));
     loadPluginButton_.setColour(juce::TextButton::buttonColourId, p.accent.darker(0.25f));
+    nativeEqButton_.setColour(juce::TextButton::buttonColourId, p.accent.darker(0.5f));
     openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, p.good.darker(0.45f));
 
     const std::array<juce::Colour, 8> sectionColours {
@@ -1901,13 +1961,25 @@ void MainComponent::applyDspParameters(int channel) noexcept
         return;
 
     auto& dsp = channelDsp_[channel];
-    dsp.setHpf(channelHpf_[channel].load(std::memory_order_relaxed));
-    dsp.setLpf(channelLpf_[channel].load(std::memory_order_relaxed));
+    auto& insertLeft = insertEqLeft_[channel];
+    auto& insertRight = insertEqRight_[channel];
+    const auto hpf = channelHpf_[channel].load(std::memory_order_relaxed);
+    const auto lpf = channelLpf_[channel].load(std::memory_order_relaxed);
+    dsp.setHpf(hpf);
+    dsp.setLpf(lpf);
+    insertLeft.setHpf(hpf);
+    insertRight.setHpf(hpf);
+    insertLeft.setLpf(lpf);
+    insertRight.setLpf(lpf);
     for (int band = 0; band < 4; ++band)
-        dsp.setEqBand(static_cast<std::size_t>(band),
-                      channelEqFreq_[channel][band].load(std::memory_order_relaxed),
-                      channelEqQ_[channel][band].load(std::memory_order_relaxed),
-                      channelEqGain_[channel][band].load(std::memory_order_relaxed));
+    {
+        const auto frequency = channelEqFreq_[channel][band].load(std::memory_order_relaxed);
+        const auto q = channelEqQ_[channel][band].load(std::memory_order_relaxed);
+        const auto gain = channelEqGain_[channel][band].load(std::memory_order_relaxed);
+        dsp.setEqBand(static_cast<std::size_t>(band), frequency, q, gain);
+        insertLeft.setBand(static_cast<std::size_t>(band), frequency, q, gain);
+        insertRight.setBand(static_cast<std::size_t>(band), frequency, q, gain);
+    }
     dsp.setGate(channelGate_[channel].load(std::memory_order_relaxed));
     dsp.setCompressor(channelCompThreshold_[channel].load(std::memory_order_relaxed),
                       channelCompRatio_[channel].load(std::memory_order_relaxed));
@@ -1931,8 +2003,12 @@ void MainComponent::refreshDspUi()
     {
         eqFreqSliders_[band].setValue(channelEqFreq_[ch][band].load(std::memory_order_relaxed), juce::dontSendNotification);
         eqGainSliders_[band].setValue(channelEqGain_[ch][band].load(std::memory_order_relaxed), juce::dontSendNotification);
+        eqQSliders_[band].setValue(channelEqQ_[ch][band].load(std::memory_order_relaxed), juce::dontSendNotification);
     }
-    dspTitle_.setText(juce::String::fromUTF8("J3 CHANNEL DSP · ") + inputChannelName(ch), juce::dontSendNotification);
+    juce::String dspName = "J3 PARAMETRIC EQ + CHANNEL DSP  ·  MIXER INSERT " + juce::String(ch + 1);
+    const auto routedName = dawWorkspace_.mixerInsertName(ch);
+    if (routedName.isNotEmpty()) dspName << juce::String::fromUTF8("  ·  ") << routedName;
+    dspTitle_.setText(dspName, juce::dontSendNotification);
 }
 
 void MainComponent::applyDspPreset(int preset)
@@ -2126,6 +2202,17 @@ void MainComponent::rebuildMixerBank()
             [this](int ch)
             {
                 pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+                int targetSlot = 0;
+                for (int slot = 0; slot < kPluginSlots; ++slot)
+                {
+                    if (pluginPaths_[ch][slot].isEmpty()
+                        && channelPlugins_[ch][slot].load(std::memory_order_acquire) == nullptr)
+                    {
+                        targetSlot = slot;
+                        break;
+                    }
+                }
+                pluginSlotBox_.setSelectedId(targetSlot + 1, juce::dontSendNotification);
                 refreshPluginUi();
                 tabs_.setCurrentTabIndex(6);
             });
@@ -2399,9 +2486,10 @@ void MainComponent::resized()
     {
         auto row = eqArea.removeFromTop(eqH).reduced(4);
         eqBandLabels_[band].setBounds(row.removeFromLeft(54));
-        auto freqArea = row.removeFromLeft(row.getWidth() / 2);
-        eqFreqSliders_[band].setBounds(freqArea.reduced(3));
-        eqGainSliders_[band].setBounds(row.reduced(3));
+        const int controlW = std::max(1, row.getWidth() / 3);
+        eqFreqSliders_[band].setBounds(row.removeFromLeft(controlW).reduced(3));
+        eqGainSliders_[band].setBounds(row.removeFromLeft(controlW).reduced(3));
+        eqQSliders_[band].setBounds(row.reduced(3));
     }
 
     auto groupsArea = groupsPage_.getLocalBounds().reduced(18);
@@ -2436,43 +2524,66 @@ void MainComponent::resized()
     for (int i = 0; i < kVisibleChannels; ++i)
         if (iemStrips_[i]) iemStrips_[i]->setBounds(iemArea.removeFromLeft(iemW).reduced(3));
 
-    auto pluginsArea = pluginsPage_.getLocalBounds().reduced(30);
-    pluginsTitle_.setBounds(pluginsArea.removeFromTop(48));
+    auto pluginsArea = pluginsPage_.getLocalBounds().reduced(24);
+    pluginsTitle_.setBounds(pluginsArea.removeFromTop(46));
+    auto insertRow = pluginsArea.removeFromTop(40);
+    pluginChannelBox_.setBounds(insertRow.removeFromLeft(std::min(260, insertRow.getWidth())).reduced(2));
+    pluginSlotBox_.setBounds({}); // selection model only; the visible rack buttons replace this combo
     pluginsArea.removeFromTop(8);
-    auto pluginBrowserRow = pluginsArea.removeFromTop(42);
-    const int searchWidth = std::max(180, std::min(430, pluginBrowserRow.getWidth() * 40 / 100));
-    pluginSearch_.setBounds(pluginBrowserRow.removeFromLeft(searchWidth).reduced(3));
-    pluginBrowserRow.removeFromLeft(8);
-    pluginCategoryBox_.setBounds(pluginBrowserRow.removeFromLeft(std::min(210, pluginBrowserRow.getWidth())).reduced(3));
-    pluginBrowserRow.removeFromLeft(8);
-    favoritePluginButton_.setBounds(pluginBrowserRow.removeFromLeft(std::min(145, pluginBrowserRow.getWidth())));
-    pluginBrowserRow.removeFromLeft(8);
-    pluginLocationsButton_.setBounds(pluginBrowserRow.removeFromLeft(std::min(170, pluginBrowserRow.getWidth())).reduced(2));
-    pluginsArea.removeFromTop(8);
-    auto pluginSelectRow = pluginsArea.removeFromTop(44);
-    pluginChannelBox_.setBounds(pluginSelectRow.removeFromLeft(180).reduced(3));
-    pluginSelectRow.removeFromLeft(8);
-    pluginSlotBox_.setBounds(pluginSelectRow.removeFromLeft(150).reduced(3));
-    pluginSelectRow.removeFromLeft(8);
-    const int catalogWidth = std::max(160, std::min(500, pluginSelectRow.getWidth() - 150));
-    pluginCatalogBox_.setBounds(pluginSelectRow.removeFromLeft(catalogWidth).reduced(3));
-    pluginSelectRow.removeFromLeft(8);
-    scanPluginsButton_.setBounds(pluginSelectRow.removeFromLeft(std::min(145, pluginSelectRow.getWidth())).reduced(2));
-    pluginsArea.removeFromTop(14);
-    auto pluginActionRow = pluginsArea.removeFromTop(44);
-    loadPluginButton_.setBounds(pluginActionRow.removeFromLeft(135));
-    pluginActionRow.removeFromLeft(6);
-    removePluginButton_.setBounds(pluginActionRow.removeFromLeft(105));
-    pluginActionRow.removeFromLeft(6);
-    movePluginUpButton_.setBounds(pluginActionRow.removeFromLeft(100));
-    pluginActionRow.removeFromLeft(6);
-    movePluginDownButton_.setBounds(pluginActionRow.removeFromLeft(112));
-    pluginActionRow.removeFromLeft(6);
-    bypassPluginButton_.setBounds(pluginActionRow.removeFromLeft(100));
-    pluginActionRow.removeFromLeft(6);
-    openPluginEditorButton_.setBounds(pluginActionRow.removeFromLeft(std::min(175, pluginActionRow.getWidth())));
-    pluginsArea.removeFromTop(22);
-    pluginStatusLabel_.setBounds(pluginsArea.removeFromTop(190));
+
+    const int chainWidth = std::max(300, std::min(430, pluginsArea.getWidth() * 34 / 100));
+    auto chain = pluginsArea.removeFromLeft(chainWidth).reduced(6);
+    pluginsArea.removeFromLeft(10);
+    auto browser = pluginsArea.reduced(6);
+
+    pluginChainTitle_.setBounds(chain.removeFromTop(24));
+    chain.removeFromTop(4);
+    nativeEqButton_.setBounds(chain.removeFromTop(40));
+    chain.removeFromTop(8);
+    const int slotGap = 5;
+    const int slotH = std::max(34, std::min(46, (chain.getHeight() - 42 - slotGap * (kPluginSlots - 1)) / kPluginSlots));
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+    {
+        if (pluginSlotButtons_[slot])
+            pluginSlotButtons_[slot]->setBounds(chain.removeFromTop(slotH));
+        if (slot + 1 < kPluginSlots)
+            chain.removeFromTop(slotGap);
+    }
+
+    pluginBrowserTitle_.setBounds(browser.removeFromTop(24));
+    browser.removeFromTop(4);
+    auto searchRow = browser.removeFromTop(40);
+    pluginSearch_.setBounds(searchRow.removeFromLeft(std::max(180, searchRow.getWidth() * 48 / 100)).reduced(2));
+    searchRow.removeFromLeft(6);
+    pluginCategoryBox_.setBounds(searchRow.removeFromLeft(std::max(130, searchRow.getWidth() * 38 / 100)).reduced(2));
+    searchRow.removeFromLeft(6);
+    favoritePluginButton_.setBounds(searchRow);
+    browser.removeFromTop(7);
+
+    auto catalogRow = browser.removeFromTop(42);
+    pluginCatalogBox_.setBounds(catalogRow.removeFromLeft(std::max(220, catalogRow.getWidth() - 150)).reduced(2));
+    catalogRow.removeFromLeft(6);
+    scanPluginsButton_.setBounds(catalogRow.reduced(2));
+    browser.removeFromTop(7);
+
+    auto locationsRow = browser.removeFromTop(38);
+    pluginLocationsButton_.setBounds(locationsRow.removeFromLeft(170).reduced(2));
+    locationsRow.removeFromLeft(8);
+    loadPluginButton_.setBounds(locationsRow.removeFromLeft(std::min(180, locationsRow.getWidth())).reduced(1));
+    browser.removeFromTop(9);
+
+    auto pluginActionRow = browser.removeFromTop(40);
+    openPluginEditorButton_.setBounds(pluginActionRow.removeFromLeft(150));
+    pluginActionRow.removeFromLeft(5);
+    bypassPluginButton_.setBounds(pluginActionRow.removeFromLeft(90));
+    pluginActionRow.removeFromLeft(5);
+    removePluginButton_.setBounds(pluginActionRow.removeFromLeft(95));
+    pluginActionRow.removeFromLeft(5);
+    movePluginUpButton_.setBounds(pluginActionRow.removeFromLeft(90));
+    pluginActionRow.removeFromLeft(5);
+    movePluginDownButton_.setBounds(pluginActionRow.removeFromLeft(std::min(100, pluginActionRow.getWidth())));
+    browser.removeFromTop(10);
+    pluginStatusLabel_.setBounds(browser);
 
     auto padArea = padPage_.getLocalBounds().reduced(42);
     padTitle_.setBounds(padArea.removeFromTop(54));
@@ -3188,6 +3299,33 @@ void MainComponent::refreshPluginUi()
     }
     pluginSlotBox_.setSelectedId(slot + 1, juce::dontSendNotification);
 
+    const auto routedName = dawWorkspace_.mixerInsertName(ch);
+    juce::String chainHeader = "MIXER INSERT " + juce::String(ch + 1);
+    if (routedName.isNotEmpty())
+        chainHeader << juce::String::fromUTF8("  ·  ") << routedName;
+    chainHeader << "  ·  FX CHAIN";
+    pluginsTitle_.setText(chainHeader, juce::dontSendNotification);
+
+    for (int i = 0; i < kPluginSlots; ++i)
+    {
+        if (!pluginSlotButtons_[i]) continue;
+        const bool occupied = pluginNames_[ch][i].isNotEmpty() || pluginPaths_[ch][i].isNotEmpty()
+            || channelPlugins_[ch][i].load(std::memory_order_acquire) != nullptr;
+        juce::String label = juce::String(i + 1) + "   ";
+        if (occupied)
+            label << (pluginNames_[ch][i].isNotEmpty() ? pluginNames_[ch][i] : juce::String("PLUGIN"));
+        else
+            label << "+ ADD EFFECT";
+        if (pluginBypass_[ch][i].load(std::memory_order_relaxed))
+            label << "   [BYPASS]";
+        pluginSlotButtons_[i]->setButtonText(label);
+        pluginSlotButtons_[i]->setColour(juce::TextButton::buttonColourId,
+            i == slot ? juce::Colour(accentDeep) : juce::Colour(occupied ? 0xff173246 : panel3));
+    }
+
+    nativeEqButton_.setButtonText("J3 PARAMETRIC EQ  ·  NATIVE  ·  PRE-FX");
+    pluginBrowserTitle_.setText("ADD EFFECT TO SLOT " + juce::String(slot + 1), juce::dontSendNotification);
+
     auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
 
     const int browserRow = pluginCatalogBox_.getSelectedId() - 1;
@@ -3220,7 +3358,6 @@ void MainComponent::refreshPluginUi()
 
     juce::String status;
     status << "Mixer Insert " << (ch + 1);
-    const auto routedName = dawWorkspace_.mixerInsertName(ch);
     if (routedName.isNotEmpty()) status << juce::String::fromUTF8(" · ") << routedName;
     status << juce::String::fromUTF8(" · FX Slot ") << (slot + 1) << "\n";
     if (loaded)
@@ -3242,9 +3379,10 @@ void MainComponent::refreshPluginUi()
     }
     else
     {
-        status << "Empty insert.\n";
-        status << pluginBrowserIndices_.size() << " shown / " << pluginCatalog_.plugins().size()
-               << " VST3 discovered. Search, choose a category, then ADD FX.";
+        status << "Empty slot.\n";
+        status << "Choose a plugin on the right and press AÑADIR AL SLOT. "
+               << pluginBrowserIndices_.size() << " shown / " << pluginCatalog_.plugins().size()
+               << " VST3 discovered.";
     }
     pluginStatusLabel_.setText(status, juce::dontSendNotification);
 }
@@ -4374,6 +4512,15 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             {
                 auto* insertL = dawMixerScratch_.getWritePointer(ch * 2);
                 auto* insertR = dawMixerScratch_.getWritePointer(ch * 2 + 1);
+
+                // Native J3 EQ is the fixed PRE-FX stage, like a channel EQ in a
+                // hardware/FL-style mixer. VST3 effects then run in slots 1..8.
+                applyDspParameters(ch);
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    insertL[i] = insertEqLeft_[ch].process(insertL[i]);
+                    insertR[i] = insertEqRight_[ch].process(insertR[i]);
+                }
                 processPluginChainStereo(ch, insertL, insertR, numSamples);
 
                 const bool muted = channelMute_[ch].load(std::memory_order_relaxed);
@@ -4551,6 +4698,8 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     for (int ch = 0; ch < kMaxChannels; ++ch)
     {
         channelDsp_[ch].prepare(sr);
+        insertEqLeft_[ch].prepare(sr);
+        insertEqRight_[ch].prepare(sr);
         dspAppliedRevision_[ch] = 0;
     }
     clickGenerator_.prepare(sr);

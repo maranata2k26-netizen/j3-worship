@@ -16,6 +16,19 @@ private:
     void normalize(double b0,double b1,double b2,double a0,double a1,double a2) noexcept;
 };
 
+class ParametricEq {
+public:
+    void prepare(double sampleRate) noexcept;
+    void setHpf(double hz) noexcept;
+    void setLpf(double hz) noexcept;
+    void setBand(std::size_t i,double hz,double q,double gainDb) noexcept;
+    float process(float x) noexcept;
+private:
+    double sr_{48000};
+    Biquad hpf_,lpf_;
+    std::array<Biquad,4> eq_{};
+};
+
 class Gate {
 public:
     void configure(double sr,double thresholdDb,double attackMs=2.0,double releaseMs=120.0) noexcept;

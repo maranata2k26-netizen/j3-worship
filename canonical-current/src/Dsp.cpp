@@ -10,6 +10,24 @@ void Biquad::setLowPass(double sr,double hz,double q) noexcept { hz=std::clamp(h
 void Biquad::setHighPass(double sr,double hz,double q) noexcept { hz=std::clamp(hz,5.0,sr*0.49); const double w=2.0*std::numbers::pi_v<double>*hz/sr,c=std::cos(w),s=std::sin(w),a=s/(2*q); normalize((1+c)/2,-(1+c),(1+c)/2,1+a,-2*c,1-a); }
 void Biquad::setPeak(double sr,double hz,double q,double gainDb) noexcept { hz=std::clamp(hz,5.0,sr*0.49); q=std::clamp(q,0.1,18.0); const double A=std::pow(10.0,gainDb/40.0),w=2*std::numbers::pi_v<double>*hz/sr,c=std::cos(w),s=std::sin(w),a=s/(2*q); normalize(1+a*A,-2*c,1-a*A,1+a/A,-2*c,1-a/A); }
 float Biquad::process(float x) noexcept { const double y=b0_*x+z1_; z1_=b1_*x-a1_*y+z2_; z2_=b2_*x-a2_*y; return static_cast<float>(y); }
+
+void ParametricEq::prepare(double s) noexcept {
+    sr_=std::max(8000.0,s);
+    setHpf(20.0);
+    setLpf(std::min(20000.0,sr_*0.45));
+    for(std::size_t i=0;i<4;++i) setBand(i,200.0*std::pow(3.0,static_cast<double>(i)),1.0,0.0);
+}
+void ParametricEq::setHpf(double hz) noexcept { hpf_.setHighPass(sr_,hz); }
+void ParametricEq::setLpf(double hz) noexcept { lpf_.setLowPass(sr_,hz); }
+void ParametricEq::setBand(std::size_t i,double hz,double q,double gainDb) noexcept {
+    if(i<eq_.size()) eq_[i].setPeak(sr_,hz,q,gainDb);
+}
+float ParametricEq::process(float x) noexcept {
+    x=hpf_.process(x);
+    for(auto& band:eq_) x=band.process(x);
+    return lpf_.process(x);
+}
+
 void Gate::configure(double sr,double thresholdDb,double attackMs,double releaseMs) noexcept { threshold_=dbToGain(thresholdDb); attack_=1-std::exp(-1.0/(sr*attackMs/1000.0)); release_=1-std::exp(-1.0/(sr*releaseMs/1000.0)); }
 float Gate::process(float x) noexcept { const double target=std::abs(x)>=threshold_?1.0:0.0; env_ += (target-env_)*(target>env_?attack_:release_); return static_cast<float>(x*env_); }
 void Compressor::configure(double sr,double thresholdDb,double ratio,double attackMs,double releaseMs,double makeupDb) noexcept { thresholdDb_=thresholdDb; ratio_=std::max(1.0,ratio); attack_=1-std::exp(-1.0/(sr*attackMs/1000.0)); release_=1-std::exp(-1.0/(sr*releaseMs/1000.0)); makeup_=dbToGain(makeupDb); }
