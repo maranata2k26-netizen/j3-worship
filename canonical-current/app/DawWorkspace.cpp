@@ -2056,8 +2056,8 @@ void DawWorkspace::mouseDoubleClick(const juce::MouseEvent& e)
                 selectedTrack_ = c->track;
                 syncInspector();
                 fitSelection();
-                clipMixerBox_.grabKeyboardFocus();
-                refreshStatus(juce::String::fromUTF8("AUDIO EDITOR · elegí MIXER INSERT y abrí FX / PLUGINS"));
+                openSelectedClipEditor();
+                refreshStatus(juce::String::fromUTF8("AUDIO EDITOR · Mixer Insert + FX"));
                 return;
             }
 
@@ -2142,6 +2142,73 @@ void DawWorkspace::filesDropped(const juce::StringArray& files, int x, int y)
     int track = trackAtY(y);
     if (track < 0) track = selectedTrack_;
     importFiles(files, track, snapBeat(beatAtX(static_cast<float>(x))));
+}
+
+void DawWorkspace::openSelectedClipEditor()
+{
+    Clip* selected = nullptr;
+    for (auto& clip : clips_)
+    {
+        if (clip.id == selectedClipId_)
+        {
+            selected = &clip;
+            break;
+        }
+    }
+    if (selected == nullptr || selected->audio == nullptr)
+        return;
+
+    const int clipId = selected->id;
+    const int insert = juce::jlimit(0, kMaxTracks - 1, selected->mixerInsert);
+    const auto clipName = juce::File(selected->audio->path).getFileName();
+    auto safe = juce::Component::SafePointer<DawWorkspace>(this);
+
+    auto editor = std::make_unique<AudioClipRoutingEditor>(
+        clipName,
+        insert,
+        [safe, clipId](int newInsert)
+        {
+            if (safe == nullptr)
+                return;
+            for (auto& clip : safe->clips_)
+            {
+                if (clip.id != clipId)
+                    continue;
+                newInsert = juce::jlimit(0, kMaxTracks - 1, newInsert);
+                if (clip.mixerInsert == newInsert)
+                    return;
+                safe->checkpointUndo();
+                clip.mixerInsert = newInsert;
+                safe->projectDirty_ = true;
+                safe->markRenderDirty();
+                safe->rebuildRenderState();
+                safe->syncInspector();
+                if (safe->onMixerRoutingChanged) safe->onMixerRoutingChanged();
+                safe->repaint();
+                safe->refreshStatus("Mixer Insert " + juce::String(newInsert + 1));
+                return;
+            }
+        },
+        [safe](int targetInsert)
+        {
+            if (safe != nullptr && safe->onOpenMixerInsert)
+                safe->onOpenMixerInsert(juce::jlimit(0, kMaxTracks - 1, targetInsert));
+        },
+        [safe](int targetInsert)
+        {
+            if (safe != nullptr && safe->onOpenPluginsForInsert)
+                safe->onOpenPluginsForInsert(juce::jlimit(0, kMaxTracks - 1, targetInsert));
+        });
+
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(editor.release());
+    options.dialogTitle = juce::String::fromUTF8("J3 Worship · Audio Clip");
+    options.dialogBackgroundColour = juce::Colour(0xff0b151e);
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = false;
+    options.componentToCentreAround = this;
+    options.launchAsync();
 }
 
 void DawWorkspace::addTrack()
