@@ -148,7 +148,6 @@ private:
     void chooseAdditionalVst3Folder();
     void refreshPluginBrowser();
     void refreshPluginUi();
-    void showPluginSlotMenu(int slot);
     void openNativeEqEditor();
     void loadSelectedPlugin();
     void loadPluginDescriptionIntoSlot(const juce::PluginDescription&, int channel, int slot);
