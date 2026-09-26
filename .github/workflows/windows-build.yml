@@ -63,6 +63,29 @@ jobs:
           & $iscc "canonical-current/installer/J3Worship.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
+      - name: In-place updater target smoke test
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Setup.exe").Path
+          $sourceExe = (Resolve-Path "canonical-current/dist/J3Worship.exe").Path
+          $updateDir = Join-Path $env:RUNNER_TEMP "J3WorshipUpdateTarget"
+          $log1 = Join-Path $env:RUNNER_TEMP "j3-update-first.log"
+          $log2 = Join-Path $env:RUNNER_TEMP "j3-update-second.log"
+
+          $first = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=$updateDir","/LOG=$log1" -Wait -PassThru
+          if ($first.ExitCode -ne 0) { Get-Content $log1 -ErrorAction SilentlyContinue; throw "Initial updater-target install failed: $($first.ExitCode)" }
+
+          $installedExe = Join-Path $updateDir "J3Worship.exe"
+          if (!(Test-Path $installedExe)) { throw "Updater-target executable missing after first install" }
+
+          Set-Content -Path $installedExe -Value "stale executable placeholder" -Encoding ascii
+          $second = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=$updateDir","/LOG=$log2" -Wait -PassThru
+          if ($second.ExitCode -ne 0) { Get-Content $log2 -ErrorAction SilentlyContinue; throw "In-place reinstall failed: $($second.ExitCode)" }
+
+          $expected = (Get-FileHash $sourceExe -Algorithm SHA256).Hash
+          $actual = (Get-FileHash $installedExe -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw "In-place updater did not replace the executable in the requested directory" }
+
       - name: End-to-end installer smoke test
         shell: pwsh
         run: |
