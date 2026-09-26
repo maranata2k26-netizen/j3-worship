@@ -3880,6 +3880,252 @@ void DawWorkspace::emergencyStop()
     refreshStatus(juce::String::fromUTF8("STOP ALL · reproducción detenida"));
 }
 
+
+int DawWorkspace::liveClipIdForSlot(int trackIndex, int sceneIndex) const
+{
+    if (trackIndex < 0 || trackIndex >= std::min(trackCount_, kLiveMaxTracks)
+        || sceneIndex < 0 || sceneIndex >= kLiveMaxScenes)
+        return kLiveNoClip;
+
+    std::vector<const Clip*> trackClips;
+    trackClips.reserve(clips_.size());
+    for (const auto& clip : clips_)
+        if (clip.track == trackIndex && clip.audio != nullptr)
+            trackClips.push_back(&clip);
+
+    std::sort(trackClips.begin(), trackClips.end(),
+        [](const Clip* a, const Clip* b)
+        {
+            if (a->startBeat != b->startBeat)
+                return a->startBeat < b->startBeat;
+            return a->id < b->id;
+        });
+
+    if (sceneIndex >= static_cast<int>(trackClips.size()))
+        return kLiveNoClip;
+    return trackClips[static_cast<std::size_t>(sceneIndex)]->id;
+}
+
+DawWorkspace::LiveSessionSnapshot DawWorkspace::liveSessionSnapshot() const
+{
+    LiveSessionSnapshot snapshot;
+    snapshot.sceneCount = kLiveMaxScenes;
+    snapshot.activeScene = liveActiveScene_.load(std::memory_order_acquire);
+    snapshot.pendingScene = livePendingScene_.load(std::memory_order_acquire);
+    snapshot.quantizationBeats = liveQuantizationBeats_.load(std::memory_order_acquire);
+    snapshot.active = liveSessionEnabled_.load(std::memory_order_acquire);
+    snapshot.editLocked = snapshot.active;
+
+    const int count = std::min(trackCount_, kLiveMaxTracks);
+    snapshot.tracks.reserve(static_cast<std::size_t>(count));
+
+    for (int trackIndex = 0; trackIndex < count; ++trackIndex)
+    {
+        LiveTrackView track;
+        track.trackIndex = trackIndex;
+        track.name = tracks_[trackIndex].name.isNotEmpty()
+            ? tracks_[trackIndex].name
+            : "Pista " + juce::String(trackIndex + 1);
+        track.colour = tracks_[trackIndex].colour;
+        track.mixerInsert = juce::jlimit(0, kMaxTracks - 1, tracks_[trackIndex].mixerInsert);
+
+        const int activeId = liveActiveClipIds_[trackIndex].load(std::memory_order_acquire);
+        const int pendingId = livePendingClipIds_[trackIndex].load(std::memory_order_acquire);
+        track.active = activeId >= 0;
+        track.pending = pendingId >= 0;
+
+        std::vector<const Clip*> trackClips;
+        trackClips.reserve(clips_.size());
+        for (const auto& clip : clips_)
+            if (clip.track == trackIndex && clip.audio != nullptr)
+                trackClips.push_back(&clip);
+
+        std::sort(trackClips.begin(), trackClips.end(),
+            [](const Clip* a, const Clip* b)
+            {
+                if (a->startBeat != b->startBeat)
+                    return a->startBeat < b->startBeat;
+                return a->id < b->id;
+            });
+
+        const int slotCount = std::min(kLiveMaxScenes, static_cast<int>(trackClips.size()));
+        track.clips.reserve(static_cast<std::size_t>(slotCount));
+        for (int scene = 0; scene < slotCount; ++scene)
+        {
+            const auto* clip = trackClips[static_cast<std::size_t>(scene)];
+            LiveClipCell cell;
+            cell.clipId = clip->id;
+            cell.trackIndex = trackIndex;
+            cell.sceneIndex = scene;
+            cell.mixerInsert = juce::jlimit(0, kMaxTracks - 1, clip->mixerInsert);
+            cell.name = clip->audio != nullptr
+                ? juce::File(clip->audio->path).getFileNameWithoutExtension()
+                : "Clip " + juce::String(scene + 1);
+            if (cell.name.isEmpty())
+                cell.name = "Clip " + juce::String(scene + 1);
+            cell.colour = clip->colour;
+            cell.lengthBeats = clip->lengthBeats;
+            cell.active = clip->id == activeId;
+            cell.pending = clip->id == pendingId;
+            track.clips.push_back(std::move(cell));
+        }
+
+        snapshot.tracks.push_back(std::move(track));
+    }
+
+    return snapshot;
+}
+
+std::int64_t DawWorkspace::nextLiveBoundarySample(std::int64_t now) const noexcept
+{
+    const int quantBeats = liveQuantizationBeats_.load(std::memory_order_relaxed);
+    if (quantBeats <= 0)
+        return std::max<std::int64_t>(0, now);
+
+    const double sampleRate = std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed));
+    const double secondsPerBeat = 60.0 / std::max(1.0, bpm());
+    const auto quantum = std::max<std::int64_t>(1,
+        static_cast<std::int64_t>(std::llround(static_cast<double>(quantBeats) * secondsPerBeat * sampleRate)));
+    now = std::max<std::int64_t>(0, now);
+    const auto remainder = now % quantum;
+    return remainder == 0 ? now : now + (quantum - remainder);
+}
+
+void DawWorkspace::setLiveQuantizationBeats(int beats)
+{
+    if (beats != 0 && beats != 1 && beats != 2 && beats != 4 && beats != 8)
+        beats = 4;
+    liveQuantizationBeats_.store(beats, std::memory_order_release);
+    refreshStatus(beats == 0
+        ? juce::String::fromUTF8("LIVE/CLIPS · cuantización OFF")
+        : juce::String::fromUTF8("LIVE/CLIPS · cuantización ") + juce::String(beats) + " beat(s)");
+    repaint();
+}
+
+void DawWorkspace::launchLiveClip(int trackIndex, int sceneIndex)
+{
+    const int clipId = liveClipIdForSlot(trackIndex, sceneIndex);
+    if (clipId < 0)
+    {
+        refreshStatus(juce::String::fromUTF8("LIVE/CLIPS · esa celda todavía no tiene audio."));
+        return;
+    }
+
+    const bool wasPlaying = playing_.exchange(true, std::memory_order_acq_rel);
+    liveSessionEnabled_.store(true, std::memory_order_release);
+    const auto target = nextLiveBoundarySample(liveClockSamples_.load(std::memory_order_acquire));
+    livePendingClipIds_[trackIndex].store(clipId, std::memory_order_release);
+    livePendingLaunchSamples_[trackIndex].store(target, std::memory_order_release);
+    livePendingScene_.store(-1, std::memory_order_release);
+    liveActiveScene_.store(-1, std::memory_order_release);
+    playButton_.setButtonText("PAUSE");
+    if (!wasPlaying && onPlayStateChanged)
+        onPlayStateChanged(true);
+
+    refreshStatus(juce::String::fromUTF8("LIVE/CLIPS · clip en cola · ")
+        + tracks_[trackIndex].name + " · escena " + juce::String(sceneIndex + 1));
+    repaint();
+}
+
+void DawWorkspace::launchLiveScene(int sceneIndex)
+{
+    if (sceneIndex < 0 || sceneIndex >= kLiveMaxScenes)
+        return;
+
+    const auto target = nextLiveBoundarySample(liveClockSamples_.load(std::memory_order_acquire));
+    bool queuedAny = false;
+    const int count = std::min(trackCount_, kLiveMaxTracks);
+    for (int track = 0; track < count; ++track)
+    {
+        const int clipId = liveClipIdForSlot(track, sceneIndex);
+        if (clipId < 0)
+            continue;
+        livePendingClipIds_[track].store(clipId, std::memory_order_release);
+        livePendingLaunchSamples_[track].store(target, std::memory_order_release);
+        queuedAny = true;
+    }
+
+    if (!queuedAny)
+    {
+        refreshStatus(juce::String::fromUTF8("LIVE/CLIPS · la escena está vacía."));
+        return;
+    }
+
+    const bool wasPlaying = playing_.exchange(true, std::memory_order_acq_rel);
+    liveSessionEnabled_.store(true, std::memory_order_release);
+    livePendingScene_.store(sceneIndex, std::memory_order_release);
+    livePendingSceneSample_.store(target, std::memory_order_release);
+    playButton_.setButtonText("PAUSE");
+    if (!wasPlaying && onPlayStateChanged)
+        onPlayStateChanged(true);
+
+    refreshStatus(juce::String::fromUTF8("LIVE/CLIPS · escena ")
+        + juce::String(sceneIndex + 1) + juce::String::fromUTF8(" en cola"));
+    repaint();
+}
+
+void DawWorkspace::stopLiveTrack(int trackIndex)
+{
+    if (trackIndex < 0 || trackIndex >= kMaxTracks)
+        return;
+    livePendingClipIds_[trackIndex].store(kLiveNoClip, std::memory_order_release);
+    liveActiveClipIds_[trackIndex].store(kLiveNoClip, std::memory_order_release);
+    livePendingLaunchSamples_[trackIndex].store(0, std::memory_order_release);
+    liveClipLaunchSamples_[trackIndex].store(0, std::memory_order_release);
+    liveActiveScene_.store(-1, std::memory_order_release);
+    livePendingScene_.store(-1, std::memory_order_release);
+
+    bool anything = false;
+    for (int i = 0; i < std::min(trackCount_, kLiveMaxTracks); ++i)
+    {
+        if (liveActiveClipIds_[i].load(std::memory_order_acquire) >= 0
+            || livePendingClipIds_[i].load(std::memory_order_acquire) >= 0)
+        {
+            anything = true;
+            break;
+        }
+    }
+    if (!anything)
+    {
+        liveSessionEnabled_.store(false, std::memory_order_release);
+        playing_.store(false, std::memory_order_release);
+        playButton_.setButtonText("PLAY");
+        if (onPlayStateChanged) onPlayStateChanged(false);
+    }
+    refreshStatus(juce::String::fromUTF8("LIVE/CLIPS · STOP TRACK · ")
+        + tracks_[juce::jlimit(0, trackCount_ - 1, trackIndex)].name);
+    repaint();
+}
+
+void DawWorkspace::clearLiveState(bool stopTransportToo) noexcept
+{
+    for (int i = 0; i < kMaxTracks; ++i)
+    {
+        liveActiveClipIds_[i].store(kLiveNoClip, std::memory_order_release);
+        livePendingClipIds_[i].store(kLiveNoClip, std::memory_order_release);
+        liveClipLaunchSamples_[i].store(0, std::memory_order_release);
+        livePendingLaunchSamples_[i].store(0, std::memory_order_release);
+    }
+    liveActiveScene_.store(-1, std::memory_order_release);
+    livePendingScene_.store(-1, std::memory_order_release);
+    livePendingSceneSample_.store(0, std::memory_order_release);
+    liveSessionEnabled_.store(false, std::memory_order_release);
+    liveClockSamples_.store(0, std::memory_order_release);
+    if (stopTransportToo)
+        playing_.store(false, std::memory_order_release);
+}
+
+void DawWorkspace::stopLiveClips()
+{
+    const bool wasActive = liveSessionEnabled_.load(std::memory_order_acquire);
+    clearLiveState(true);
+    playButton_.setButtonText("PLAY");
+    if (wasActive && onPlayStateChanged)
+        onPlayStateChanged(false);
+    refreshStatus(juce::String::fromUTF8("LIVE/CLIPS · STOP ALL CLIPS · PADS y CLICK no fueron modificados"));
+    repaint();
+}
+
 void DawWorkspace::setTempoFromHost(double value)
 {
     value = juce::jlimit(40.0, 240.0, value);
