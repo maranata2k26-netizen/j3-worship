@@ -225,6 +225,7 @@ private:
     void configureControls();
     void syncInspector();
     void refreshStatus(const juce::String& text);
+    bool rejectStructuralEditWhileLive(const juce::String& action);
 
     juce::Rectangle<int> timelineBounds() const;
     juce::Rectangle<int> rulerBounds() const;
