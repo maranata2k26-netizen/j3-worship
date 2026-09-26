@@ -102,6 +102,382 @@ private:
     std::unique_ptr<juce::AudioProcessorEditor> editor_;
 };
 
+class NativeEqEditor final : public juce::Component
+{
+public:
+    NativeEqEditor(juce::String insertName,
+                   std::atomic<float>& hpf,
+                   std::atomic<float>& lpf,
+                   std::array<std::atomic<float>, 4>& frequencies,
+                   std::array<std::atomic<float>, 4>& gains,
+                   std::array<std::atomic<float>, 4>& qs,
+                   std::function<void()> onChanged)
+        : insertName_(std::move(insertName)),
+          hpf_(hpf), lpf_(lpf),
+          frequencies_(frequencies), gains_(gains), qs_(qs),
+          onChanged_(std::move(onChanged))
+    {
+        title_.setText("J3 PARAMETRIC EQ", juce::dontSendNotification);
+        title_.setFont(juce::FontOptions(24.0f, juce::Font::bold));
+        title_.setColour(juce::Label::textColourId, juce::Colour(text));
+        addAndMakeVisible(title_);
+
+        subtitle_.setText(insertName_ + "  |  NATIVE PRE-FX", juce::dontSendNotification);
+        subtitle_.setFont(juce::FontOptions(13.0f));
+        subtitle_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+        addAndMakeVisible(subtitle_);
+
+        bandLabel_.setText("BANDA", juce::dontSendNotification);
+        bandLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+        bandLabel_.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        addAndMakeVisible(bandLabel_);
+
+        for (int i = 0; i < 4; ++i)
+            bandBox_.addItem("BANDA " + juce::String(i + 1), i + 1);
+        bandBox_.setSelectedId(1, juce::dontSendNotification);
+        bandBox_.onChange = [this]
+        {
+            selectedBand_ = juce::jlimit(0, 3, bandBox_.getSelectedId() - 1);
+            syncBandControls();
+            repaint();
+        };
+        addAndMakeVisible(bandBox_);
+
+        setupLabel(hpfLabel_, "HPF");
+        setupLabel(lpfLabel_, "LPF");
+        setupLabel(freqLabel_, "FRECUENCIA");
+        setupLabel(gainLabel_, "GANANCIA");
+        setupLabel(qLabel_, "Q / ANCHO");
+
+        setupSlider(hpfSlider_, 20.0, 1000.0, 1.0, " Hz");
+        hpfSlider_.setSkewFactorFromMidPoint(120.0);
+        setupSlider(lpfSlider_, 1000.0, 20000.0, 10.0, " Hz");
+        lpfSlider_.setSkewFactorFromMidPoint(7000.0);
+        setupSlider(freqSlider_, 20.0, 20000.0, 1.0, " Hz");
+        freqSlider_.setSkewFactorFromMidPoint(1000.0);
+        setupSlider(gainSlider_, -18.0, 18.0, 0.1, " dB");
+        setupSlider(qSlider_, 0.20, 12.0, 0.05, " Q");
+        qSlider_.setSkewFactorFromMidPoint(1.0);
+
+        hpfSlider_.onValueChange = [this]
+        {
+            hpf_.store(static_cast<float>(hpfSlider_.getValue()), std::memory_order_relaxed);
+            changed();
+        };
+        lpfSlider_.onValueChange = [this]
+        {
+            lpf_.store(static_cast<float>(lpfSlider_.getValue()), std::memory_order_relaxed);
+            changed();
+        };
+        freqSlider_.onValueChange = [this]
+        {
+            frequencies_[selectedBand_].store(static_cast<float>(freqSlider_.getValue()), std::memory_order_relaxed);
+            changed();
+        };
+        gainSlider_.onValueChange = [this]
+        {
+            gains_[selectedBand_].store(static_cast<float>(gainSlider_.getValue()), std::memory_order_relaxed);
+            changed();
+        };
+        qSlider_.onValueChange = [this]
+        {
+            qs_[selectedBand_].store(static_cast<float>(qSlider_.getValue()), std::memory_order_relaxed);
+            changed();
+        };
+
+        hint_.setText("Arrastrá los puntos del gráfico para mover frecuencia y ganancia. Doble click en un punto = 0 dB.",
+                      juce::dontSendNotification);
+        hint_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+        hint_.setFont(juce::FontOptions(12.5f));
+        addAndMakeVisible(hint_);
+
+        syncFromModel();
+        setSize(920, 580);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(background));
+
+        auto graph = graphArea_.toFloat();
+        g.setColour(juce::Colour(0xff0b1117));
+        g.fillRoundedRectangle(graph, 7.0f);
+        g.setColour(juce::Colour(border));
+        g.drawRoundedRectangle(graph.reduced(0.5f), 7.0f, 1.0f);
+
+        if (graphArea_.isEmpty())
+            return;
+
+        static const std::array<double, 8> frequencyLines { 20.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0, 20000.0 };
+        g.setFont(juce::FontOptions(10.5f));
+        for (const auto hz : frequencyLines)
+        {
+            const float x = hzToX(hz);
+            g.setColour(juce::Colour(0xff26323d).withAlpha(hz == 1000.0 ? 0.9f : 0.55f));
+            g.drawVerticalLine(static_cast<int>(std::round(x)),
+                               static_cast<float>(graphArea_.getY()),
+                               static_cast<float>(graphArea_.getBottom()));
+            juce::String label = hz >= 1000.0 ? juce::String(hz / 1000.0, hz < 10000.0 ? 1 : 0) + "k"
+                                             : juce::String(static_cast<int>(hz));
+            g.setColour(juce::Colour(mutedText).withAlpha(0.75f));
+            g.drawText(label, static_cast<int>(x) - 24, graphArea_.getBottom() - 18, 48, 16,
+                       juce::Justification::centred, false);
+        }
+
+        for (int db : { -12, -6, 0, 6, 12 })
+        {
+            const float y = gainToY(static_cast<double>(db));
+            g.setColour(db == 0 ? juce::Colour(0xff526270) : juce::Colour(0xff26323d).withAlpha(0.55f));
+            g.drawHorizontalLine(static_cast<int>(std::round(y)),
+                                 static_cast<float>(graphArea_.getX()),
+                                 static_cast<float>(graphArea_.getRight()));
+            if (db != 0)
+            {
+                g.setColour(juce::Colour(mutedText).withAlpha(0.7f));
+                g.drawText((db > 0 ? "+" : "") + juce::String(db),
+                           graphArea_.getX() + 5, static_cast<int>(y) - 8, 34, 16,
+                           juce::Justification::centredLeft, false);
+            }
+        }
+
+        juce::Path response;
+        bool first = true;
+        for (int px = graphArea_.getX(); px <= graphArea_.getRight(); px += 2)
+        {
+            const double hz = xToHz(static_cast<float>(px));
+            double db = 0.0;
+            const double hpf = std::max(20.0, static_cast<double>(hpf_.load(std::memory_order_relaxed)));
+            const double lpf = std::max(1000.0, static_cast<double>(lpf_.load(std::memory_order_relaxed)));
+            if (hz < hpf)
+                db += std::max(-48.0, 24.0 * std::log2(std::max(0.0001, hz / hpf)));
+            if (hz > lpf)
+                db += std::max(-48.0, -24.0 * std::log2(std::max(1.0, hz / lpf)));
+
+            for (int band = 0; band < 4; ++band)
+            {
+                const double centre = std::max(20.0, static_cast<double>(frequencies_[band].load(std::memory_order_relaxed)));
+                const double q = std::max(0.2, static_cast<double>(qs_[band].load(std::memory_order_relaxed)));
+                const double gain = static_cast<double>(gains_[band].load(std::memory_order_relaxed));
+                const double octaves = std::log2(std::max(0.0001, hz / centre));
+                const double sigma = std::max(0.16, 1.25 / q);
+                db += gain * std::exp(-0.5 * (octaves / sigma) * (octaves / sigma));
+            }
+
+            const float y = gainToY(db);
+            if (first)
+            {
+                response.startNewSubPath(static_cast<float>(px), y);
+                first = false;
+            }
+            else
+            {
+                response.lineTo(static_cast<float>(px), y);
+            }
+        }
+
+        g.setColour(juce::Colour(accent));
+        g.strokePath(response, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved));
+
+        static const std::array<std::uint32_t, 4> bandColours {
+            0xff43c7ff, 0xff58df9a, 0xffffc85a, 0xffff7185
+        };
+        for (int band = 0; band < 4; ++band)
+        {
+            const float x = hzToX(frequencies_[band].load(std::memory_order_relaxed));
+            const float y = gainToY(gains_[band].load(std::memory_order_relaxed));
+            const float radius = band == selectedBand_ ? 9.0f : 7.0f;
+            g.setColour(juce::Colour(bandColours[static_cast<std::size_t>(band)]));
+            g.fillEllipse(x - radius, y - radius, radius * 2.0f, radius * 2.0f);
+            g.setColour(juce::Colour(0xff071018));
+            g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
+            g.drawText(juce::String(band + 1),
+                       static_cast<int>(x - radius), static_cast<int>(y - radius),
+                       static_cast<int>(radius * 2.0f), static_cast<int>(radius * 2.0f),
+                       juce::Justification::centred, false);
+        }
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced(18);
+        auto header = area.removeFromTop(48);
+        title_.setBounds(header.removeFromLeft(330));
+        subtitle_.setBounds(header);
+        area.removeFromTop(8);
+
+        graphArea_ = area.removeFromTop(std::max(250, area.getHeight() - 190));
+        area.removeFromTop(12);
+
+        auto controls = area;
+        auto left = controls.removeFromLeft(controls.getWidth() / 2).reduced(4, 0);
+        auto right = controls.reduced(4, 0);
+
+        auto bandRow = left.removeFromTop(34);
+        bandLabel_.setBounds(bandRow.removeFromLeft(70));
+        bandBox_.setBounds(bandRow.removeFromLeft(160));
+        left.removeFromTop(4);
+        layoutControlRow(left, hpfLabel_, hpfSlider_);
+        layoutControlRow(left, lpfLabel_, lpfSlider_);
+
+        layoutControlRow(right, freqLabel_, freqSlider_);
+        layoutControlRow(right, gainLabel_, gainSlider_);
+        layoutControlRow(right, qLabel_, qSlider_);
+
+        hint_.setBounds(area.removeFromBottom(24));
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (!graphArea_.contains(e.position.toInt()))
+            return;
+
+        float bestDistance = 100000.0f;
+        int bestBand = 0;
+        for (int band = 0; band < 4; ++band)
+        {
+            const float x = hzToX(frequencies_[band].load(std::memory_order_relaxed));
+            const float y = gainToY(gains_[band].load(std::memory_order_relaxed));
+            const float dx = e.position.x - x;
+            const float dy = e.position.y - y;
+            const float d = dx * dx + dy * dy;
+            if (d < bestDistance)
+            {
+                bestDistance = d;
+                bestBand = band;
+            }
+        }
+        selectedBand_ = bestBand;
+        dragBand_ = bestBand;
+        bandBox_.setSelectedId(bestBand + 1, juce::dontSendNotification);
+        syncBandControls();
+        repaint();
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (dragBand_ < 0 || !graphArea_.contains(e.position.toInt()))
+            return;
+
+        const double hz = xToHz(static_cast<float>(e.position.x));
+        const double gain = yToGain(static_cast<float>(e.position.y));
+        frequencies_[dragBand_].store(static_cast<float>(hz), std::memory_order_relaxed);
+        gains_[dragBand_].store(static_cast<float>(gain), std::memory_order_relaxed);
+        freqSlider_.setValue(hz, juce::dontSendNotification);
+        gainSlider_.setValue(gain, juce::dontSendNotification);
+        changed();
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        dragBand_ = -1;
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent& e) override
+    {
+        if (!graphArea_.contains(e.position.toInt()))
+            return;
+        gains_[selectedBand_].store(0.0f, std::memory_order_relaxed);
+        gainSlider_.setValue(0.0, juce::dontSendNotification);
+        changed();
+    }
+
+private:
+    void setupLabel(juce::Label& label, const juce::String& textValue)
+    {
+        label.setText(textValue, juce::dontSendNotification);
+        label.setColour(juce::Label::textColourId, juce::Colour(mutedText));
+        label.setFont(juce::FontOptions(11.5f, juce::Font::bold));
+        addAndMakeVisible(label);
+    }
+
+    void setupSlider(juce::Slider& slider, double min, double max, double step, const juce::String& suffix)
+    {
+        slider.setSliderStyle(juce::Slider::LinearHorizontal);
+        slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 92, 24);
+        slider.setRange(min, max, step);
+        slider.setTextValueSuffix(suffix);
+        slider.setColour(juce::Slider::trackColourId, juce::Colour(accent));
+        slider.setColour(juce::Slider::thumbColourId, juce::Colour(0xffeaf5ff));
+        addAndMakeVisible(slider);
+    }
+
+    void layoutControlRow(juce::Rectangle<int>& area, juce::Label& label, juce::Slider& slider)
+    {
+        auto row = area.removeFromTop(38);
+        label.setBounds(row.removeFromLeft(96));
+        slider.setBounds(row);
+        area.removeFromTop(3);
+    }
+
+    void syncFromModel()
+    {
+        hpfSlider_.setValue(hpf_.load(std::memory_order_relaxed), juce::dontSendNotification);
+        lpfSlider_.setValue(lpf_.load(std::memory_order_relaxed), juce::dontSendNotification);
+        syncBandControls();
+    }
+
+    void syncBandControls()
+    {
+        freqSlider_.setValue(frequencies_[selectedBand_].load(std::memory_order_relaxed), juce::dontSendNotification);
+        gainSlider_.setValue(gains_[selectedBand_].load(std::memory_order_relaxed), juce::dontSendNotification);
+        qSlider_.setValue(qs_[selectedBand_].load(std::memory_order_relaxed), juce::dontSendNotification);
+    }
+
+    void changed()
+    {
+        if (onChanged_)
+            onChanged_();
+        repaint();
+    }
+
+    float hzToX(double hz) const
+    {
+        const double normalized = std::log(std::clamp(hz, 20.0, 20000.0) / 20.0) / std::log(1000.0);
+        return static_cast<float>(graphArea_.getX() + normalized * graphArea_.getWidth());
+    }
+
+    double xToHz(float x) const
+    {
+        const double normalized = std::clamp(
+            (static_cast<double>(x) - graphArea_.getX()) / std::max(1, graphArea_.getWidth()), 0.0, 1.0);
+        return 20.0 * std::pow(1000.0, normalized);
+    }
+
+    float gainToY(double gain) const
+    {
+        const double clamped = std::clamp(gain, -18.0, 18.0);
+        const double normalized = (18.0 - clamped) / 36.0;
+        return static_cast<float>(graphArea_.getY() + normalized * graphArea_.getHeight());
+    }
+
+    double yToGain(float y) const
+    {
+        const double normalized = std::clamp(
+            (static_cast<double>(y) - graphArea_.getY()) / std::max(1, graphArea_.getHeight()), 0.0, 1.0);
+        return 18.0 - normalized * 36.0;
+    }
+
+    juce::String insertName_;
+    std::atomic<float>& hpf_;
+    std::atomic<float>& lpf_;
+    std::array<std::atomic<float>, 4>& frequencies_;
+    std::array<std::atomic<float>, 4>& gains_;
+    std::array<std::atomic<float>, 4>& qs_;
+    std::function<void()> onChanged_;
+
+    juce::Label title_;
+    juce::Label subtitle_;
+    juce::Label bandLabel_;
+    juce::ComboBox bandBox_;
+    juce::Label hpfLabel_, lpfLabel_, freqLabel_, gainLabel_, qLabel_;
+    juce::Slider hpfSlider_, lpfSlider_, freqSlider_, gainSlider_, qSlider_;
+    juce::Label hint_;
+    juce::Rectangle<int> graphArea_;
+    int selectedBand_ { 0 };
+    int dragBand_ { -1 };
+};
+
+
 class DashboardCard final : public juce::Component
 {
 public:
@@ -982,15 +1358,8 @@ MainComponent::MainComponent()
     pluginsPage_.addAndMakeVisible(pluginBrowserTitle_);
 
     nativeEqButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173f54));
-    nativeEqButton_.setTooltip("J3 native 4-band parametric EQ + HPF/LPF. Runs before the VST3 slots on DAW mixer inserts.");
-    nativeEqButton_.onClick = [this]
-    {
-        const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
-        selectedDspChannel_ = ch;
-        dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
-        refreshDspUi();
-        tabs_.setCurrentTabIndex(3);
-    };
+    nativeEqButton_.setTooltip("EQ nativo J3: 4 bandas + HPF/LPF. Click para abrir el editor visual.");
+    nativeEqButton_.onClick = [this] { openNativeEqEditor(); };
     pluginsPage_.addAndMakeVisible(nativeEqButton_);
 
     for (int slot = 0; slot < kPluginSlots; ++slot)
@@ -1033,9 +1402,16 @@ MainComponent::MainComponent()
     pluginSlotBox_.onChange = [this] { refreshPluginUi(); };
     pluginsPage_.addAndMakeVisible(pluginSlotBox_);
 
-    pluginCatalogBox_.setTooltip(juce::String::fromUTF8("Elegí un plugin del resultado filtrado."));
+    pluginCatalogBox_.setTooltip(juce::String::fromUTF8("Modelo interno de selección del navegador VST3."));
     pluginCatalogBox_.onChange = [this] { refreshPluginUi(); };
-    pluginsPage_.addAndMakeVisible(pluginCatalogBox_);
+
+    pluginCatalogList_.setRowHeight(42);
+    pluginCatalogList_.setMultipleSelectionEnabled(false);
+    pluginCatalogList_.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff0b1117));
+    pluginCatalogList_.setColour(juce::ListBox::outlineColourId, juce::Colour(border));
+    pluginCatalogList_.setOutlineThickness(1);
+    pluginCatalogList_.setTooltip("Plugins encontrados. Doble click para cargar el seleccionado en el slot activo.");
+    pluginsPage_.addAndMakeVisible(pluginCatalogList_);
 
     favoritePluginButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
     favoritePluginButton_.setTooltip(juce::String::fromUTF8("Marcá este plugin para encontrarlo rápido en FAVORITES."));
@@ -1058,21 +1434,22 @@ MainComponent::MainComponent()
     };
     pluginsPage_.addAndMakeVisible(favoritePluginButton_);
 
-    scanPluginsButton_.setButtonText("RESCAN VST3");
-    pluginLocationsButton_.setButtonText("VST3 FOLDER");
-    loadPluginButton_.setButtonText("LOAD SELECTED");
-    scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    scanPluginsButton_.setButtonText("ESCANEAR CARPETA...");
+    pluginLocationsButton_.setButtonText("ESCANEAR TODO");
+    loadPluginButton_.setButtonText("CARGAR EN SLOT");
+    scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
     pluginLocationsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
-    pluginLocationsButton_.setTooltip(juce::String::fromUTF8("Agregá una carpeta VST3 adicional. J3 ya busca automáticamente las ubicaciones estándar de Windows."));
-    loadPluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
+    scanPluginsButton_.setTooltip("Elegí la carpeta donde están tus VST3. J3 la agrega y la escanea.");
+    pluginLocationsButton_.setTooltip("Escanea las ubicaciones estándar de Windows y todas las carpetas que agregaste.");
+    loadPluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
     removePluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     movePluginUpButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     movePluginDownButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     openPluginEditorButton_.setButtonText("ABRIR PLUGIN");
     openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
     bypassPluginButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
-    scanPluginsButton_.onClick = [this] { scanVst3Plugins(); };
-    pluginLocationsButton_.onClick = [this] { chooseAdditionalVst3Folder(); };
+    scanPluginsButton_.onClick = [this] { chooseAdditionalVst3Folder(); };
+    pluginLocationsButton_.onClick = [this] { scanVst3Plugins(); };
     loadPluginButton_.onClick = [this] { loadSelectedPlugin(); };
     removePluginButton_.onClick = [this] { removeSelectedPlugin(); };
     movePluginUpButton_.onClick = [this] { moveSelectedPlugin(-1); };
@@ -2548,37 +2925,43 @@ void MainComponent::resized()
 
     pluginBrowserTitle_.setBounds(browser.removeFromTop(24));
     browser.removeFromTop(4);
+
     auto searchRow = browser.removeFromTop(40);
-    pluginSearch_.setBounds(searchRow.removeFromLeft(std::max(180, searchRow.getWidth() * 48 / 100)).reduced(2));
+    pluginSearch_.setBounds(searchRow.removeFromLeft(std::max(210, searchRow.getWidth() * 58 / 100)).reduced(2));
     searchRow.removeFromLeft(6);
-    pluginCategoryBox_.setBounds(searchRow.removeFromLeft(std::max(130, searchRow.getWidth() * 38 / 100)).reduced(2));
-    searchRow.removeFromLeft(6);
-    favoritePluginButton_.setBounds(searchRow);
+    pluginCategoryBox_.setBounds(searchRow.reduced(2));
     browser.removeFromTop(7);
 
-    auto catalogRow = browser.removeFromTop(42);
-    pluginCatalogBox_.setBounds(catalogRow.removeFromLeft(std::max(220, catalogRow.getWidth() - 150)).reduced(2));
-    catalogRow.removeFromLeft(6);
-    scanPluginsButton_.setBounds(catalogRow.reduced(2));
-    browser.removeFromTop(7);
+    auto scanRow = browser.removeFromTop(38);
+    const int scanHalf = std::max(120, scanRow.getWidth() / 2);
+    scanPluginsButton_.setBounds(scanRow.removeFromLeft(scanHalf).reduced(2));
+    scanRow.removeFromLeft(6);
+    pluginLocationsButton_.setBounds(scanRow.reduced(2));
+    browser.removeFromTop(8);
 
-    auto locationsRow = browser.removeFromTop(38);
-    pluginLocationsButton_.setBounds(locationsRow.removeFromLeft(170).reduced(2));
-    locationsRow.removeFromLeft(8);
-    loadPluginButton_.setBounds(locationsRow.removeFromLeft(std::min(180, locationsRow.getWidth())).reduced(1));
-    browser.removeFromTop(9);
+    pluginCatalogBox_.setBounds({});
+    const int footerReserve = 142;
+    const int listHeight = std::max(150, browser.getHeight() - footerReserve);
+    pluginCatalogList_.setBounds(browser.removeFromTop(listHeight));
+    browser.removeFromTop(8);
 
-    auto pluginActionRow = browser.removeFromTop(40);
-    openPluginEditorButton_.setBounds(pluginActionRow.removeFromLeft(150));
-    pluginActionRow.removeFromLeft(5);
-    bypassPluginButton_.setBounds(pluginActionRow.removeFromLeft(90));
-    pluginActionRow.removeFromLeft(5);
-    removePluginButton_.setBounds(pluginActionRow.removeFromLeft(95));
-    pluginActionRow.removeFromLeft(5);
-    movePluginUpButton_.setBounds(pluginActionRow.removeFromLeft(90));
-    pluginActionRow.removeFromLeft(5);
-    movePluginDownButton_.setBounds(pluginActionRow.removeFromLeft(std::min(100, pluginActionRow.getWidth())));
-    browser.removeFromTop(10);
+    auto primaryActions = browser.removeFromTop(38);
+    loadPluginButton_.setBounds(primaryActions.removeFromLeft(std::min(150, primaryActions.getWidth())).reduced(1));
+    primaryActions.removeFromLeft(5);
+    openPluginEditorButton_.setBounds(primaryActions.removeFromLeft(std::min(135, primaryActions.getWidth())).reduced(1));
+    primaryActions.removeFromLeft(5);
+    favoritePluginButton_.setBounds(primaryActions.removeFromLeft(std::min(105, primaryActions.getWidth())).reduced(1));
+    primaryActions.removeFromLeft(5);
+    bypassPluginButton_.setBounds(primaryActions.reduced(1));
+    browser.removeFromTop(5);
+
+    auto secondaryActions = browser.removeFromTop(34);
+    removePluginButton_.setBounds(secondaryActions.removeFromLeft(100).reduced(1));
+    secondaryActions.removeFromLeft(5);
+    movePluginUpButton_.setBounds(secondaryActions.removeFromLeft(95).reduced(1));
+    secondaryActions.removeFromLeft(5);
+    movePluginDownButton_.setBounds(secondaryActions.removeFromLeft(105).reduced(1));
+    browser.removeFromTop(6);
     pluginStatusLabel_.setBounds(browser);
 
     auto padArea = padPage_.getLocalBounds().reduced(42);
@@ -3123,22 +3506,23 @@ bool MainComponent::pluginMutationLocked() const noexcept
 
 void MainComponent::scanVst3Plugins()
 {
-    if (pluginMutationLocked())
+    if (pluginScanBusy_.exchange(true, std::memory_order_acq_rel))
     {
-        showAudioError(juce::String::fromUTF8("Por seguridad, el escaneo VST3 está bloqueado durante LIVE, reproducción o grabación. Detené el transporte y volvé a intentar."));
+        pluginStatusLabel_.setText("Escaneo VST3 en curso...", juce::dontSendNotification);
         return;
     }
 
     auto* format = pluginFormatManager_.getFormat(0);
     if (format == nullptr)
     {
+        pluginScanBusy_.store(false, std::memory_order_release);
         pluginStatusLabel_.setText("VST3 host format is unavailable in this build.", juce::dontSendNotification);
         return;
     }
 
     const auto searchPath = format->getDefaultLocationsToSearch();
     std::vector<std::filesystem::path> roots;
-    roots.reserve(static_cast<std::size_t>(searchPath.getNumPaths()));
+    roots.reserve(static_cast<std::size_t>(searchPath.getNumPaths() + pluginCustomLocations_.size()));
     for (int i = 0; i < searchPath.getNumPaths(); ++i)
         roots.emplace_back(std::filesystem::u8path(searchPath[i].getFullPathName().toStdString()));
     for (const auto& custom : pluginCustomLocations_)
@@ -3149,25 +3533,36 @@ void MainComponent::scanVst3Plugins()
     }
 
     pluginStatusLabel_.setText(
-        "Scanning VST3 folders... standard Windows locations + "
-            + juce::String(pluginCustomLocations_.size()) + " custom",
+        "Escaneando VST3 en segundo plano... podés seguir usando el audio.",
         juce::dontSendNotification);
-    pluginCatalog_.scan(roots);
 
-    pluginsScanned_ = true;
-    refreshPluginBrowser();
-    restoreSavedPluginsAfterScan();
-    refreshPluginUi();
+    auto safe = juce::Component::SafePointer<MainComponent>(this);
+    std::thread([safe, roots = std::move(roots)]() mutable
+    {
+        j3::PluginCatalog scanned;
+        scanned.scan(roots);
+
+        juce::MessageManager::callAsync([safe, scanned = std::move(scanned)]() mutable
+        {
+            if (safe == nullptr)
+                return;
+
+            safe->pluginCatalog_ = std::move(scanned);
+            safe->pluginScanBusy_.store(false, std::memory_order_release);
+            safe->pluginsScanned_ = true;
+            safe->refreshPluginBrowser();
+            safe->restoreSavedPluginsAfterScan();
+            safe->refreshPluginUi();
+            safe->pluginStatusLabel_.setText(
+                juce::String(safe->pluginCatalog_.plugins().size())
+                    + " VST3 encontrados. Elegí uno de la lista o hacé doble click para cargarlo.",
+                juce::dontSendNotification);
+        });
+    }).detach();
 }
 
 void MainComponent::chooseAdditionalVst3Folder()
 {
-    if (pluginMutationLocked())
-    {
-        showAudioError(juce::String::fromUTF8("Detené LIVE, reproducción o grabación antes de modificar ubicaciones VST3."));
-        return;
-    }
-
     juce::File start = juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory);
    #if JUCE_WINDOWS
     const juce::File standard("C:\\Program Files\\Common Files\\VST3");
@@ -3276,7 +3671,87 @@ void MainComponent::refreshPluginBrowser()
     if (selectedId == 0 && !pluginBrowserIndices_.empty())
         selectedId = 1;
     pluginCatalogBox_.setSelectedId(selectedId, juce::dontSendNotification);
+    pluginCatalogList_.updateContent();
+    if (selectedId > 0)
+        pluginCatalogList_.selectRow(selectedId - 1, false, true);
+    else
+        pluginCatalogList_.deselectAllRows();
+    pluginCatalogList_.repaint();
     refreshPluginUi();
+}
+
+
+int MainComponent::getNumRows()
+{
+    return static_cast<int>(pluginBrowserIndices_.size());
+}
+
+void MainComponent::paintListBoxItem(int rowNumber, juce::Graphics& g,
+                                     int width, int height, bool rowIsSelected)
+{
+    if (rowNumber < 0 || rowNumber >= static_cast<int>(pluginBrowserIndices_.size()))
+        return;
+
+    const auto& plugins = pluginCatalog_.plugins();
+    const int actual = pluginBrowserIndices_[static_cast<std::size_t>(rowNumber)];
+    if (actual < 0 || actual >= static_cast<int>(plugins.size()))
+        return;
+
+    const auto& plugin = plugins[static_cast<std::size_t>(actual)];
+    const auto row = juce::Rectangle<int>(0, 0, width, height).reduced(2);
+
+    if (rowIsSelected)
+    {
+        g.setColour(juce::Colour(accentDeep).withAlpha(0.82f));
+        g.fillRoundedRectangle(row.toFloat(), 5.0f);
+    }
+    else if ((rowNumber & 1) != 0)
+    {
+        g.setColour(juce::Colour(0xff111a22));
+        g.fillRoundedRectangle(row.toFloat(), 4.0f);
+    }
+
+    const juce::String path(plugin.path.wstring().c_str());
+    const bool favorite = favoritePluginPaths_.contains(path);
+    juce::String name = favorite ? "*  " : "";
+    name << juce::String(plugin.name);
+
+    auto textArea = row.reduced(10, 3);
+    auto nameArea = textArea.removeFromTop(20);
+    g.setColour(juce::Colour(text));
+    g.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+    g.drawText(name, nameArea, juce::Justification::centredLeft, true);
+
+    juce::String detail(plugin.manufacturer);
+    if (detail.isEmpty())
+        detail = "VST3";
+    detail << "  |  " << juce::File(path).getParentDirectory().getFileName();
+    g.setColour(juce::Colour(mutedText));
+    g.setFont(juce::FontOptions(10.8f));
+    g.drawText(detail, textArea, juce::Justification::centredLeft, true);
+}
+
+void MainComponent::selectedRowsChanged(int lastRowSelected)
+{
+    if (lastRowSelected < 0 || lastRowSelected >= static_cast<int>(pluginBrowserIndices_.size()))
+    {
+        pluginCatalogBox_.setSelectedId(0, juce::dontSendNotification);
+        refreshPluginUi();
+        return;
+    }
+
+    pluginCatalogBox_.setSelectedId(lastRowSelected + 1, juce::dontSendNotification);
+    refreshPluginUi();
+}
+
+void MainComponent::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
+{
+    if (row < 0 || row >= static_cast<int>(pluginBrowserIndices_.size()))
+        return;
+    pluginCatalogList_.selectRow(row, false, true);
+    pluginCatalogBox_.setSelectedId(row + 1, juce::dontSendNotification);
+    refreshPluginUi();
+    loadSelectedPlugin();
 }
 
 void MainComponent::refreshPluginUi()
@@ -3376,10 +3851,14 @@ void MainComponent::refreshPluginUi()
     }
     else
     {
-        status << "Empty slot.\n";
-        status << "Choose a plugin on the right and press AÑADIR AL SLOT. "
-               << pluginBrowserIndices_.size() << " shown / " << pluginCatalog_.plugins().size()
-               << " VST3 discovered.";
+        status << "Slot libre. ";
+        if (pluginScanBusy_.load(std::memory_order_acquire))
+            status << "Escaneando VST3...";
+        else if (!pluginsScanned_)
+            status << "Usá ESCANEAR CARPETA... y elegí dónde están tus plugins.";
+        else
+            status << pluginBrowserIndices_.size() << " visibles / " << pluginCatalog_.plugins().size()
+                   << " VST3 encontrados.";
     }
     pluginStatusLabel_.setText(status, juce::dontSendNotification);
 }
@@ -3391,7 +3870,7 @@ void MainComponent::showPluginSlotMenu(int slot)
     const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
     pluginSlotBox_.setSelectedId(slot + 1, juce::dontSendNotification);
 
-    if (!pluginsScanned_ && !pluginMutationLocked())
+    if (!pluginsScanned_ && !pluginScanBusy_.load(std::memory_order_acquire))
         scanVst3Plugins();
 
     auto loadedPlugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
@@ -3510,7 +3989,9 @@ void MainComponent::showPluginSlotMenu(int slot)
     }
     else
     {
-        menu.addItem(20, "NO VST3 FOUND", false);
+        menu.addItem(20,
+            pluginScanBusy_.load(std::memory_order_acquire) ? "SCANNING VST3..." : "NO VST3 FOUND",
+            false);
     }
 
     menu.addSeparator();
@@ -3589,6 +4070,40 @@ void MainComponent::showPluginSlotMenu(int slot)
                 safe->loadPluginPathIntoSlot(path, ch, slot);
             }
         });
+}
+
+
+void MainComponent::openNativeEqEditor()
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const auto routedName = dawWorkspace_.mixerInsertName(ch);
+    const juce::String insertName = "MIXER INSERT " + juce::String(ch + 1)
+        + (routedName.isNotEmpty() ? "  |  " + routedName : juce::String());
+
+    auto safe = juce::Component::SafePointer<MainComponent>(this);
+    auto editor = std::make_unique<NativeEqEditor>(
+        insertName,
+        channelHpf_[ch],
+        channelLpf_[ch],
+        channelEqFreq_[ch],
+        channelEqGain_[ch],
+        channelEqQ_[ch],
+        [safe, ch]
+        {
+            if (safe == nullptr)
+                return;
+            safe->markDspDirty(ch);
+        });
+
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(editor.release());
+    options.dialogTitle = "J3 Worship | J3 Parametric EQ";
+    options.dialogBackgroundColour = juce::Colour(background);
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = true;
+    options.componentToCentreAround = this;
+    options.launchAsync();
 }
 
 void MainComponent::loadSelectedPlugin()
@@ -4349,7 +4864,7 @@ void MainComponent::updateDiagnostics()
                << juce::String(static_cast<double>(std::max<std::int64_t>(0, freeDiskBytes)) / (1024.0 * 1024.0 * 1024.0), 1)
                << " GB libres\n\n";
         report << juce::String::fromUTF8("✓ VST3\n    ") << pluginCatalog_.plugins().size()
-               << juce::String::fromUTF8(" plugin(s) en catálogo · escaneo manual, nunca durante LIVE\n\n");
+               << juce::String::fromUTF8(" plugin(s) en catálogo · escaneo de carpetas en segundo plano\n\n");
         report << (pluginProtectionActive ? juce::String::fromUTF8("⚠") : juce::String::fromUTF8("✓")) << " PLUGIN PROTECTION\n    "
                << (pluginProtectionActive ? juce::String::fromUTF8("Uno o más VST3 fueron auto-bypasseados para proteger el audio.")
                                           : "Sin fallos de plugins detectados.")
