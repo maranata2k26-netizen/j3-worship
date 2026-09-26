@@ -204,6 +204,7 @@ private:
     void saveWorkspaceState() const;
     juce::File workspaceStateFile() const;
     void showContextMenu(juce::Point<int> point);
+    void openSelectedClipEditor();
 
     void addTrack();
     void addMidiTrack();
