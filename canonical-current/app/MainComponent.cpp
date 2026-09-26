@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "BinaryData.h"
+#include "j3/Routing.h"
 
 #include <algorithm>
 #include <cmath>
@@ -530,7 +531,7 @@ MainComponent::MainComponent()
     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(brandLabel_);
 
-    versionLabel_.setText("1.4.0", juce::dontSendNotification);
+    versionLabel_.setText(juce::JUCEApplication::getInstance()->getApplicationVersion(), juce::dontSendNotification);
     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
     addAndMakeVisible(versionLabel_);
@@ -1643,6 +1644,7 @@ void MainComponent::checkForUpdatesAsync()
                 safe->updateButton_.setTooltip(juce::String::fromUTF8("Nueva versión disponible. Descarga verificada por SHA-256."));
                 safe->updateButton_.setVisible(true);
                 safe->resized();
+                safe->showAvailableUpdatePrompt();
             }
             else if (error.isNotEmpty())
             {
@@ -1650,6 +1652,32 @@ void MainComponent::checkForUpdatesAsync()
             }
         });
     }).detach();
+}
+
+void MainComponent::showAvailableUpdatePrompt()
+{
+    if (updatePromptShown_ || !availableUpdate_.has_value())
+        return;
+
+    updatePromptShown_ = true;
+    const auto version = availableUpdate_->versionText;
+    auto safe = juce::Component::SafePointer<MainComponent>(this);
+
+    auto* alert = new juce::AlertWindow(
+        juce::String::fromUTF8("Nueva versión de J3 Worship"),
+        juce::String::fromUTF8("Hay una actualización disponible: ") + version
+            + juce::String::fromUTF8("\n\nPodés actualizar desde acá. J3 la descarga, verifica y vuelve a abrir automáticamente."),
+        juce::MessageBoxIconType::InfoIcon);
+
+    alert->addButton(juce::String::fromUTF8("ACTUALIZAR AHORA"), 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton(juce::String::fromUTF8("MÁS TARDE"), 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enterModalState(true,
+        juce::ModalCallbackFunction::create([safe](int result)
+        {
+            if (safe != nullptr && result == 1)
+                safe->beginUpdateInstall();
+        }),
+        true);
 }
 
 void MainComponent::beginUpdateInstall()
