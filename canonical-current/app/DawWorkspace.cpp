@@ -788,6 +788,12 @@ void DawWorkspace::configureControls()
     trackNameEditor_.setColour(juce::TextEditor::textColourId, juce::Colour(kText));
     trackNameEditor_.onTextChange = [this]
     {
+        if (liveSessionActive())
+        {
+            rejectStructuralEditWhileLive("renombrar pistas");
+            syncInspector();
+            return;
+        }
         if (selectedTrack_ >= 0 && selectedTrack_ < trackCount_)
         {
             tracks_[selectedTrack_].name = trackNameEditor_.getText();
@@ -860,6 +866,12 @@ void DawWorkspace::configureControls()
     };
     clipGainSlider_.onValueChange = [this]
     {
+        if (liveSessionActive())
+        {
+            rejectStructuralEditWhileLive("editar el gain del clip");
+            syncInspector();
+            return;
+        }
         if (auto* c = clipAt({ -9999, -9999 }); c != nullptr) juce::ignoreUnused(c);
         for (auto& c : clips_) if (c.id == selectedClipId_)
         {
@@ -869,6 +881,12 @@ void DawWorkspace::configureControls()
     };
     clipMuteButton_.onClick = [this]
     {
+        if (liveSessionActive())
+        {
+            rejectStructuralEditWhileLive("editar el clip");
+            syncInspector();
+            return;
+        }
         for (auto& c : clips_) if (c.id == selectedClipId_)
         {
             c.muted = clipMuteButton_.getToggleState();
@@ -877,6 +895,12 @@ void DawWorkspace::configureControls()
     };
     clipLoopButton_.onClick = [this]
     {
+        if (liveSessionActive())
+        {
+            rejectStructuralEditWhileLive("editar el loop del clip");
+            syncInspector();
+            return;
+        }
         for (auto& c : clips_) if (c.id == selectedClipId_)
         {
             c.loop = clipLoopButton_.getToggleState();
@@ -890,6 +914,12 @@ void DawWorkspace::configureControls()
     clipMixerBox_.setTooltip(juce::String::fromUTF8("Asigna este audio o pista MIDI a un Insert del mixer, como el flujo Channel → Mixer de FL Studio."));
     clipMixerBox_.onChange = [this]
     {
+        if (liveSessionActive())
+        {
+            rejectStructuralEditWhileLive("cambiar el ruteo");
+            syncInspector();
+            return;
+        }
         const int insert = juce::jlimit(0, kMaxTracks - 1, clipMixerBox_.getSelectedId() - 1);
         bool changed = false;
         for (auto& c : clips_)
@@ -938,6 +968,12 @@ void DawWorkspace::configureControls()
 
     fadeInSlider_.onValueChange = [this]
     {
+        if (liveSessionActive())
+        {
+            rejectStructuralEditWhileLive("editar fades");
+            syncInspector();
+            return;
+        }
         for (auto& c : clips_) if (c.id == selectedClipId_)
         {
             c.fadeInBeats = juce::jlimit(0.0, c.lengthBeats, fadeInSlider_.getValue());
@@ -946,6 +982,12 @@ void DawWorkspace::configureControls()
     };
     fadeOutSlider_.onValueChange = [this]
     {
+        if (liveSessionActive())
+        {
+            rejectStructuralEditWhileLive("editar fades");
+            syncInspector();
+            return;
+        }
         for (auto& c : clips_) if (c.id == selectedClipId_)
         {
             c.fadeOutBeats = juce::jlimit(0.0, c.lengthBeats, fadeOutSlider_.getValue());
@@ -4658,6 +4700,7 @@ void DawWorkspace::openProjectInteractive()
                             | juce::FileBrowserComponent::canSelectFiles,
         [this](const juce::FileChooser& c)
         {
+            if (rejectStructuralEditWhileLive("abrir otro proyecto")) return;
             const auto f = c.getResult();
             if (f == juce::File()) return;
             checkpointUndo();
