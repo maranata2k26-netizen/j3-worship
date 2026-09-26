@@ -1376,14 +1376,7 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(*dashboardBottomCard_);
 
     sessionGrid_ = std::make_unique<SessionGrid>(
-        [this, names, kinds](int scene)
-        {
-            const int index = juce::jlimit(0, static_cast<int>(names.size()) - 1, scene);
-            setLiveSection(names[static_cast<std::size_t>(index)],
-                           kinds[static_cast<std::size_t>(index)],
-                           kinds[static_cast<std::size_t>(index)] == j3::SectionKind::FreePad ? 1 : 4);
-            refreshDashboard();
-        },
+        dawWorkspace_,
         [this](int channel)
         {
             const int ch = juce::jlimit(0, kMaxChannels - 1, channel);
