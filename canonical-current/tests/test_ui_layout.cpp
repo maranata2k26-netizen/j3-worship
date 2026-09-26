@@ -172,6 +172,64 @@ int main()
                   << " (energy=" << energy << ")" << std::endl;
         ok = ok && playbackPass;
         workspace.emergencyStop();
+
+        static_assert(DawWorkspace::kLiveMaxTracks == 35);
+        static_assert(DawWorkspace::kLiveMaxScenes == 15);
+
+        auto liveModel = workspace.liveSessionSnapshot();
+        const bool modelPass = liveModel.sceneCount == 15
+            && !liveModel.tracks.empty()
+            && !liveModel.tracks.front().clips.empty()
+            && liveModel.tracks.front().clips.front().mixerInsert == 0;
+        std::cout << (modelPass ? "[PASS] " : "[FAIL] ")
+                  << "LIVE/CLIPS dynamic model -> real track/clip/insert + 15 scenes" << std::endl;
+        ok = ok && modelPass;
+
+        workspace.setLiveQuantizationBeats(1);
+        workspace.launchLiveClip(0, 0);
+        double liveEnergy = 0.0;
+        double lateLoopEnergy = 0.0;
+        for (int block = 0; block < 12; ++block)
+        {
+            mixer.clear();
+            workspace.renderToMixer(mixer, 48, 512);
+            double blockEnergy = 0.0;
+            for (int ch = 0; ch < mixer.getNumChannels(); ++ch)
+            {
+                const auto* data = mixer.getReadPointer(ch);
+                for (int i = 0; i < mixer.getNumSamples(); ++i)
+                    blockEnergy += std::abs(static_cast<double>(data[i]));
+            }
+            liveEnergy += blockEnergy;
+            if (block == 11)
+                lateLoopEnergy = blockEnergy;
+        }
+
+        auto activeLive = workspace.liveSessionSnapshot();
+        const bool liveRenderPass = workspace.liveSessionActive()
+            && activeLive.editLocked
+            && !activeLive.tracks.empty()
+            && activeLive.tracks.front().active
+            && liveEnergy > 0.01
+            && lateLoopEnergy > 0.01;
+        std::cout << (liveRenderPass ? "[PASS] " : "[FAIL] ")
+                  << "LIVE clip -> quantized real mixer render -> continuous loop"
+                  << " (energy=" << liveEnergy << ", late=" << lateLoopEnergy << ")" << std::endl;
+        ok = ok && liveRenderPass;
+
+        workspace.launchLiveScene(0);
+        const auto queuedScene = workspace.liveSessionSnapshot();
+        const bool sceneQueued = queuedScene.pendingScene == 0;
+        std::cout << (sceneQueued ? "[PASS] " : "[FAIL] ")
+                  << "scene launch queued at quantized boundary" << std::endl;
+        ok = ok && sceneQueued;
+
+        workspace.stopLiveTrack(0);
+        const bool stopTrackPass = !workspace.liveSessionActive();
+        std::cout << (stopTrackPass ? "[PASS] " : "[FAIL] ")
+                  << "STOP TRACK clears final active LIVE clip safely" << std::endl;
+        ok = ok && stopTrackPass;
+
         fixture.deleteFile();
     }
 
