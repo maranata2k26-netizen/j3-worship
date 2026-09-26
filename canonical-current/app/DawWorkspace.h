@@ -335,6 +335,7 @@ private:
     std::atomic<int> liveQuantizationBeats_ { 4 };
     std::atomic<int> liveActiveScene_ { -1 };
     std::atomic<int> livePendingScene_ { -1 };
+    std::atomic<std::int64_t> livePendingSceneSample_ { 0 };
     std::array<std::atomic<int>, kMaxTracks> liveActiveClipIds_ {};
     std::array<std::atomic<int>, kMaxTracks> livePendingClipIds_ {};
     std::array<std::atomic<std::int64_t>, kMaxTracks> liveClipLaunchSamples_ {};
