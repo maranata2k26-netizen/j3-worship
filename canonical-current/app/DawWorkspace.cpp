@@ -33,6 +33,65 @@ bool isAudioPath(const juce::String& path)
         || ext == ".aif" || ext == ".aiff";
 }
 
+float equalPowerFade(double normalized) noexcept
+{
+    const auto t = juce::jlimit(0.0, 1.0, normalized);
+    return static_cast<float>(std::sin(t * juce::MathConstants<double>::halfPi));
+}
+
+bool writeFloatWav(const juce::File& file, const juce::AudioBuffer<float>& audio, double sampleRate)
+{
+    const int channels = audio.getNumChannels();
+    const int samples = audio.getNumSamples();
+    if (channels <= 0 || samples <= 0 || sampleRate <= 0.0)
+        return false;
+
+    const std::int64_t dataBytes64 = static_cast<std::int64_t>(channels)
+                                   * static_cast<std::int64_t>(samples)
+                                   * static_cast<std::int64_t>(sizeof(float));
+    if (dataBytes64 <= 0 || dataBytes64 > std::numeric_limits<int>::max() - 44)
+        return false;
+
+    file.getParentDirectory().createDirectory();
+    juce::FileOutputStream output(file);
+    if (!output.openedOk())
+        return false;
+    output.setPosition(0);
+    output.truncate();
+
+    const int sampleRateHz = std::max(1, static_cast<int>(std::llround(sampleRate)));
+    const int dataBytes = static_cast<int>(dataBytes64);
+    const short channelCount = static_cast<short>(channels);
+    const short bitsPerSample = 32;
+    const short blockAlign = static_cast<short>(channels * static_cast<int>(sizeof(float)));
+    const int byteRate = sampleRateHz * static_cast<int>(blockAlign);
+
+    output.write("RIFF", 4);
+    output.writeInt(36 + dataBytes);
+    output.write("WAVE", 4);
+    output.write("fmt ", 4);
+    output.writeInt(16);
+    output.writeShort(3); // IEEE 32-bit float
+    output.writeShort(channelCount);
+    output.writeInt(sampleRateHz);
+    output.writeInt(byteRate);
+    output.writeShort(blockAlign);
+    output.writeShort(bitsPerSample);
+    output.write("data", 4);
+    output.writeInt(dataBytes);
+
+    for (int sample = 0; sample < samples; ++sample)
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            const float value = audio.getSample(ch, sample);
+            if (!output.write(&value, sizeof(value)))
+                return false;
+        }
+
+    output.flush();
+    return output.getStatus().wasOk();
+}
+
 juce::Colour trackColour(int index)
 {
     static const std::array<std::uint32_t, 12> colours {
@@ -1066,6 +1125,8 @@ void DawWorkspace::showContextMenu(juce::Point<int> point)
         menu.addSeparator();
         menu.addItem(7, "Normalize");
         menu.addItem(8, "Reverse");
+        menu.addItem(9, "Crossfade con clip solapado");
+        menu.addItem(15, "Bounce in place");
         menu.addItem(5, "Fit Selection");
         menu.addSeparator();
         menu.addItem(6, "Eliminar");
@@ -1114,6 +1175,8 @@ void DawWorkspace::showContextMenu(juce::Point<int> point)
                 case 6: safe->deleteSelectedClip(); break;
                 case 7: safe->normalizeSelectedClip(); break;
                 case 8: safe->reverseSelectedClip(); break;
+                case 9: safe->crossfadeSelectedClip(); break;
+                case 15: safe->bounceSelectedClip(); break;
                 case 10: safe->trackNameEditor_.grabKeyboardFocus(); safe->trackNameEditor_.selectAll(); break;
                 case 11: safe->checkpointUndo(); safe->addTrack(); break;
                 case 12: safe->checkpointUndo(); safe->addMidiTrack(); break;
@@ -1424,8 +1487,15 @@ void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
         else if (dragMode_ == DragMode::trimRight)
         {
             const double raw = dragStartLength_ + deltaBeat;
-            clip->lengthBeats = std::max(e.mods.isCtrlDown() ? 0.05 : (snapBeats_ > 0.0 ? snapBeats_ : 0.05),
-                                         e.mods.isCtrlDown() ? raw : snapBeat(raw));
+            const double nextLength = std::max(e.mods.isCtrlDown() ? 0.05 : (snapBeats_ > 0.0 ? snapBeats_ : 0.05),
+                                               e.mods.isCtrlDown() ? raw : snapBeat(raw));
+            clip->lengthBeats = nextLength;
+            if (clip->reversed)
+            {
+                const double removedBeats = dragStartLength_ - nextLength;
+                clip->sourceOffsetSeconds = std::max(0.0,
+                    dragStartOffsetSeconds_ + removedBeats * 60.0 / std::max(1.0, bpm()));
+            }
         }
         else if (dragMode_ == DragMode::trimLeft)
         {
@@ -1435,7 +1505,9 @@ void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
             const double shiftedBeats = newStart - dragStartBeat_;
             clip->startBeat = newStart;
             clip->lengthBeats = oldEnd - newStart;
-            clip->sourceOffsetSeconds = std::max(0.0, dragStartOffsetSeconds_ + shiftedBeats * 60.0 / bpm());
+            clip->sourceOffsetSeconds = clip->reversed
+                ? dragStartOffsetSeconds_
+                : std::max(0.0, dragStartOffsetSeconds_ + shiftedBeats * 60.0 / std::max(1.0, bpm()));
         }
     }
 
@@ -1562,6 +1634,8 @@ bool DawWorkspace::keyPressed(const juce::KeyPress& key)
         saveProjectInteractive(mods.isShiftDown()); return true;
     }
     if (mods.isCommandDown() && code == 'D') { duplicateSelectedClip(); return true; }
+    if (mods.isCommandDown() && code == 'B') { bounceSelectedClip(); return true; }
+    if (mods.isCommandDown() && mods.isShiftDown() && code == 'F') { crossfadeSelectedClip(); return true; }
     if (mods.isCommandDown() && code == 'Z' && !mods.isShiftDown()) { undo(); return true; }
     if ((mods.isCommandDown() && code == 'Y') || (mods.isCommandDown() && mods.isShiftDown() && code == 'Z')) { redo(); return true; }
     return false;
@@ -1851,11 +1925,23 @@ void DawWorkspace::splitSelectedClipAtPlayhead()
 
         checkpointUndo();
         const double leftBeats = playBeat - c.startBeat;
+        const double originalLengthBeats = c.lengthBeats;
+        const double originalOffsetSeconds = c.sourceOffsetSeconds;
+        const double secondsPerBeat = 60.0 / std::max(1.0, bpm());
         Clip right = c;
         right.id = nextClipId_++;
         right.startBeat = playBeat;
-        right.lengthBeats = c.lengthBeats - leftBeats;
-        right.sourceOffsetSeconds = c.sourceOffsetSeconds + leftBeats * 60.0 / bpm();
+        right.lengthBeats = originalLengthBeats - leftBeats;
+        if (c.reversed)
+        {
+            c.sourceOffsetSeconds = std::max(0.0,
+                originalOffsetSeconds + right.lengthBeats * secondsPerBeat);
+            right.sourceOffsetSeconds = originalOffsetSeconds;
+        }
+        else
+        {
+            right.sourceOffsetSeconds = originalOffsetSeconds + leftBeats * secondsPerBeat;
+        }
         c.lengthBeats = leftBeats;
         c.fadeOutBeats = std::min(c.fadeOutBeats, c.lengthBeats);
         right.fadeInBeats = std::min(right.fadeInBeats, right.lengthBeats);
@@ -1929,6 +2015,151 @@ void DawWorkspace::reverseSelectedClip()
                                     : "Reverse desactivado");
         return;
     }
+}
+
+void DawWorkspace::crossfadeSelectedClip()
+{
+    auto* selected = clipAt({ -1, -1 });
+    if (selected == nullptr)
+    {
+        refreshStatus("Crossfade: seleccioná un clip de audio.");
+        return;
+    }
+
+    Clip* partner = nullptr;
+    double bestOverlap = 0.0;
+    for (auto& candidate : clips_)
+    {
+        if (candidate.id == selected->id || candidate.track != selected->track)
+            continue;
+
+        Clip* earlier = selected->startBeat <= candidate.startBeat ? selected : &candidate;
+        Clip* later = earlier == selected ? &candidate : selected;
+        const double overlap = std::min(earlier->startBeat + earlier->lengthBeats,
+                                        later->startBeat + later->lengthBeats)
+                             - later->startBeat;
+        if (overlap > bestOverlap + 1.0e-6)
+        {
+            bestOverlap = overlap;
+            partner = &candidate;
+        }
+    }
+
+    if (partner == nullptr || bestOverlap <= 0.0)
+    {
+        refreshStatus("Crossfade: el clip no se solapa con otro clip de la misma pista.");
+        return;
+    }
+
+    checkpointUndo();
+    Clip* earlier = selected->startBeat <= partner->startBeat ? selected : partner;
+    Clip* later = earlier == selected ? partner : selected;
+    const double overlap = juce::jlimit(0.0,
+        std::min(earlier->lengthBeats, later->lengthBeats), bestOverlap);
+    earlier->fadeOutBeats = std::max(earlier->fadeOutBeats, overlap);
+    later->fadeInBeats = std::max(later->fadeInBeats, overlap);
+    projectDirty_ = true;
+    markRenderDirty();
+    syncInspector();
+    repaint();
+    refreshStatus("Crossfade equal-power aplicado · " + juce::String(overlap, 2) + " beats");
+}
+
+void DawWorkspace::bounceSelectedClip()
+{
+    auto* clip = clipAt({ -1, -1 });
+    if (clip == nullptr || clip->audio == nullptr)
+    {
+        refreshStatus("Bounce: seleccioná un clip de audio.");
+        return;
+    }
+
+    const auto& source = clip->audio->samples;
+    const int sourceSamples = source.getNumSamples();
+    const int channels = juce::jlimit(1, 2, source.getNumChannels());
+    const double sourceRate = std::max(1.0, clip->audio->sampleRate);
+    const double durationSeconds = clip->lengthBeats * 60.0 / std::max(1.0, bpm());
+    const int outputSamples = std::max(1, static_cast<int>(std::llround(durationSeconds * sourceRate)));
+    if (sourceSamples <= 0 || outputSamples <= 0)
+    {
+        refreshStatus("Bounce: el clip no contiene audio válido.");
+        return;
+    }
+
+    juce::AudioBuffer<float> rendered(channels, outputSamples);
+    rendered.clear();
+    const double sourceOffset = clip->sourceOffsetSeconds * sourceRate;
+    for (int sample = 0; sample < outputSamples; ++sample)
+    {
+        const int mappedLocal = clip->reversed ? (outputSamples - 1 - sample) : sample;
+        double sourcePosition = sourceOffset + static_cast<double>(mappedLocal);
+        if (clip->loop)
+        {
+            sourcePosition = std::fmod(sourcePosition, static_cast<double>(sourceSamples));
+            if (sourcePosition < 0.0) sourcePosition += sourceSamples;
+        }
+        else if (sourcePosition < 0.0 || sourcePosition >= sourceSamples - 1)
+        {
+            continue;
+        }
+
+        const int i0 = juce::jlimit(0, sourceSamples - 1, static_cast<int>(sourcePosition));
+        const int i1 = std::min(sourceSamples - 1, i0 + 1);
+        const float frac = static_cast<float>(sourcePosition - i0);
+        float envelope = 1.0f;
+        const double beatAtSample = static_cast<double>(sample) / sourceRate * bpm() / 60.0;
+        if (clip->fadeInBeats > 0.0 && beatAtSample < clip->fadeInBeats)
+            envelope *= equalPowerFade(beatAtSample / clip->fadeInBeats);
+        const double remainingBeats = clip->lengthBeats - beatAtSample;
+        if (clip->fadeOutBeats > 0.0 && remainingBeats < clip->fadeOutBeats)
+            envelope *= equalPowerFade(remainingBeats / clip->fadeOutBeats);
+
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            const int sourceCh = std::min(ch, source.getNumChannels() - 1);
+            const float a = source.getSample(sourceCh, i0);
+            const float b = source.getSample(sourceCh, i1);
+            rendered.setSample(ch, sample, (a + (b - a) * frac) * clip->gain * envelope);
+        }
+    }
+
+    auto root = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+        .getChildFile("J3 Worship").getChildFile("DAW Bounces");
+    root.createDirectory();
+    const auto sourceName = juce::File(clip->audio->path).getFileNameWithoutExtension();
+    const auto stamp = juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S");
+    const auto fileName = juce::File::createLegalFileName(
+        (sourceName.isNotEmpty() ? sourceName : "Clip") + "-bounce-" + stamp
+        + "-" + juce::String(clip->id) + ".wav");
+    const auto file = root.getChildFile(fileName);
+
+    if (!writeFloatWav(file, rendered, sourceRate))
+    {
+        refreshStatus("Bounce: no se pudo escribir el WAV.");
+        return;
+    }
+
+    juce::String error;
+    auto* bouncedAudio = loadAudioFile(file, error);
+    if (bouncedAudio == nullptr)
+    {
+        refreshStatus("Bounce: " + error);
+        return;
+    }
+
+    checkpointUndo();
+    clip->audio = bouncedAudio;
+    clip->sourceOffsetSeconds = 0.0;
+    clip->gain = 1.0f;
+    clip->loop = false;
+    clip->reversed = false;
+    clip->fadeInBeats = 0.0;
+    clip->fadeOutBeats = 0.0;
+    projectDirty_ = true;
+    markRenderDirty();
+    syncInspector();
+    repaint();
+    refreshStatus("Bounce in place listo · " + file.getFileName());
 }
 
 void DawWorkspace::togglePlay()
@@ -2361,10 +2592,10 @@ void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noe
 
             float env = 1.0f;
             if (clip.fadeInSamples > 0 && local < clip.fadeInSamples)
-                env = std::min(env, static_cast<float>(local) / static_cast<float>(clip.fadeInSamples));
+                env *= equalPowerFade(static_cast<double>(local) / static_cast<double>(clip.fadeInSamples));
             const auto remain = clip.lengthSamples - local;
             if (clip.fadeOutSamples > 0 && remain < clip.fadeOutSamples)
-                env = std::min(env, static_cast<float>(remain) / static_cast<float>(clip.fadeOutSamples));
+                env *= equalPowerFade(static_cast<double>(remain) / static_cast<double>(clip.fadeOutSamples));
             env = juce::jlimit(0.0f, 1.0f, env);
 
             const int dst = static_cast<int>(global - blockStart);
