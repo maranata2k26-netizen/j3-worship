@@ -3687,6 +3687,207 @@ void DawWorkspace::renderBlock(float* masterLeft,
     const int index = activeRenderState_.load(std::memory_order_acquire);
     renderReaders_[index].fetch_add(1, std::memory_order_acq_rel);
     const auto& state = renderStates_[index];
+
+    // LIVE/CLIPS is a separate performance transport. It reuses the exact same
+    // render snapshot and mixer insert routing as the arranger, but clip starts
+    // are driven by quantized launch samples instead of timeline startBeat.
+    if (liveSessionEnabled_.load(std::memory_order_acquire))
+    {
+        const std::int64_t liveBlockStart = liveClockSamples_.load(std::memory_order_relaxed);
+        const std::int64_t liveBlockEnd = liveBlockStart + numSamples;
+
+        auto findLiveClip = [&state](int clipId, int trackIndex) noexcept -> const RenderClip*
+        {
+            if (clipId < 0)
+                return nullptr;
+            for (int ci = 0; ci < state.clipCount; ++ci)
+            {
+                const auto& candidate = state.clips[ci];
+                if (candidate.id == clipId && candidate.track == trackIndex)
+                    return &candidate;
+            }
+            return nullptr;
+        };
+
+        auto renderLiveSegment = [&](const RenderClip* clip,
+                                     const RenderTrack& track,
+                                     std::int64_t launchSample,
+                                     std::int64_t segmentStart,
+                                     std::int64_t segmentEnd) noexcept
+        {
+            if (clip == nullptr || clip->audio == nullptr || clip->muted
+                || clip->lengthSamples <= 0 || segmentStart >= segmentEnd)
+                return;
+            if (track.mute || (state.anySolo && !track.solo))
+                return;
+
+            float* left = masterLeft;
+            float* right = masterRight;
+            if (mixerMode)
+            {
+                const int insert = juce::jlimit(0, numMixerChannels - 1, clip->mixerInsert);
+                left = mixerBuffer->getWritePointer(insert * 2);
+                right = mixerBuffer->getWritePointer(insert * 2 + 1);
+            }
+
+            const auto& src = clip->audio->samples;
+            const int srcSamples = src.getNumSamples();
+            const int srcChannels = src.getNumChannels();
+            if (srcSamples <= 0 || srcChannels <= 0)
+                return;
+
+            const double ratio = clip->audio->sampleRate / std::max(1.0, state.sampleRate);
+            const double sourceOffset = clip->sourceOffsetSeconds * clip->audio->sampleRate;
+            const float pan = juce::jlimit(-1.0f, 1.0f, track.pan + clip->pan);
+            const float angle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+            const float panL = std::cos(angle);
+            const float panR = std::sin(angle);
+            const float baseGain = clip->gain * track.gain;
+
+            for (std::int64_t global = segmentStart; global < segmentEnd; ++global)
+            {
+                const std::int64_t elapsed = global - launchSample;
+                if (elapsed < 0)
+                    continue;
+
+                const std::int64_t cycleLocal = elapsed % clip->lengthSamples;
+                const std::int64_t mappedLocal = clip->reversed
+                    ? (clip->lengthSamples - 1 - cycleLocal)
+                    : cycleLocal;
+
+                double srcPos = sourceOffset + static_cast<double>(mappedLocal) * ratio;
+                srcPos = std::fmod(srcPos, static_cast<double>(srcSamples));
+                if (srcPos < 0.0)
+                    srcPos += srcSamples;
+
+                const int i0 = juce::jlimit(0, srcSamples - 1, static_cast<int>(srcPos));
+                const int i1 = (i0 + 1 < srcSamples) ? i0 + 1 : 0;
+                const float frac = static_cast<float>(srcPos - static_cast<double>(i0));
+                auto read = [&](int ch) noexcept
+                {
+                    const int sourceCh = std::min(ch, srcChannels - 1);
+                    const float a = src.getSample(sourceCh, i0);
+                    const float b = src.getSample(sourceCh, i1);
+                    return a + (b - a) * frac;
+                };
+
+                float env = 1.0f;
+                if (clip->fadeInSamples > 0 && cycleLocal < clip->fadeInSamples)
+                    env *= equalPowerFade(static_cast<double>(cycleLocal)
+                                          / static_cast<double>(clip->fadeInSamples));
+                const auto remain = clip->lengthSamples - cycleLocal;
+                if (clip->fadeOutSamples > 0 && remain < clip->fadeOutSamples)
+                    env *= equalPowerFade(static_cast<double>(remain)
+                                          / static_cast<double>(clip->fadeOutSamples));
+                env = juce::jlimit(0.0f, 1.0f, env);
+
+                const int dst = static_cast<int>(global - liveBlockStart);
+                if (srcChannels == 1)
+                {
+                    const float value = read(0) * baseGain * env;
+                    if (left == right)
+                        left[dst] += value;
+                    else
+                    {
+                        left[dst] += value * panL;
+                        right[dst] += value * panR;
+                    }
+                }
+                else
+                {
+                    float l = read(0) * baseGain * env;
+                    float r = read(1) * baseGain * env;
+                    if (pan < 0.0f) r *= 1.0f + pan;
+                    else if (pan > 0.0f) l *= 1.0f - pan;
+                    if (left == right)
+                        left[dst] += (l + r) * 0.70710678f;
+                    else
+                    {
+                        left[dst] += l;
+                        right[dst] += r;
+                    }
+                }
+            }
+        };
+
+        bool anythingActiveOrPending = false;
+        const int liveTracks = std::min(state.trackCount, kLiveMaxTracks);
+        for (int trackIndex = 0; trackIndex < liveTracks; ++trackIndex)
+        {
+            int activeId = liveActiveClipIds_[trackIndex].load(std::memory_order_acquire);
+            int pendingId = livePendingClipIds_[trackIndex].load(std::memory_order_acquire);
+            std::int64_t activeLaunch = liveClipLaunchSamples_[trackIndex].load(std::memory_order_relaxed);
+            const std::int64_t pendingLaunch = livePendingLaunchSamples_[trackIndex].load(std::memory_order_relaxed);
+
+            if (pendingId >= 0 && pendingLaunch <= liveBlockStart)
+            {
+                activeId = pendingId;
+                activeLaunch = pendingLaunch;
+                liveActiveClipIds_[trackIndex].store(activeId, std::memory_order_release);
+                liveClipLaunchSamples_[trackIndex].store(activeLaunch, std::memory_order_relaxed);
+                livePendingClipIds_[trackIndex].store(kLiveNoClip, std::memory_order_release);
+                livePendingLaunchSamples_[trackIndex].store(0, std::memory_order_relaxed);
+                pendingId = kLiveNoClip;
+            }
+
+            const auto& track = state.tracks[trackIndex];
+            const auto* activeClip = findLiveClip(activeId, trackIndex);
+            const auto* pendingClip = findLiveClip(pendingId, trackIndex);
+
+            if (activeId >= 0 && activeClip == nullptr)
+            {
+                liveActiveClipIds_[trackIndex].store(kLiveNoClip, std::memory_order_release);
+                activeId = kLiveNoClip;
+            }
+            if (pendingId >= 0 && pendingClip == nullptr)
+            {
+                livePendingClipIds_[trackIndex].store(kLiveNoClip, std::memory_order_release);
+                livePendingLaunchSamples_[trackIndex].store(0, std::memory_order_relaxed);
+                pendingId = kLiveNoClip;
+            }
+
+            if (pendingId >= 0 && pendingLaunch > liveBlockStart && pendingLaunch < liveBlockEnd)
+            {
+                renderLiveSegment(activeClip, track, activeLaunch, liveBlockStart, pendingLaunch);
+                renderLiveSegment(pendingClip, track, pendingLaunch, pendingLaunch, liveBlockEnd);
+
+                liveActiveClipIds_[trackIndex].store(pendingId, std::memory_order_release);
+                liveClipLaunchSamples_[trackIndex].store(pendingLaunch, std::memory_order_relaxed);
+                livePendingClipIds_[trackIndex].store(kLiveNoClip, std::memory_order_release);
+                livePendingLaunchSamples_[trackIndex].store(0, std::memory_order_relaxed);
+                activeId = pendingId;
+                pendingId = kLiveNoClip;
+            }
+            else
+            {
+                renderLiveSegment(activeClip, track, activeLaunch, liveBlockStart, liveBlockEnd);
+            }
+
+            anythingActiveOrPending = anythingActiveOrPending
+                || activeId >= 0
+                || pendingId >= 0;
+        }
+
+        const int pendingScene = livePendingScene_.load(std::memory_order_acquire);
+        const auto pendingSceneSample = livePendingSceneSample_.load(std::memory_order_relaxed);
+        if (pendingScene >= 0 && pendingSceneSample < liveBlockEnd)
+        {
+            liveActiveScene_.store(pendingScene, std::memory_order_release);
+            livePendingScene_.store(-1, std::memory_order_release);
+            livePendingSceneSample_.store(0, std::memory_order_relaxed);
+        }
+
+        liveClockSamples_.store(liveBlockEnd, std::memory_order_relaxed);
+        if (!anythingActiveOrPending)
+        {
+            liveSessionEnabled_.store(false, std::memory_order_release);
+            playing_.store(false, std::memory_order_release);
+        }
+
+        renderReaders_[index].fetch_sub(1, std::memory_order_acq_rel);
+        return;
+    }
+
     if (state.clipCount == 0 && state.midiNoteCount == 0)
     {
         playing_.store(false, std::memory_order_release);
