@@ -3009,6 +3009,30 @@ void DawWorkspace::syncInspector()
     }
 }
 
+juce::String DawWorkspace::mixerInsertName(int insert) const
+{
+    insert = juce::jlimit(0, kMaxTracks - 1, insert);
+    juce::StringArray names;
+
+    for (const auto& clip : clips_)
+    {
+        if (clip.mixerInsert != insert || clip.track < 0 || clip.track >= trackCount_)
+            continue;
+        names.addIfNotAlreadyThere(tracks_[clip.track].name);
+    }
+    for (int track = 0; track < trackCount_; ++track)
+    {
+        if (tracks_[track].midi && tracks_[track].mixerInsert == insert)
+            names.addIfNotAlreadyThere(tracks_[track].name);
+    }
+
+    if (names.isEmpty())
+        return {};
+    if (names.size() == 1)
+        return names[0];
+    return names[0] + " +" + juce::String(names.size() - 1);
+}
+
 void DawWorkspace::refreshStatus(const juce::String& text)
 {
     statusLabel_.setText(text, juce::dontSendNotification);
@@ -3131,8 +3155,30 @@ void DawWorkspace::rebuildRenderState()
 
 void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noexcept
 {
-    if (left == nullptr || right == nullptr || numSamples <= 0
-        || !playing_.load(std::memory_order_acquire))
+    renderBlock(left, right, nullptr, 0, numSamples);
+}
+
+void DawWorkspace::renderToMixer(juce::AudioBuffer<float>& mixerBuffer,
+                                 int numMixerChannels,
+                                 int numSamples) noexcept
+{
+    renderBlock(nullptr, nullptr, &mixerBuffer, numMixerChannels, numSamples);
+}
+
+void DawWorkspace::renderBlock(float* masterLeft,
+                               float* masterRight,
+                               juce::AudioBuffer<float>* mixerBuffer,
+                               int numMixerChannels,
+                               int numSamples) noexcept
+{
+    const bool mixerMode = mixerBuffer != nullptr;
+    if (numSamples <= 0 || !playing_.load(std::memory_order_acquire))
+        return;
+    if (!mixerMode && (masterLeft == nullptr || masterRight == nullptr))
+        return;
+    if (mixerMode && (numMixerChannels <= 0
+        || mixerBuffer->getNumChannels() < numMixerChannels * 2
+        || mixerBuffer->getNumSamples() < numSamples))
         return;
 
     const int index = activeRenderState_.load(std::memory_order_acquire);
@@ -3149,6 +3195,15 @@ void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noe
         const auto& track = state.tracks[clip.track];
         if (track.mute || (state.anySolo && !track.solo))
             continue;
+
+        float* left = masterLeft;
+        float* right = masterRight;
+        if (mixerMode)
+        {
+            const int insert = juce::jlimit(0, numMixerChannels - 1, clip.mixerInsert);
+            left = mixerBuffer->getWritePointer(insert * 2);
+            right = mixerBuffer->getWritePointer(insert * 2 + 1);
+        }
 
         const std::int64_t clipStart = clip.startSample;
         const std::int64_t clipEnd = clip.startSample + clip.lengthSamples;
@@ -3226,6 +3281,15 @@ void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noe
         if (note.track < 0 || note.track >= state.trackCount) continue;
         const auto& track = state.tracks[note.track];
         if (track.mute || (state.anySolo && !track.solo)) continue;
+
+        float* left = masterLeft;
+        float* right = masterRight;
+        if (mixerMode)
+        {
+            const int insert = juce::jlimit(0, numMixerChannels - 1, note.mixerInsert);
+            left = mixerBuffer->getWritePointer(insert * 2);
+            right = mixerBuffer->getWritePointer(insert * 2 + 1);
+        }
 
         const std::int64_t noteStart = note.startSample;
         const std::int64_t noteEnd = note.startSample + note.lengthSamples;
