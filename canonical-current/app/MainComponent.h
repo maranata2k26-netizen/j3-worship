@@ -20,11 +20,13 @@
 #include <utility>
 #include <optional>
 #include <vector>
+#include <thread>
 
 class MainComponent final : public juce::Component,
                             private juce::AudioIODeviceCallback,
                             private juce::Timer,
-                            private juce::ChangeListener
+                            private juce::ChangeListener,
+                            private juce::ListBoxModel
 {
 public:
     MainComponent();
@@ -147,8 +149,14 @@ private:
     void chooseAdditionalVst3Folder();
     void refreshPluginBrowser();
     void refreshPluginUi();
-    void showPluginSlotMenu(int slot);
+    void openNativeEqEditor();
     void loadSelectedPlugin();
+    void loadPluginDescriptionIntoSlot(const juce::PluginDescription&, int channel, int slot);
+
+    int getNumRows() override;
+    void paintListBoxItem(int rowNumber, juce::Graphics&, int width, int height, bool rowIsSelected) override;
+    void selectedRowsChanged(int lastRowSelected) override;
+    void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override;
     void loadPluginPathIntoSlot(const juce::String& path, int channel, int slot);
     void removeSelectedPlugin();
     void moveSelectedPlugin(int delta);
@@ -236,6 +244,7 @@ private:
     juce::AudioBuffer<float> busScratch_;
 
     j3::PluginCatalog pluginCatalog_;
+    std::vector<juce::PluginDescription> pluginDescriptions_;
     juce::AudioPluginFormatManager pluginFormatManager_;
     std::array<std::array<std::atomic<std::shared_ptr<juce::AudioPluginInstance>>, kPluginSlots>, kMaxChannels> channelPlugins_{};
     std::array<std::array<std::atomic<bool>, kPluginSlots>, kMaxChannels> pluginBypass_{};
@@ -248,6 +257,8 @@ private:
     juce::AudioBuffer<float> dawMixerScratch_;
     juce::MidiBuffer pluginMidiScratch_;
     bool pluginsScanned_ { false };
+    std::atomic<bool> pluginScanBusy_ { false };
+    std::jthread pluginScanThread_;
     std::vector<int> pluginBrowserIndices_;
     juce::StringArray favoritePluginPaths_;
     juce::StringArray recentPluginPaths_;
@@ -396,7 +407,8 @@ private:
     juce::ComboBox pluginSlotBox_;
     juce::TextEditor pluginSearch_;
     juce::ComboBox pluginCategoryBox_;
-    juce::ComboBox pluginCatalogBox_;
+    juce::ComboBox pluginCatalogBox_; // hidden selection model used by the existing load path
+    juce::ListBox pluginCatalogList_ { "PLUGIN BROWSER", this };
     juce::ToggleButton favoritePluginButton_ { "FAVORITE" };
     juce::TextButton scanPluginsButton_ { "SCAN VST3" };
     juce::TextButton pluginLocationsButton_ { "ADD VST3 FOLDER" };
