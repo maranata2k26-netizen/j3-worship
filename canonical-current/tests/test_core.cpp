@@ -69,6 +69,20 @@ int main() {
         e.clear(); check(g.connect(iem,bus,e), "IEM to bus allowed for graph test");
         e.clear(); check(!g.connect(bus,iem,e), "routing cycle blocked");
 
+        {
+            const auto preferred = chooseActiveStereoOutputs({true, true, false, false}, 0, 1);
+            check(preferred.valid() && preferred.left == 0 && preferred.right == 1 && !preferred.usedFallback,
+                  "preferred active stereo outputs are preserved");
+            const auto fallback = chooseActiveStereoOutputs({false, false, true, true}, 0, 1);
+            check(fallback.valid() && fallback.left == 2 && fallback.right == 3 && fallback.usedFallback,
+                  "inactive saved PA falls back to active outputs");
+            const auto mono = chooseActiveStereoOutputs({false, true, false}, 0, 2);
+            check(mono.valid() && mono.left == 1 && mono.right == 1 && mono.usedFallback,
+                  "single active output falls back to mono");
+            check(!chooseActiveStereoOutputs({false, false}, 0, 1).valid(),
+                  "no active outputs remains invalid");
+        }
+
         Mixer drums; drums.createDrumPreset(false);
         check(drums.size()==9, "drum preset channel count");
         check(drums.channel(0).name=="Kick", "drum preset names");
