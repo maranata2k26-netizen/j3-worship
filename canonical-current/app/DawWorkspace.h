@@ -133,6 +133,7 @@ private:
         std::int64_t lengthSamples { 0 };
         int note { 60 };
         float velocity { 0.8f };
+        int mixerInsert { 0 };
     };
 
     struct RenderClip
