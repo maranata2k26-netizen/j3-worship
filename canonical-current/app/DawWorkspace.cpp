@@ -478,23 +478,75 @@ void DawWorkspace::paint(juce::Graphics& g)
     {
         auto strip = mixerContent.removeFromLeft(mixerStripWidth).reduced(2);
         const bool selected = i == selectedTrack_;
-        g.setColour(juce::Colour(selected ? 0xff152a38 : 0xff0d1a23));
+        const auto stripBounds = strip;
+        g.setColour(juce::Colour(selected ? 0xff152d3c : 0xff0d1a23));
         g.fillRoundedRectangle(strip.toFloat(), 4.0f);
-        g.setColour(tracks_[i].colour);
+        g.setColour(selected ? tracks_[i].colour.brighter(0.18f) : tracks_[i].colour);
         g.fillRect(strip.removeFromTop(3));
+
         g.setColour(juce::Colour(kText));
         g.setFont(juce::FontOptions(10.0f, selected ? juce::Font::bold : juce::Font::plain));
-        g.drawFittedText(tracks_[i].name, strip.removeFromTop(20).reduced(4, 0), juce::Justification::centred, 1);
-        const float normGain = juce::jlimit(0.0f, 1.0f,
-            static_cast<float>((gainToDb(tracks_[i].gain) + 60.0) / 72.0));
-        auto meter = strip.reduced(6, 5);
-        g.setColour(juce::Colour(0xff1a2b35));
-        g.fillRoundedRectangle(meter.toFloat(), 2.0f);
-        auto level = meter;
-        level.setY(meter.getBottom() - static_cast<int>(meter.getHeight() * normGain));
-        level.setHeight(meter.getBottom() - level.getY());
-        g.setColour(tracks_[i].mute ? juce::Colour(kDanger).withAlpha(0.45f) : tracks_[i].colour.withAlpha(0.75f));
-        g.fillRoundedRectangle(level.toFloat(), 2.0f);
+        g.drawFittedText(tracks_[i].name, strip.removeFromTop(19).reduced(4, 0), juce::Justification::centred, 1);
+
+        auto footer = strip.removeFromBottom(22);
+        auto body = strip.reduced(7, 3);
+        const float gainDb = static_cast<float>(gainToDb(tracks_[i].gain));
+        const float normGain = juce::jlimit(0.0f, 1.0f, (gainDb + 60.0f) / 72.0f);
+
+        // A real fader-style quick view reads as a mixer even when no audio is playing.
+        auto faderLane = body.withWidth(std::max(22, body.getWidth() / 3)).withCentre(body.getCentre());
+        const int laneX = faderLane.getCentreX();
+        const int laneTop = faderLane.getY() + 3;
+        const int laneBottom = faderLane.getBottom() - 3;
+        g.setColour(juce::Colour(0xff263b48));
+        g.fillRoundedRectangle(static_cast<float>(laneX - 2), static_cast<float>(laneTop),
+                               4.0f, static_cast<float>(std::max(1, laneBottom - laneTop)), 2.0f);
+
+        const int handleY = laneBottom - static_cast<int>(normGain * std::max(1, laneBottom - laneTop));
+        auto handle = juce::Rectangle<int>(laneX - std::max(11, faderLane.getWidth() / 3),
+                                           handleY - 3,
+                                           std::max(22, (faderLane.getWidth() * 2) / 3), 7);
+        g.setColour(tracks_[i].mute ? juce::Colour(kDanger).withAlpha(0.72f)
+                                    : tracks_[i].colour.brighter(selected ? 0.28f : 0.08f));
+        g.fillRoundedRectangle(handle.toFloat(), 2.5f);
+        g.setColour(juce::Colour(0xffeaf5ff).withAlpha(selected ? 0.9f : 0.42f));
+        g.drawRoundedRectangle(handle.toFloat(), 2.5f, 0.8f);
+
+        // Pan marker gives useful at-a-glance information without adding another control row.
+        const float pan = juce::jlimit(-1.0f, 1.0f, tracks_[i].pan);
+        auto panRail = juce::Rectangle<int>(body.getX() + 5, body.getBottom() - 8,
+                                            std::max(12, body.getWidth() - 10), 2);
+        g.setColour(juce::Colour(0xff273a46));
+        g.fillRoundedRectangle(panRail.toFloat(), 1.0f);
+        const int panX = panRail.getCentreX() + static_cast<int>(pan * panRail.getWidth() * 0.45f);
+        g.setColour(juce::Colour(kMuted));
+        g.fillEllipse(static_cast<float>(panX - 2), static_cast<float>(panRail.getCentreY() - 2), 5.0f, 5.0f);
+
+        g.setFont(juce::FontOptions(8.5f, juce::Font::bold));
+        g.setColour(juce::Colour(kMuted));
+        auto gainLabel = footer.removeFromLeft(std::max(42, footer.getWidth() - 64)).reduced(3, 1);
+        g.drawFittedText(juce::String(gainDb, 1) + " dB", gainLabel, juce::Justification::centredLeft, 1);
+
+        auto chipArea = footer.reduced(1, 2);
+        auto drawMiniChip = [&](const char* label, bool active, juce::Colour colour)
+        {
+            if (chipArea.getWidth() < 14) return;
+            auto chip = chipArea.removeFromLeft(std::min(18, chipArea.getWidth())).reduced(1);
+            g.setColour(active ? colour : juce::Colour(0xff182832));
+            g.fillRoundedRectangle(chip.toFloat(), 2.0f);
+            g.setColour(active ? juce::Colours::white : juce::Colour(0xff708491));
+            g.drawText(label, chip, juce::Justification::centred);
+        };
+        drawMiniChip("M", tracks_[i].mute, juce::Colour(kDanger));
+        drawMiniChip("S", tracks_[i].solo, juce::Colour(kGood));
+        if (!tracks_[i].midi)
+            drawMiniChip("R", tracks_[i].armed, juce::Colour(kDanger));
+
+        if (selected)
+        {
+            g.setColour(tracks_[i].colour.withAlpha(0.85f));
+            g.drawRoundedRectangle(stripBounds.toFloat().reduced(0.5f), 4.0f, 1.2f);
+        }
     }
 
     g.setColour(juce::Colour(0xff09131b));
