@@ -157,6 +157,7 @@ private:
     void applyTheme(int themeId, bool persist = true);
     void refreshDashboard();
     void checkForUpdatesAsync();
+    void showAvailableUpdatePrompt();
     void beginUpdateInstall();
 
     void rebuildMixerBank();
@@ -261,6 +262,8 @@ private:
     std::optional<j3ui::AvailableUpdate> availableUpdate_;
     juce::File downloadedUpdateInstaller_;
     std::atomic<bool> updateBusy_ { false };
+    bool updatePromptShown_ { false };
+    std::atomic<bool> dawOutputFallbackActive_ { false };
 
     juce::Image brandLogo_;
     juce::Label brandLabel_;

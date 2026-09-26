@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "BinaryData.h"
+#include "j3/Routing.h"
 
 #include <algorithm>
 #include <cmath>
@@ -530,7 +531,7 @@ MainComponent::MainComponent()
     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(brandLabel_);
 
-    versionLabel_.setText("1.4.0", juce::dontSendNotification);
+    versionLabel_.setText(juce::JUCEApplication::getInstance()->getApplicationVersion(), juce::dontSendNotification);
     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
     addAndMakeVisible(versionLabel_);
@@ -1643,6 +1644,7 @@ void MainComponent::checkForUpdatesAsync()
                 safe->updateButton_.setTooltip(juce::String::fromUTF8("Nueva versión disponible. Descarga verificada por SHA-256."));
                 safe->updateButton_.setVisible(true);
                 safe->resized();
+                safe->showAvailableUpdatePrompt();
             }
             else if (error.isNotEmpty())
             {
@@ -1650,6 +1652,32 @@ void MainComponent::checkForUpdatesAsync()
             }
         });
     }).detach();
+}
+
+void MainComponent::showAvailableUpdatePrompt()
+{
+    if (updatePromptShown_ || !availableUpdate_.has_value())
+        return;
+
+    updatePromptShown_ = true;
+    const auto version = availableUpdate_->versionText;
+    auto safe = juce::Component::SafePointer<MainComponent>(this);
+
+    auto* alert = new juce::AlertWindow(
+        juce::String::fromUTF8("Nueva versión de J3 Worship"),
+        juce::String::fromUTF8("Hay una actualización disponible: ") + version
+            + juce::String::fromUTF8("\n\nPodés actualizar desde acá. J3 la descarga, verifica y vuelve a abrir automáticamente."),
+        juce::MessageBoxIconType::InfoIcon);
+
+    alert->addButton(juce::String::fromUTF8("ACTUALIZAR AHORA"), 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton(juce::String::fromUTF8("MÁS TARDE"), 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enterModalState(true,
+        juce::ModalCallbackFunction::create([safe](int result)
+        {
+            if (safe != nullptr && result == 1)
+                safe->beginUpdateInstall();
+        }),
+        true);
 }
 
 void MainComponent::beginUpdateInstall()
@@ -2436,6 +2464,10 @@ void MainComponent::loadAppState()
     if (xml == nullptr || !xml->hasTagName("J3WorshipState"))
         return;
 
+    const auto stateVersion = j3::Updater::parseVersion(
+        xml->getStringAttribute("version", "1.0.0").toStdString()).value_or(j3::SemVer { 1, 0, 0 });
+    const bool migrateLegacyMixer = stateVersion < j3::SemVer { 1, 6, 0 };
+
     themeId_ = juce::jlimit(1, 6, xml->getIntAttribute("themeId", 1));
     themeBox_.setSelectedId(themeId_, juce::dontSendNotification);
     applyTheme(themeId_, false);
@@ -2490,7 +2522,9 @@ void MainComponent::loadAppState()
         pluginPaths_[channel][slot] = vst->getStringAttribute("path");
         pluginNames_[channel][slot] = vst->getStringAttribute("name");
         pluginStateBase64_[channel][slot] = vst->getStringAttribute("state");
-        pluginBypass_[channel][slot].store(vst->getBoolAttribute("bypass", false), std::memory_order_relaxed);
+        pluginBypass_[channel][slot].store(
+            migrateLegacyMixer || vst->getBoolAttribute("bypass", false),
+            std::memory_order_relaxed);
     }
 
     forEachXmlChildElementWithTagName(*xml, ch, "Channel")
@@ -2502,6 +2536,17 @@ void MainComponent::loadAppState()
         channelMute_[index].store(ch->getBoolAttribute("mute", false), std::memory_order_relaxed);
         channelBus_[index].store(juce::jlimit(-1, kBuses - 1, ch->getIntAttribute("bus", -1)), std::memory_order_relaxed);
         channelDca_[index].store(juce::jlimit(-1, kDcas - 1, ch->getIntAttribute("dca", -1)), std::memory_order_relaxed);
+        if (migrateLegacyMixer)
+        {
+            // Before 1.6 these values described live input channels. They now also back DAW
+            // mixer inserts, so stale mute/bus/DCA/fader state can make a newly imported
+            // track completely silent. Start the new insert workflow from an audible state.
+            channelGain_[index].store(1.0f, std::memory_order_relaxed);
+            channelPan_[index].store(0.0f, std::memory_order_relaxed);
+            channelMute_[index].store(false, std::memory_order_relaxed);
+            channelBus_[index].store(-1, std::memory_order_relaxed);
+            channelDca_[index].store(-1, std::memory_order_relaxed);
+        }
         channelHpf_[index].store(static_cast<float>(ch->getDoubleAttribute("hpf", 20.0)));
         channelLpf_[index].store(static_cast<float>(ch->getDoubleAttribute("lpf", 20000.0)));
         channelGate_[index].store(static_cast<float>(ch->getDoubleAttribute("gate", -60.0)));
@@ -2561,12 +2606,14 @@ void MainComponent::loadAppState()
     refreshPadUi();
     refreshSetlistUi();
     refreshDashboard();
+    if (migrateLegacyMixer)
+        saveAppState();
 }
 
 void MainComponent::saveAppState(bool capturePluginState)
 {
     juce::XmlElement xml("J3WorshipState");
-    xml.setAttribute("version", "1.1.0");
+    xml.setAttribute("version", juce::JUCEApplication::getInstance()->getApplicationVersion());
     xml.setAttribute("themeId", themeId_);
     xml.setAttribute("paLeft", paLeft_.load());
     xml.setAttribute("paRight", paRight_.load());
@@ -3380,10 +3427,16 @@ void MainComponent::refreshRoutingControls()
     }
 
     const auto names = device->getOutputChannelNames();
+    const auto activeMask = device->getActiveOutputChannels();
     const int outputCount = names.size();
+    std::vector<bool> active(static_cast<std::size_t>(std::max(0, outputCount)), false);
     for (int i = 0; i < outputCount; ++i)
     {
-        const auto label = juce::String(i + 1) + juce::String::fromUTF8(" · ") + outputName(*device, i);
+        const bool enabled = activeMask[i];
+        active[static_cast<std::size_t>(i)] = enabled;
+        auto label = juce::String(i + 1) + juce::String::fromUTF8(" · ") + outputName(*device, i);
+        if (!enabled)
+            label << juce::String::fromUTF8(" · INACTIVA");
         paLeftBox_.addItem(label, i + 1);
         paRightBox_.addItem(label, i + 1);
         clickBox_.addItem(label, i + 2);
@@ -3391,17 +3444,18 @@ void MainComponent::refreshRoutingControls()
         iemOutRightBox_.addItem(label, i + 2);
     }
 
-    const int left = juce::jlimit(0, std::max(0, outputCount - 1), paLeft_.load());
-    const int rightDefault = outputCount > 1 ? 1 : 0;
-    const int currentRight = paRight_.load();
-    const int right = juce::jlimit(0, std::max(0, outputCount - 1), currentRight >= 0 && currentRight < outputCount ? currentRight : rightDefault);
+    const auto selected = j3::chooseActiveStereoOutputs(active, paLeft_.load(), paRight_.load());
+    const int left = selected.left;
+    const int right = selected.right;
     paLeft_.store(left);
     paRight_.store(right);
-    paLeftBox_.setSelectedId(outputCount > 0 ? left + 1 : 0, juce::dontSendNotification);
-    paRightBox_.setSelectedId(outputCount > 0 ? right + 1 : 0, juce::dontSendNotification);
+    paLeftBox_.setSelectedId(left >= 0 ? left + 1 : 0, juce::dontSendNotification);
+    paRightBox_.setSelectedId(right >= 0 ? right + 1 : 0, juce::dontSendNotification);
 
     int click = clickOutput_.load();
-    if (click >= 0 && click < outputCount && click != left && click != right)
+    if (click >= 0 && click < outputCount
+        && active[static_cast<std::size_t>(click)]
+        && click != left && click != right)
         clickBox_.setSelectedId(click + 2, juce::dontSendNotification);
     else
     {
@@ -3419,6 +3473,7 @@ void MainComponent::refreshRoutingControls()
         const int l = iemOutLeft_[m].load(std::memory_order_relaxed);
         const int r = iemOutRight_[m].load(std::memory_order_relaxed);
         const bool valid = l >= 0 && r >= 0 && l < outputCount && r < outputCount && l != r
+            && active[static_cast<std::size_t>(l)] && active[static_cast<std::size_t>(r)]
             && !occupied[static_cast<std::size_t>(l)] && !occupied[static_cast<std::size_t>(r)];
         if (valid)
         {
@@ -3432,8 +3487,16 @@ void MainComponent::refreshRoutingControls()
         }
     }
 
+    juce::String routeNote;
+    if (!selected.valid())
+        routeNote = juce::String::fromUTF8("\n⚠ No hay salidas activas. Abrí AUDIO / MIDI.");
+    else if (selected.usedFallback)
+        routeNote = juce::String::fromUTF8("\n✓ J3 corrigió automáticamente el PA a salidas activas ") + juce::String(left + 1)
+            + "/" + juce::String(right + 1);
+
     setupDeviceLabel_.setText("Device: " + device->getName() + "\nDriver: " + deviceManager_.getCurrentAudioDeviceType()
-        + "\nOutputs: " + juce::String(outputCount) + juce::String::fromUTF8(" · Inputs: ") + juce::String(device->getInputChannelNames().size()),
+        + "\nOutputs: " + juce::String(outputCount) + juce::String::fromUTF8(" · Inputs: ") + juce::String(device->getInputChannelNames().size())
+        + routeNote,
         juce::dontSendNotification);
     refreshIemUi();
     rebuildMixerBank();
@@ -3665,6 +3728,29 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     const int click = clickOutput_.load(std::memory_order_relaxed);
     const bool safePa = left >= 0 && right >= 0 && left < numOutputChannels && right < numOutputChannels
         && outputChannelData[left] != nullptr && outputChannelData[right] != nullptr;
+
+    int playbackLeft = left;
+    int playbackRight = right;
+    bool playbackRouteReady = safePa;
+    if (!playbackRouteReady)
+    {
+        int first = -1;
+        int second = -1;
+        for (int o = 0; o < numOutputChannels; ++o)
+        {
+            if (outputChannelData[o] == nullptr || o == click)
+                continue;
+            if (first < 0) first = o;
+            else { second = o; break; }
+        }
+        if (first >= 0)
+        {
+            playbackLeft = first;
+            playbackRight = second >= 0 ? second : first;
+            playbackRouteReady = true;
+        }
+    }
+
     const bool monitoring = liveMonitorEnabled_.load(std::memory_order_acquire);
     const bool busAvailable = busScratch_.getNumChannels() >= kBuses * 2 && busScratch_.getNumSamples() >= numSamples;
 
@@ -3786,7 +3872,8 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     const bool dawRunning = dawWorkspace_.isPlaying();
     const bool dawScratchReady = dawMixerScratch_.getNumChannels() >= kMaxChannels * 2
         && dawMixerScratch_.getNumSamples() >= numSamples;
-    const bool dawAudible = safePa && dawRunning && dawScratchReady;
+    const bool dawAudible = playbackRouteReady && dawRunning && dawScratchReady;
+    dawOutputFallbackActive_.store(dawRunning && playbackRouteReady && !safePa, std::memory_order_relaxed);
     if (dawRunning && dawScratchReady)
     {
         dawMixerScratch_.clear(0, numSamples);
@@ -3797,9 +3884,9 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             if (busAvailable)
                 busScratch_.clear(0, numSamples);
 
-            auto* outL = outputChannelData[left];
-            auto* outR = outputChannelData[right];
-            const bool monoPa = left == right;
+            auto* outL = outputChannelData[playbackLeft];
+            auto* outR = outputChannelData[playbackRight];
+            const bool monoPa = playbackLeft == playbackRight;
             const float master = masterGain_.load(std::memory_order_relaxed);
 
             for (int ch = 0; ch < kMaxChannels; ++ch)
@@ -3879,7 +3966,8 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     // Only exclude CLICK when it actually owns a dedicated safe output; a stale conflicting
     // click route must never remove protection from a PA output.
     const bool dedicatedClickOutput = click >= 0 && click < numOutputChannels
-        && routeIsSafe(left, right, click);
+        && outputChannelData[click] != nullptr
+        && routeIsSafe(dawRunning ? playbackLeft : left, dawRunning ? playbackRight : right, click);
     if (monitoring || padAudible || dawAudible)
     {
         for (int o = 0; o < numOutputChannels; ++o)

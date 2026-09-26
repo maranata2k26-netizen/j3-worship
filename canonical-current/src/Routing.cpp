@@ -3,6 +3,34 @@
 #include <stdexcept>
 
 namespace j3 {
+
+StereoOutputSelection chooseActiveStereoOutputs(const std::vector<bool>& active,
+                                                int preferredLeft,
+                                                int preferredRight) noexcept {
+    auto activeAt = [&active](int index) {
+        return index >= 0
+            && index < static_cast<int>(active.size())
+            && active[static_cast<std::size_t>(index)];
+    };
+
+    if (activeAt(preferredLeft) && activeAt(preferredRight))
+        return {preferredLeft, preferredRight, false};
+
+    int first = -1;
+    int second = -1;
+    for (int i = 0; i < static_cast<int>(active.size()); ++i) {
+        if (!active[static_cast<std::size_t>(i)]) continue;
+        if (first < 0) first = i;
+        else { second = i; break; }
+    }
+
+    if (first < 0)
+        return {};
+    if (second < 0)
+        second = first;
+    return {first, second, true};
+}
+
 std::size_t RoutingGraph::addNode(std::string name, ChannelRole role){ nodes_.push_back({std::move(name),role}); return nodes_.size()-1; }
 std::string RoutingGraph::nodeName(std::size_t i) const { return nodes_.at(i).name; }
 bool RoutingGraph::wouldCreateCycle(std::size_t from, std::size_t to) const {
