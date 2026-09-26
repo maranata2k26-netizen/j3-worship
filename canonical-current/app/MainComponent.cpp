@@ -2464,6 +2464,10 @@ void MainComponent::loadAppState()
     if (xml == nullptr || !xml->hasTagName("J3WorshipState"))
         return;
 
+    const auto stateVersion = j3::Updater::parseVersion(
+        xml->getStringAttribute("version", "1.0.0").toStdString()).value_or(j3::SemVer { 1, 0, 0 });
+    const bool migrateLegacyMixer = stateVersion < j3::SemVer { 1, 6, 0 };
+
     themeId_ = juce::jlimit(1, 6, xml->getIntAttribute("themeId", 1));
     themeBox_.setSelectedId(themeId_, juce::dontSendNotification);
     applyTheme(themeId_, false);
@@ -2518,7 +2522,9 @@ void MainComponent::loadAppState()
         pluginPaths_[channel][slot] = vst->getStringAttribute("path");
         pluginNames_[channel][slot] = vst->getStringAttribute("name");
         pluginStateBase64_[channel][slot] = vst->getStringAttribute("state");
-        pluginBypass_[channel][slot].store(vst->getBoolAttribute("bypass", false), std::memory_order_relaxed);
+        pluginBypass_[channel][slot].store(
+            migrateLegacyMixer || vst->getBoolAttribute("bypass", false),
+            std::memory_order_relaxed);
     }
 
     forEachXmlChildElementWithTagName(*xml, ch, "Channel")
@@ -2530,6 +2536,17 @@ void MainComponent::loadAppState()
         channelMute_[index].store(ch->getBoolAttribute("mute", false), std::memory_order_relaxed);
         channelBus_[index].store(juce::jlimit(-1, kBuses - 1, ch->getIntAttribute("bus", -1)), std::memory_order_relaxed);
         channelDca_[index].store(juce::jlimit(-1, kDcas - 1, ch->getIntAttribute("dca", -1)), std::memory_order_relaxed);
+        if (migrateLegacyMixer)
+        {
+            // Before 1.6 these values described live input channels. They now also back DAW
+            // mixer inserts, so stale mute/bus/DCA/fader state can make a newly imported
+            // track completely silent. Start the new insert workflow from an audible state.
+            channelGain_[index].store(1.0f, std::memory_order_relaxed);
+            channelPan_[index].store(0.0f, std::memory_order_relaxed);
+            channelMute_[index].store(false, std::memory_order_relaxed);
+            channelBus_[index].store(-1, std::memory_order_relaxed);
+            channelDca_[index].store(-1, std::memory_order_relaxed);
+        }
         channelHpf_[index].store(static_cast<float>(ch->getDoubleAttribute("hpf", 20.0)));
         channelLpf_[index].store(static_cast<float>(ch->getDoubleAttribute("lpf", 20000.0)));
         channelGate_[index].store(static_cast<float>(ch->getDoubleAttribute("gate", -60.0)));
@@ -2589,12 +2606,14 @@ void MainComponent::loadAppState()
     refreshPadUi();
     refreshSetlistUi();
     refreshDashboard();
+    if (migrateLegacyMixer)
+        saveAppState();
 }
 
 void MainComponent::saveAppState(bool capturePluginState)
 {
     juce::XmlElement xml("J3WorshipState");
-    xml.setAttribute("version", "1.1.0");
+    xml.setAttribute("version", juce::JUCEApplication::getInstance()->getApplicationVersion());
     xml.setAttribute("themeId", themeId_);
     xml.setAttribute("paLeft", paLeft_.load());
     xml.setAttribute("paRight", paRight_.load());
