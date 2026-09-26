@@ -4798,6 +4798,14 @@ void MainComponent::timerCallback()
     if (ticks % 150 == 0)
         saveAppState();
 
+    // Keep the update badge truthful even if a new release is published while
+    // J3 Worship stays open for hours. Re-check every 2 minutes when no update
+    // is already pending. The request itself bypasses caches in UpdateService.
+    if (ticks % 3600 == 0
+        && !updateBusy_.load(std::memory_order_acquire)
+        && !availableUpdate_.has_value())
+        checkForUpdatesAsync();
+
     if (!audioRunning_.load(std::memory_order_acquire) && !shuttingDown_.load(std::memory_order_acquire))
     {
         const auto now = static_cast<std::uint64_t>(juce::Time::getMillisecondCounterHiRes());

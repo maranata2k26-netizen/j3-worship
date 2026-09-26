@@ -106,7 +106,10 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
         return false;
     }
 
-    const wchar_t* headers = L"Accept: application/vnd.github+json\r\n";
+    const wchar_t* headers =
+        L"Accept: application/vnd.github+json\r\n"
+        L"Cache-Control: no-cache, no-store, max-age=0\r\n"
+        L"Pragma: no-cache\r\n";
     if (!WinHttpSendRequest(request, headers, static_cast<DWORD>(-1L),
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
         || !WinHttpReceiveResponse(request, nullptr))
