@@ -108,6 +108,7 @@ private:
         double lengthBeats { 4.0 };
         double sourceOffsetSeconds { 0.0 };
         float gain { 1.0f };
+        float pan { 0.0f };
         bool muted { false };
         bool loop { false };
         bool reversed { false };
@@ -144,6 +145,7 @@ private:
         std::int64_t lengthSamples { 0 };
         double sourceOffsetSeconds { 0.0 };
         float gain { 1.0f };
+        float pan { 0.0f };
         bool muted { false };
         bool loop { false };
         bool reversed { false };

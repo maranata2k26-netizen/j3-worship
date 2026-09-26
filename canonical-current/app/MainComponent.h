@@ -19,6 +19,7 @@
 #include <functional>
 #include <utility>
 #include <optional>
+#include <vector>
 
 class MainComponent final : public juce::Component,
                             private juce::AudioIODeviceCallback,
@@ -115,6 +116,7 @@ private:
     void saveAudioState();
     juce::File getAudioStateFile() const;
     void openAudioSettings();
+    void showFirstRunSetup();
     void startStopRecording();
     void stopRecordingAfterDeviceLoss(const juce::String& reason);
     juce::File recordingsRoot() const;
@@ -142,10 +144,13 @@ private:
     void removeSetlistSong();
     void loadSelectedSong();
     void scanVst3Plugins();
+    void chooseAdditionalVst3Folder();
+    void refreshPluginBrowser();
     void refreshPluginUi();
     void loadSelectedPlugin();
     void loadPluginPathIntoSlot(const juce::String& path, int channel, int slot);
     void removeSelectedPlugin();
+    void moveSelectedPlugin(int delta);
     void openSelectedPluginEditor();
     void restoreSavedPluginsAfterScan();
     bool pluginMutationLocked() const noexcept;
@@ -238,6 +243,11 @@ private:
     juce::AudioBuffer<float> dawMixerScratch_;
     juce::MidiBuffer pluginMidiScratch_;
     bool pluginsScanned_ { false };
+    std::vector<int> pluginBrowserIndices_;
+    juce::StringArray favoritePluginPaths_;
+    juce::StringArray recentPluginPaths_;
+    juce::StringArray pluginCustomLocations_;
+    std::unique_ptr<juce::FileChooser> pluginFolderChooser_;
 
     std::array<std::array<std::atomic<float>, kMaxChannels>, kIemMixes> iemSendGain_{};
     std::array<std::array<std::atomic<float>, kMaxChannels>, kIemMixes> iemSendPan_{};
@@ -264,6 +274,7 @@ private:
     std::atomic<bool> updateBusy_ { false };
     bool updatePromptShown_ { false };
     std::atomic<bool> dawOutputFallbackActive_ { false };
+    std::atomic<bool> dawOutputUnavailable_ { false };
 
     juce::Image brandLogo_;
     juce::Label brandLabel_;
@@ -373,10 +384,16 @@ private:
     juce::Label pluginsTitle_;
     juce::ComboBox pluginChannelBox_;
     juce::ComboBox pluginSlotBox_;
+    juce::TextEditor pluginSearch_;
+    juce::ComboBox pluginCategoryBox_;
     juce::ComboBox pluginCatalogBox_;
+    juce::ToggleButton favoritePluginButton_ { "★ FAVORITE" };
     juce::TextButton scanPluginsButton_ { "SCAN VST3" };
+    juce::TextButton pluginLocationsButton_ { "ADD VST3 FOLDER" };
     juce::TextButton loadPluginButton_ { "LOAD INSERT" };
     juce::TextButton removePluginButton_ { "REMOVE" };
+    juce::TextButton movePluginUpButton_ { "MOVE UP" };
+    juce::TextButton movePluginDownButton_ { "MOVE DOWN" };
     juce::ToggleButton bypassPluginButton_ { "BYPASS" };
     juce::TextButton openPluginEditorButton_ { "OPEN PARAMETERS" };
     juce::Label pluginStatusLabel_;
