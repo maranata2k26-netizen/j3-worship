@@ -60,9 +60,55 @@ public:
     juce::String mixerInsertName(int insert) const;
     bool validateLayoutForTesting(juce::String& report) const;
 
+    static constexpr int kLiveMaxTracks = 35;
+    static constexpr int kLiveMaxScenes = 15;
+
+    struct LiveClipCell
+    {
+        int clipId { -1 };
+        int trackIndex { -1 };
+        int sceneIndex { -1 };
+        int mixerInsert { 0 };
+        juce::String name;
+        juce::Colour colour;
+        double lengthBeats { 0.0 };
+        bool active { false };
+        bool pending { false };
+    };
+
+    struct LiveTrackView
+    {
+        int trackIndex { -1 };
+        int mixerInsert { 0 };
+        juce::String name;
+        juce::Colour colour;
+        bool active { false };
+        bool pending { false };
+        std::vector<LiveClipCell> clips;
+    };
+
+    struct LiveSessionSnapshot
+    {
+        std::vector<LiveTrackView> tracks;
+        int sceneCount { 0 };
+        int activeScene { -1 };
+        int pendingScene { -1 };
+        int quantizationBeats { 4 };
+        bool active { false };
+        bool editLocked { false };
+    };
+
+    LiveSessionSnapshot liveSessionSnapshot() const;
+    void launchLiveClip(int trackIndex, int sceneIndex);
+    void launchLiveScene(int sceneIndex);
+    void stopLiveTrack(int trackIndex);
+    void stopLiveClips();
+    void setLiveQuantizationBeats(int beats);
+    bool liveSessionActive() const noexcept { return liveSessionEnabled_.load(std::memory_order_acquire); }
+
 private:
     static constexpr int kMaxTracks = 48;
-    static constexpr int kMaxClips = 512;
+    static constexpr int kMaxClips = 1024;
     static constexpr int kMaxMidiNotes = 1024;
     static constexpr int kRenderBuffers = 3;
 
@@ -140,6 +186,7 @@ private:
     struct RenderClip
     {
         const ClipAudioData* audio { nullptr };
+        int id { -1 };
         int track { 0 };
         std::int64_t startSample { 0 };
         std::int64_t lengthSamples { 0 };
@@ -178,6 +225,7 @@ private:
     void configureControls();
     void syncInspector();
     void refreshStatus(const juce::String& text);
+    bool rejectStructuralEditWhileLive(const juce::String& action);
 
     juce::Rectangle<int> timelineBounds() const;
     juce::Rectangle<int> rulerBounds() const;
@@ -252,6 +300,9 @@ private:
     void markRenderDirty();
     void renderBlock(float* masterLeft, float* masterRight, juce::AudioBuffer<float>* mixerBuffer,
                      int numMixerChannels, int numSamples) noexcept;
+    int liveClipIdForSlot(int trackIndex, int sceneIndex) const;
+    std::int64_t nextLiveBoundarySample(std::int64_t now) const noexcept;
+    void clearLiveState(bool stopTransportToo) noexcept;
 
     juce::AudioFormatManager formatManager_;
     std::vector<std::unique_ptr<ClipAudioData>> audioPool_;
@@ -277,6 +328,19 @@ private:
     std::atomic<std::int64_t> transportSamples_ { 0 };
     std::atomic<std::int64_t> loopStartSamples_ { 0 };
     std::atomic<std::int64_t> loopEndSamples_ { 0 };
+
+    static constexpr int kLiveNoClip = -1;
+    static constexpr int kLiveStopTrack = -2;
+    std::atomic<bool> liveSessionEnabled_ { false };
+    std::atomic<std::int64_t> liveClockSamples_ { 0 };
+    std::atomic<int> liveQuantizationBeats_ { 4 };
+    std::atomic<int> liveActiveScene_ { -1 };
+    std::atomic<int> livePendingScene_ { -1 };
+    std::atomic<std::int64_t> livePendingSceneSample_ { 0 };
+    std::array<std::atomic<int>, kMaxTracks> liveActiveClipIds_ {};
+    std::array<std::atomic<int>, kMaxTracks> livePendingClipIds_ {};
+    std::array<std::atomic<std::int64_t>, kMaxTracks> liveClipLaunchSamples_ {};
+    std::array<std::atomic<std::int64_t>, kMaxTracks> livePendingLaunchSamples_ {};
 
     j3::MultiTrackRecorder trackRecorder_;
     std::atomic<bool> trackRecording_ { false };

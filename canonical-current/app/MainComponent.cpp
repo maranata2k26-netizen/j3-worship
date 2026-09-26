@@ -541,123 +541,383 @@ public:
     }
 };
 
-class SessionGrid final : public juce::Component
+class SessionGrid final : public juce::Component,
+                          private juce::Timer
 {
 public:
-    SessionGrid(std::function<void(int)> sceneCallback,
+    SessionGrid(DawWorkspace& workspace,
                 std::function<void(int)> trackCallback)
-        : onScene_(std::move(sceneCallback)), onTrack_(std::move(trackCallback))
+        : workspace_(workspace), onTrack_(std::move(trackCallback))
     {
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
+        startTimerHz(15);
+    }
+
+    ~SessionGrid() override
+    {
+        stopTimer();
     }
 
     void paint(juce::Graphics& g) override
     {
-        static const juce::String trackNames[8] {
-            juce::String::fromUTF8("Voz Líder"), "Coros", "Guitarra", "Bajo",
-            "Teclado", juce::String::fromUTF8("Batería"), "Secuencias", "Click"
-        };
-        static const juce::String cells[8][8] {
-            { "Intro", "Verse 1", "Pre-Chorus", "Chorus", "Verse 2", "Bridge", "Instrumental", "Ending" },
-            { "Pad 1", "Pad 2", "Pad 3", "Pad 4", "Ambiente", "Drone", "Shimmer", juce::String::fromUTF8("—") },
-            { "Clean", "Drive", "Ambient", "Solo", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") },
-            { "Intro", "Verse", "Chorus", "Bridge", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") },
-            { "Piano", "Pad", "Strings", "Synth", "Ambient", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") },
-            { "Kit 1", "Kit 2", "Loop", juce::String::fromUTF8("Percusión"), "Shaker", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") },
-            { "FX 1", "FX 2", "Drone", "Risers", "Impactos", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") },
-            { "Click", juce::String::fromUTF8("Guía"), "Metron", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") }
-        };
-        static constexpr std::uint32_t trackColours[8] {
-            0xff168cff, 0xff9a4cf3, 0xff1bcf7a, 0xffffc52f,
-            0xffff4dad, 0xffff5353, 0xff13bfe7, 0xff87929c
-        };
+        const auto snapshot = workspace_.liveSessionSnapshot();
+        clampScroll(snapshot);
 
         auto area = getLocalBounds();
-        g.setColour(juce::Colour(0xff101820));
-        g.fillRoundedRectangle(area.toFloat(), 5.0f);
+        g.setColour(juce::Colour(0xff0d151d));
+        g.fillRoundedRectangle(area.toFloat(), 6.0f);
         g.setColour(juce::Colour(0xff35434f));
-        g.drawRoundedRectangle(area.toFloat().reduced(0.5f), 5.0f, 1.0f);
+        g.drawRoundedRectangle(area.toFloat().reduced(0.5f), 6.0f, 1.0f);
 
-        constexpr int columns = 8;
-        constexpr int rows = 8;
-        const int headerH = 30;
-        const int colW = std::max(1, area.getWidth() / columns);
-        const int rowH = std::max(18, (area.getHeight() - headerH) / rows);
+        const auto layout = makeLayout(snapshot);
+        const int visibleTracks = layout.visibleTracks;
+        const int visibleScenes = layout.visibleScenes;
 
-        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
-        for (int col = 0; col < columns; ++col)
+        g.setColour(juce::Colour(0xff121e28));
+        g.fillRoundedRectangle(layout.toolbar.toFloat().reduced(1), 5.0f);
+
+        g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        g.setColour(juce::Colour(0xffeaf5ff));
+        g.drawText("LIVE / CLIPS", layout.title, juce::Justification::centredLeft, true);
+
+        const auto quant = snapshot.quantizationBeats;
+        const juce::String quantText = quant == 4 ? "Q 1 BAR"
+            : quant == 2 ? "Q 1/2 BAR"
+            : quant == 1 ? "Q 1 BEAT"
+            : quant == 8 ? "Q 2 BARS"
+                         : "Q OFF";
+        paintToolbarButton(g, layout.quantButton, quantText, juce::Colour(0xff173246));
+        paintToolbarButton(g, layout.stopButton, "STOP CLIPS", juce::Colour(0xff742431));
+        paintToolbarButton(g, layout.leftButton, juce::String::fromUTF8("◀"), juce::Colour(0xff182733));
+        paintToolbarButton(g, layout.rightButton, juce::String::fromUTF8("▶"), juce::Colour(0xff182733));
+        paintToolbarButton(g, layout.upButton, juce::String::fromUTF8("▲"), juce::Colour(0xff182733));
+        paintToolbarButton(g, layout.downButton, juce::String::fromUTF8("▼"), juce::Colour(0xff182733));
+
+        if (snapshot.editLocked)
         {
-            const int x = col * colW;
-            auto colour = juce::Colour(trackColours[col]);
-            auto header = juce::Rectangle<int>(x, 0,
-                col == columns - 1 ? area.getWidth() - x : colW, headerH).reduced(1);
-            g.setColour(colour.withMultipliedBrightness(col == selectedTrack_ ? 1.15f : 0.9f));
+            g.setColour(juce::Colour(0xffffc247));
+            g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
+            g.drawText("LIVE LOCK", layout.lockLabel, juce::Justification::centred, true);
+        }
+
+        g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
+        for (int visible = 0; visible < visibleTracks; ++visible)
+        {
+            const int trackSlot = firstTrack_ + visible;
+            if (trackSlot < 0 || trackSlot >= static_cast<int>(snapshot.tracks.size()))
+                break;
+
+            const auto& track = snapshot.tracks[static_cast<std::size_t>(trackSlot)];
+            const int x = layout.grid.getX() + visible * layout.cellWidth;
+            auto header = juce::Rectangle<int>(x, layout.header.getY(),
+                std::min(layout.cellWidth, layout.grid.getRight() - x),
+                layout.header.getHeight()).reduced(1);
+
+            auto colour = track.colour;
+            if (track.trackIndex == selectedTrack_)
+                colour = colour.brighter(0.18f);
+            g.setColour(colour.withAlpha(track.active ? 0.82f : 0.55f));
             g.fillRoundedRectangle(header.toFloat(), 3.5f);
-            g.setColour(col <= 4 ? juce::Colour(0xff071018) : juce::Colours::white);
-            g.drawText(juce::String(col + 1) + "  " + trackNames[col], header.reduced(5, 0),
-                       juce::Justification::centredLeft, true);
 
-            for (int row = 0; row < rows; ++row)
+            auto stopArea = header.removeFromRight(25).reduced(2);
+            g.setColour(juce::Colour(0xff101820).withAlpha(0.78f));
+            g.fillRoundedRectangle(stopArea.toFloat(), 3.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.92f));
+            g.drawText(juce::String::fromUTF8("■"), stopArea, juce::Justification::centred, true);
+
+            auto textArea = header.reduced(5, 2);
+            g.setColour(juce::Colours::white);
+            g.drawText(juce::String(track.trackIndex + 1) + "  " + track.name,
+                       textArea.removeFromTop(18), juce::Justification::centredLeft, true);
+            g.setFont(juce::FontOptions(9.2f));
+            g.setColour(juce::Colour(0xffd7e5ef));
+            g.drawText("MIX " + juce::String(track.mixerInsert + 1),
+                       textArea, juce::Justification::centredLeft, true);
+            g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
+        }
+
+        for (int visibleRow = 0; visibleRow < visibleScenes; ++visibleRow)
+        {
+            const int scene = firstScene_ + visibleRow;
+            if (scene >= snapshot.sceneCount)
+                break;
+
+            const int y = layout.grid.getY() + visibleRow * layout.rowHeight;
+            auto sceneArea = juce::Rectangle<int>(layout.sceneLabels.getX(), y,
+                layout.sceneLabels.getWidth(),
+                std::min(layout.rowHeight, layout.grid.getBottom() - y)).reduced(1);
+
+            const bool activeScene = scene == snapshot.activeScene;
+            const bool pendingScene = scene == snapshot.pendingScene;
+            g.setColour(activeScene ? juce::Colour(0xff245f45)
+                                    : pendingScene ? juce::Colour(0xff695625)
+                                                   : juce::Colour(0xff18242e));
+            g.fillRoundedRectangle(sceneArea.toFloat(), 3.0f);
+            g.setColour(activeScene ? juce::Colour(0xffd8ffe8)
+                                    : pendingScene ? juce::Colour(0xffffe49a)
+                                                   : juce::Colour(0xffb7c7d4));
+            g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+            g.drawText(juce::String::fromUTF8("▶ SC ") + juce::String(scene + 1).paddedLeft('0', 2),
+                       sceneArea.reduced(4, 0), juce::Justification::centredLeft, true);
+
+            for (int visible = 0; visible < visibleTracks; ++visible)
             {
-                const int y = headerH + row * rowH;
-                auto cell = juce::Rectangle<int>(x, y,
-                    col == columns - 1 ? area.getWidth() - x : colW,
-                    row == rows - 1 ? area.getHeight() - y : rowH).reduced(1);
+                const int trackSlot = firstTrack_ + visible;
+                if (trackSlot < 0 || trackSlot >= static_cast<int>(snapshot.tracks.size()))
+                    break;
+                const auto& track = snapshot.tracks[static_cast<std::size_t>(trackSlot)];
 
-                const bool populated = juce::String(cells[col][row]) != juce::String::fromUTF8("—");
-                auto base = populated ? colour.withAlpha(0.28f) : juce::Colour(0xff182129);
-                if (row == selectedScene_)
-                    base = populated ? colour.withAlpha(0.58f) : juce::Colour(0xff22303b);
+                const int x = layout.grid.getX() + visible * layout.cellWidth;
+                auto cellBounds = juce::Rectangle<int>(x, y,
+                    std::min(layout.cellWidth, layout.grid.getRight() - x),
+                    std::min(layout.rowHeight, layout.grid.getBottom() - y)).reduced(1);
 
-                g.setColour(base);
-                g.fillRoundedRectangle(cell.toFloat(), 2.0f);
-                g.setColour(juce::Colour(0xff41515e).withAlpha(0.75f));
-                g.drawRoundedRectangle(cell.toFloat(), 2.0f, 0.7f);
-
-                if (populated)
+                const DawWorkspace::LiveClipCell* cell = nullptr;
+                for (const auto& candidate : track.clips)
                 {
-                    auto textArea = cell.reduced(5, 0);
-                    g.setColour(row == selectedScene_ ? juce::Colours::white : juce::Colour(0xffd9e4ec));
-                    g.setFont(juce::FontOptions(10.5f));
-                    g.drawText(juce::String::fromUTF8("▶"), textArea.removeFromLeft(14), juce::Justification::centred);
-                    g.drawText(cells[col][row], textArea, juce::Justification::centredLeft, true);
+                    if (candidate.sceneIndex == scene)
+                    {
+                        cell = &candidate;
+                        break;
+                    }
                 }
+
+                if (cell == nullptr)
+                {
+                    g.setColour(juce::Colour(0xff151f27));
+                    g.fillRoundedRectangle(cellBounds.toFloat(), 2.5f);
+                    g.setColour(juce::Colour(0xff2d3a44));
+                    g.drawRoundedRectangle(cellBounds.toFloat(), 2.5f, 0.7f);
+                    continue;
+                }
+
+                auto fill = cell->colour.withAlpha(cell->active ? 0.82f : cell->pending ? 0.54f : 0.28f);
+                g.setColour(fill);
+                g.fillRoundedRectangle(cellBounds.toFloat(), 2.5f);
+                g.setColour(cell->active ? juce::Colour(0xff8dffb9)
+                                         : cell->pending ? juce::Colour(0xffffd76b)
+                                                         : juce::Colour(0xff526571));
+                g.drawRoundedRectangle(cellBounds.toFloat().reduced(0.5f), 2.5f,
+                                       cell->active || cell->pending ? 1.8f : 0.8f);
+
+                auto textArea = cellBounds.reduced(5, 0);
+                g.setColour(cell->active || cell->pending ? juce::Colours::white
+                                                          : juce::Colour(0xffd9e4ec));
+                g.setFont(juce::FontOptions(10.0f, cell->active ? juce::Font::bold : juce::Font::plain));
+                g.drawText(cell->active ? juce::String::fromUTF8("▶")
+                                        : cell->pending ? juce::String::fromUTF8("◷")
+                                                        : juce::String::fromUTF8("▷"),
+                           textArea.removeFromLeft(15), juce::Justification::centred, false);
+                g.drawText(cell->name, textArea, juce::Justification::centredLeft, true);
             }
         }
 
-        const int y = headerH + selectedScene_ * rowH;
-        g.setColour(juce::Colour(0xffeaf5ff).withAlpha(0.78f));
-        g.drawHorizontalLine(y, 1.0f, static_cast<float>(getWidth() - 1));
-        g.drawHorizontalLine(std::min(getHeight() - 1, y + rowH), 1.0f, static_cast<float>(getWidth() - 1));
+        if (snapshot.tracks.empty())
+        {
+            g.setColour(juce::Colour(0xff8fa5b6));
+            g.setFont(juce::FontOptions(13.0f));
+            g.drawText("Agregá pistas y audio en DAW para poblar LIVE / CLIPS.",
+                       layout.grid, juce::Justification::centred, true);
+        }
     }
 
     void mouseDown(const juce::MouseEvent& e) override
     {
-        if (getWidth() <= 0 || getHeight() <= 0)
-            return;
-        constexpr int columns = 8;
-        constexpr int rows = 8;
-        const int headerH = 30;
-        const int colW = std::max(1, getWidth() / columns);
-        const int col = juce::jlimit(0, columns - 1, e.x / colW);
-        selectedTrack_ = col;
-        if (onTrack_) onTrack_(col);
+        const auto snapshot = workspace_.liveSessionSnapshot();
+        clampScroll(snapshot);
+        const auto layout = makeLayout(snapshot);
 
-        if (e.y >= headerH && col == 0)
+        if (layout.stopButton.contains(e.getPosition()))
         {
-            const int rowH = std::max(18, (getHeight() - headerH) / rows);
-            const int row = juce::jlimit(0, rows - 1, (e.y - headerH) / rowH);
-            selectedScene_ = row;
-            if (onScene_) onScene_(row);
+            workspace_.stopLiveClips();
+            repaint();
+            return;
         }
+        if (layout.quantButton.contains(e.getPosition()))
+        {
+            const int current = snapshot.quantizationBeats;
+            const int next = current == 4 ? 2 : current == 2 ? 1 : current == 1 ? 0 : current == 0 ? 8 : 4;
+            workspace_.setLiveQuantizationBeats(next);
+            repaint();
+            return;
+        }
+        if (layout.leftButton.contains(e.getPosition()))
+        {
+            firstTrack_ = std::max(0, firstTrack_ - 1);
+            repaint();
+            return;
+        }
+        if (layout.rightButton.contains(e.getPosition()))
+        {
+            const int maxFirst = std::max(0, static_cast<int>(snapshot.tracks.size()) - layout.visibleTracks);
+            firstTrack_ = std::min(maxFirst, firstTrack_ + 1);
+            repaint();
+            return;
+        }
+        if (layout.upButton.contains(e.getPosition()))
+        {
+            firstScene_ = std::max(0, firstScene_ - 1);
+            repaint();
+            return;
+        }
+        if (layout.downButton.contains(e.getPosition()))
+        {
+            const int maxFirst = std::max(0, snapshot.sceneCount - layout.visibleScenes);
+            firstScene_ = std::min(maxFirst, firstScene_ + 1);
+            repaint();
+            return;
+        }
+
+        if (layout.header.contains(e.getPosition()))
+        {
+            const int visible = (e.x - layout.grid.getX()) / std::max(1, layout.cellWidth);
+            const int trackSlot = firstTrack_ + visible;
+            if (trackSlot >= 0 && trackSlot < static_cast<int>(snapshot.tracks.size()))
+            {
+                const auto& track = snapshot.tracks[static_cast<std::size_t>(trackSlot)];
+                selectedTrack_ = track.trackIndex;
+                if (onTrack_) onTrack_(selectedTrack_);
+
+                const int localX = e.x - (layout.grid.getX() + visible * layout.cellWidth);
+                if (localX >= layout.cellWidth - 27)
+                    workspace_.stopLiveTrack(selectedTrack_);
+            }
+            repaint();
+            return;
+        }
+
+        const bool inSceneLabel = layout.sceneLabels.contains(e.getPosition());
+        const bool inClipGrid = layout.grid.contains(e.getPosition());
+        if (!inSceneLabel && !inClipGrid)
+            return;
+
+        const int visibleRow = (e.y - layout.grid.getY()) / std::max(1, layout.rowHeight);
+        const int scene = firstScene_ + visibleRow;
+        if (scene < 0 || scene >= snapshot.sceneCount)
+            return;
+        selectedScene_ = scene;
+
+        if (inSceneLabel)
+        {
+            workspace_.launchLiveScene(scene);
+            repaint();
+            return;
+        }
+
+        const int visible = (e.x - layout.grid.getX()) / std::max(1, layout.cellWidth);
+        const int trackSlot = firstTrack_ + visible;
+        if (trackSlot < 0 || trackSlot >= static_cast<int>(snapshot.tracks.size()))
+            return;
+
+        const auto& track = snapshot.tracks[static_cast<std::size_t>(trackSlot)];
+        selectedTrack_ = track.trackIndex;
+        if (onTrack_) onTrack_(selectedTrack_);
+        workspace_.launchLiveClip(selectedTrack_, scene);
+        repaint();
+    }
+
+    void mouseWheelMove(const juce::MouseEvent& e,
+                        const juce::MouseWheelDetails& wheel) override
+    {
+        const auto snapshot = workspace_.liveSessionSnapshot();
+        const auto layout = makeLayout(snapshot);
+        const bool horizontal = e.mods.isShiftDown() || std::abs(wheel.deltaX) > std::abs(wheel.deltaY);
+
+        if (horizontal)
+        {
+            const float delta = std::abs(wheel.deltaX) > 0.001f ? wheel.deltaX : wheel.deltaY;
+            firstTrack_ += delta < 0.0f ? 1 : -1;
+        }
+        else
+        {
+            firstScene_ += wheel.deltaY < 0.0f ? 1 : -1;
+        }
+        clampScroll(snapshot);
+        juce::ignoreUnused(layout);
         repaint();
     }
 
 private:
-    std::function<void(int)> onScene_;
+    struct Layout
+    {
+        juce::Rectangle<int> toolbar;
+        juce::Rectangle<int> title;
+        juce::Rectangle<int> quantButton;
+        juce::Rectangle<int> stopButton;
+        juce::Rectangle<int> leftButton, rightButton, upButton, downButton;
+        juce::Rectangle<int> lockLabel;
+        juce::Rectangle<int> header;
+        juce::Rectangle<int> sceneLabels;
+        juce::Rectangle<int> grid;
+        int cellWidth { 142 };
+        int rowHeight { 36 };
+        int visibleTracks { 1 };
+        int visibleScenes { 1 };
+    };
+
+    Layout makeLayout(const DawWorkspace::LiveSessionSnapshot& snapshot) const
+    {
+        juce::ignoreUnused(snapshot);
+        Layout l;
+        auto area = getLocalBounds().reduced(3);
+        l.toolbar = area.removeFromTop(30);
+        auto tools = l.toolbar.reduced(5, 3);
+        l.title = tools.removeFromLeft(std::min(120, tools.getWidth()));
+        l.quantButton = tools.removeFromLeft(std::min(92, tools.getWidth())).reduced(2, 0);
+        l.stopButton = tools.removeFromLeft(std::min(100, tools.getWidth())).reduced(2, 0);
+        l.leftButton = tools.removeFromLeft(std::min(28, tools.getWidth())).reduced(1);
+        l.rightButton = tools.removeFromLeft(std::min(28, tools.getWidth())).reduced(1);
+        l.upButton = tools.removeFromLeft(std::min(28, tools.getWidth())).reduced(1);
+        l.downButton = tools.removeFromLeft(std::min(28, tools.getWidth())).reduced(1);
+        l.lockLabel = tools;
+
+        constexpr int sceneWidth = 72;
+        l.header = area.removeFromTop(38);
+        l.header.removeFromLeft(sceneWidth);
+        l.sceneLabels = area.removeFromLeft(sceneWidth);
+        l.grid = area;
+
+        l.cellWidth = juce::jlimit(112, 158, std::max(112, l.grid.getWidth() / 5));
+        l.rowHeight = juce::jlimit(30, 40, std::max(30, l.grid.getHeight() / 7));
+        l.visibleTracks = std::max(1, (l.grid.getWidth() + l.cellWidth - 1) / l.cellWidth);
+        l.visibleScenes = std::max(1, (l.grid.getHeight() + l.rowHeight - 1) / l.rowHeight);
+        return l;
+    }
+
+    void paintToolbarButton(juce::Graphics& g, juce::Rectangle<int> bounds,
+                            const juce::String& text, juce::Colour colour) const
+    {
+        if (bounds.isEmpty())
+            return;
+        g.setColour(colour);
+        g.fillRoundedRectangle(bounds.toFloat(), 3.5f);
+        g.setColour(juce::Colour(0xff526571));
+        g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), 3.5f, 0.8f);
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+        g.drawText(text, bounds.reduced(3, 0), juce::Justification::centred, true);
+    }
+
+    void clampScroll(const DawWorkspace::LiveSessionSnapshot& snapshot)
+    {
+        const auto layout = makeLayout(snapshot);
+        const int maxTrack = std::max(0, static_cast<int>(snapshot.tracks.size()) - layout.visibleTracks);
+        const int maxScene = std::max(0, snapshot.sceneCount - layout.visibleScenes);
+        firstTrack_ = juce::jlimit(0, maxTrack, firstTrack_);
+        firstScene_ = juce::jlimit(0, maxScene, firstScene_);
+    }
+
+    void timerCallback() override
+    {
+        repaint();
+    }
+
+    DawWorkspace& workspace_;
     std::function<void(int)> onTrack_;
-    int selectedScene_ { 1 };
+    int selectedScene_ { 0 };
     int selectedTrack_ { 0 };
+    int firstTrack_ { 0 };
+    int firstScene_ { 0 };
 };
 }
 
@@ -1118,14 +1378,7 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(*dashboardBottomCard_);
 
     sessionGrid_ = std::make_unique<SessionGrid>(
-        [this, names, kinds](int scene)
-        {
-            const int index = juce::jlimit(0, static_cast<int>(names.size()) - 1, scene);
-            setLiveSection(names[static_cast<std::size_t>(index)],
-                           kinds[static_cast<std::size_t>(index)],
-                           kinds[static_cast<std::size_t>(index)] == j3::SectionKind::FreePad ? 1 : 4);
-            refreshDashboard();
-        },
+        dawWorkspace_,
         [this](int channel)
         {
             const int ch = juce::jlimit(0, kMaxChannels - 1, channel);
