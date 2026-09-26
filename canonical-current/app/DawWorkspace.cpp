@@ -2124,6 +2124,14 @@ void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
         return;
     }
 
+    if (rejectStructuralEditWhileLive("mover o recortar clips"))
+    {
+        dragMode_ = DragMode::none;
+        dragUndoSnapshot_.clear();
+        dragChanged_ = false;
+        return;
+    }
+
     const double deltaBeat = static_cast<double>(e.x - dragStartPoint_.x) / pixelsPerBeat();
     const auto quantize = [this, &e](double beat)
     {
@@ -2212,6 +2220,11 @@ void DawWorkspace::mouseUp(const juce::MouseEvent&)
 void DawWorkspace::mouseDoubleClick(const juce::MouseEvent& e)
 {
     const auto tl = timelineBounds();
+    if (liveSessionActive() && tl.contains(e.getPosition()))
+    {
+        rejectStructuralEditWhileLive("editar el arreglo");
+        return;
+    }
     if (e.y >= tl.getY() && e.x >= tl.getX() && e.x < tl.getX() + headerWidth_)
     {
         const int track = trackAtY(e.y);
@@ -2544,6 +2557,7 @@ void DawWorkspace::openSelectedClipEditor()
 
 void DawWorkspace::addTrack()
 {
+    if (rejectStructuralEditWhileLive("agregar pistas")) return;
     if (trackCount_ >= kMaxTracks)
     {
         refreshStatus(juce::String::fromUTF8("Máximo de 48 pistas alcanzado"));
@@ -2565,6 +2579,7 @@ void DawWorkspace::addTrack()
 
 void DawWorkspace::addMidiTrack()
 {
+    if (rejectStructuralEditWhileLive("agregar pistas MIDI")) return;
     if (trackCount_ >= kMaxTracks)
     {
         refreshStatus(juce::String::fromUTF8("Máximo de 48 pistas alcanzado"));
@@ -2590,6 +2605,7 @@ void DawWorkspace::addMidiTrack()
 
 void DawWorkspace::addMidiNote(int track, double startBeat, int note, double lengthBeats, float velocity)
 {
+    if (rejectStructuralEditWhileLive("editar MIDI")) return;
     if (static_cast<int>(midiNotes_.size()) >= kMaxMidiNotes || track < 0 || track >= trackCount_)
         return;
     MidiNote n;
@@ -2611,6 +2627,7 @@ void DawWorkspace::addMidiNote(int track, double startBeat, int note, double len
 
 void DawWorkspace::addPattern16()
 {
+    if (rejectStructuralEditWhileLive("crear patrones")) return;
     if (selectedTrack_ < 0 || selectedTrack_ >= trackCount_ || !tracks_[selectedTrack_].midi)
     {
         checkpointUndo();
@@ -2680,6 +2697,7 @@ DawWorkspace::ClipAudioData* DawWorkspace::loadAudioFile(const juce::File& file,
 
 void DawWorkspace::importFiles(const juce::StringArray& files, int targetTrack, double startBeat)
 {
+    if (rejectStructuralEditWhileLive("importar audio")) return;
     if (files.isEmpty()) return;
     checkpointUndo();
     double cursor = snapBeat(startBeat);
@@ -2735,6 +2753,7 @@ void DawWorkspace::importFiles(const juce::StringArray& files, int targetTrack, 
 
 void DawWorkspace::deleteSelectedClip()
 {
+    if (rejectStructuralEditWhileLive("borrar clips")) return;
     if (selectedMidiNoteId_ >= 0)
     {
         checkpointUndo();
@@ -2769,6 +2788,7 @@ void DawWorkspace::deleteSelectedClip()
 
 void DawWorkspace::duplicateSelectedClip()
 {
+    if (rejectStructuralEditWhileLive("duplicar clips")) return;
     if (selectedMidiNoteId_ >= 0)
     {
         for (const auto& source : midiNotes_)
@@ -2808,6 +2828,7 @@ void DawWorkspace::duplicateSelectedClip()
 
 void DawWorkspace::splitSelectedClipAtPlayhead()
 {
+    if (rejectStructuralEditWhileLive("dividir clips")) return;
     const double playBeat = (static_cast<double>(transportSamples_.load(std::memory_order_relaxed))
         / std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed))) * bpm() / 60.0;
     for (auto& c : clips_)
@@ -2850,6 +2871,7 @@ void DawWorkspace::splitSelectedClipAtPlayhead()
 
 void DawWorkspace::normalizeSelectedClip()
 {
+    if (rejectStructuralEditWhileLive("normalizar clips")) return;
     for (auto& clip : clips_)
     {
         if (clip.id != selectedClipId_ || clip.audio == nullptr)
@@ -2893,6 +2915,7 @@ void DawWorkspace::normalizeSelectedClip()
 
 void DawWorkspace::reverseSelectedClip()
 {
+    if (rejectStructuralEditWhileLive("editar clips")) return;
     for (auto& clip : clips_)
     {
         if (clip.id != selectedClipId_)
@@ -2912,6 +2935,7 @@ void DawWorkspace::reverseSelectedClip()
 
 void DawWorkspace::crossfadeSelectedClip()
 {
+    if (rejectStructuralEditWhileLive("hacer crossfade")) return;
     auto* selected = clipAt({ -1, -1 });
     if (selected == nullptr)
     {
@@ -2967,6 +2991,7 @@ void DawWorkspace::crossfadeSelectedClip()
 
 void DawWorkspace::bounceSelectedClip()
 {
+    if (rejectStructuralEditWhileLive("hacer bounce")) return;
     auto* clip = clipAt({ -1, -1 });
     if (clip == nullptr || clip->audio == nullptr)
     {
@@ -3066,6 +3091,7 @@ void DawWorkspace::bounceSelectedClip()
 
 void DawWorkspace::detectTransientsSelectedClip()
 {
+    if (rejectStructuralEditWhileLive("analizar transientes")) return;
     auto* clip = clipAt({ -1, -1 });
     if (clip == nullptr || clip->audio == nullptr)
     {
@@ -3085,6 +3111,7 @@ void DawWorkspace::detectTransientsSelectedClip()
 
 void DawWorkspace::timeStretchSelectedClip(double factor)
 {
+    if (rejectStructuralEditWhileLive("estirar audio")) return;
     factor = juce::jlimit(0.5, 2.0, factor);
     auto* clip = clipAt({ -1, -1 });
     if (clip == nullptr || clip->audio == nullptr)
@@ -3192,6 +3219,7 @@ void DawWorkspace::timeStretchSelectedClip(double factor)
 
 void DawWorkspace::autoWarpSelectedClip()
 {
+    if (rejectStructuralEditWhileLive("usar Auto Warp")) return;
     auto* clip = clipAt({ -1, -1 });
     if (clip == nullptr || clip->audio == nullptr)
     {
@@ -3253,6 +3281,12 @@ void DawWorkspace::autoWarpSelectedClip()
 
 void DawWorkspace::togglePlay()
 {
+    if (liveSessionActive())
+    {
+        stopLiveClips();
+        return;
+    }
+
     const bool next = !playing_.load(std::memory_order_acquire);
     if (next)
     {
@@ -3536,6 +3570,16 @@ juce::String DawWorkspace::mixerInsertName(int insert) const
 void DawWorkspace::refreshStatus(const juce::String& text)
 {
     statusLabel_.setText(text, juce::dontSendNotification);
+}
+
+bool DawWorkspace::rejectStructuralEditWhileLive(const juce::String& action)
+{
+    if (!liveSessionActive())
+        return false;
+
+    refreshStatus(juce::String::fromUTF8("LIVE LOCK · STOP CLIPS antes de ")
+        + action + juce::String::fromUTF8(". Mixer, FX, mute/solo y controles LIVE siguen disponibles."));
+    return true;
 }
 
 void DawWorkspace::prepare(double sampleRate, int maximumBlockSize)
@@ -4353,6 +4397,7 @@ void DawWorkspace::pushUndoSnapshot(const juce::String& snapshot)
 
 void DawWorkspace::undo()
 {
+    if (rejectStructuralEditWhileLive("deshacer cambios estructurales")) return;
     if (undoStack_.empty()) return;
     redoStack_.push_back(serializeProject());
     const auto snapshot = undoStack_.back();
@@ -4363,6 +4408,7 @@ void DawWorkspace::undo()
 
 void DawWorkspace::redo()
 {
+    if (rejectStructuralEditWhileLive("rehacer cambios estructurales")) return;
     if (redoStack_.empty()) return;
     undoStack_.push_back(serializeProject());
     const auto snapshot = redoStack_.back();
@@ -4380,6 +4426,7 @@ juce::String DawWorkspace::serializeProject() const
     root.setAttribute("viewStartBeat", viewStartBeat_);
     root.setAttribute("zoom", zoom_);
     root.setAttribute("firstVisibleTrack", firstVisibleTrack_);
+    root.setAttribute("liveQuantizationBeats", liveQuantizationBeats_.load(std::memory_order_relaxed));
 
     auto* tracksXml = root.createNewChildElement("Tracks");
     for (int i = 0; i < trackCount_; ++i)
@@ -4455,6 +4502,7 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
     zoomSlider_.setValue(zoom_, juce::dontSendNotification);
     firstVisibleTrack_ = juce::jlimit(0, std::max(0, trackCount_ - 1),
         xml->getIntAttribute("firstVisibleTrack", 0));
+    setLiveQuantizationBeats(xml->getIntAttribute("liveQuantizationBeats", 4));
 
     if (auto* tracksXml = xml->getChildByName("Tracks"))
     {
@@ -4575,6 +4623,7 @@ void DawWorkspace::saveProjectInteractive(bool saveAs)
 
 void DawWorkspace::openProjectInteractive()
 {
+    if (rejectStructuralEditWhileLive("abrir otro proyecto")) return;
     chooser_ = std::make_unique<juce::FileChooser>("Abrir proyecto J3 Worship", juce::File{}, "*.j3w");
     chooser_->launchAsync(juce::FileBrowserComponent::openMode
                             | juce::FileBrowserComponent::canSelectFiles,
@@ -4590,6 +4639,7 @@ void DawWorkspace::openProjectInteractive()
 
 void DawWorkspace::newProject()
 {
+    if (rejectStructuralEditWhileLive("crear un proyecto nuevo")) return;
     checkpointUndo();
     stopTransport(true);
     if (trackRecording_.load(std::memory_order_acquire))
