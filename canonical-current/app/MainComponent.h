@@ -148,6 +148,7 @@ private:
     void loadSelectedPlugin();
     void loadPluginPathIntoSlot(const juce::String& path, int channel, int slot);
     void removeSelectedPlugin();
+    void moveSelectedPlugin(int delta);
     void openSelectedPluginEditor();
     void restoreSavedPluginsAfterScan();
     bool pluginMutationLocked() const noexcept;
@@ -386,6 +387,8 @@ private:
     juce::TextButton scanPluginsButton_ { "SCAN VST3" };
     juce::TextButton loadPluginButton_ { "LOAD INSERT" };
     juce::TextButton removePluginButton_ { "REMOVE" };
+    juce::TextButton movePluginUpButton_ { "MOVE UP" };
+    juce::TextButton movePluginDownButton_ { "MOVE DOWN" };
     juce::ToggleButton bypassPluginButton_ { "BYPASS" };
     juce::TextButton openPluginEditorButton_ { "OPEN PARAMETERS" };
     juce::Label pluginStatusLabel_;
