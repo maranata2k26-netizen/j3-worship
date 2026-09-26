@@ -2382,6 +2382,8 @@ void DawWorkspace::openSelectedClipEditor()
         {
             if (safe == nullptr)
                 return;
+            if (safe->rejectStructuralEditWhileLive("cambiar el ruteo del clip"))
+                return;
             for (auto& clip : safe->clips_)
             {
                 if (clip.id != clipId)
@@ -2404,6 +2406,7 @@ void DawWorkspace::openSelectedClipEditor()
         [safe, clipId](float db)
         {
             if (safe == nullptr) return;
+            if (safe->rejectStructuralEditWhileLive("editar el gain del clip")) return;
             for (auto& clip : safe->clips_)
                 if (clip.id == clipId)
                 {
@@ -2420,6 +2423,7 @@ void DawWorkspace::openSelectedClipEditor()
         [safe, clipId](float pan)
         {
             if (safe == nullptr) return;
+            if (safe->rejectStructuralEditWhileLive("editar el pan del clip")) return;
             for (auto& clip : safe->clips_)
                 if (clip.id == clipId)
                 {
@@ -2435,6 +2439,7 @@ void DawWorkspace::openSelectedClipEditor()
         [safe, clipId](double beats)
         {
             if (safe == nullptr) return;
+            if (safe->rejectStructuralEditWhileLive("editar fades del clip")) return;
             for (auto& clip : safe->clips_)
                 if (clip.id == clipId)
                 {
@@ -2450,6 +2455,7 @@ void DawWorkspace::openSelectedClipEditor()
         [safe, clipId](double beats)
         {
             if (safe == nullptr) return;
+            if (safe->rejectStructuralEditWhileLive("editar fades del clip")) return;
             for (auto& clip : safe->clips_)
                 if (clip.id == clipId)
                 {
@@ -2465,6 +2471,7 @@ void DawWorkspace::openSelectedClipEditor()
         [safe, clipId](bool shouldReverse)
         {
             if (safe == nullptr) return;
+            if (safe->rejectStructuralEditWhileLive("hacer reverse")) return;
             for (auto& clip : safe->clips_)
                 if (clip.id == clipId)
                 {
@@ -2487,6 +2494,7 @@ void DawWorkspace::openSelectedClipEditor()
         [safe, clipId]
         {
             if (safe == nullptr) return;
+            if (safe->rejectStructuralEditWhileLive("reemplazar audio")) return;
             safe->chooser_ = std::make_unique<juce::FileChooser>(
                 "Replace audio", juce::File{}, "*.wav;*.mp3;*.flac;*.aif;*.aiff");
             safe->chooser_->launchAsync(
@@ -2494,6 +2502,7 @@ void DawWorkspace::openSelectedClipEditor()
                 [safe, clipId](const juce::FileChooser& chooser)
                 {
                     if (safe == nullptr) return;
+                    if (safe->rejectStructuralEditWhileLive("reemplazar audio")) return;
                     const auto file = chooser.getResult();
                     if (!file.existsAsFile()) return;
                     juce::String error;
