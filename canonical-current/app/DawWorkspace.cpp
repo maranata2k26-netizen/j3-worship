@@ -116,7 +116,7 @@ DawWorkspace::DawWorkspace()
         tracks_[i].colour = trackColour(i);
     }
     tracks_[0].name = "Voz";
-    tracks_[1].name = "Batería";
+    tracks_[1].name = L"Batería";
     tracks_[2].name = "Bajo";
     tracks_[3].name = "Guitarra";
     tracks_[4].name = "Teclado";
@@ -134,7 +134,7 @@ DawWorkspace::DawWorkspace()
     {
         const auto xml = recover.loadFileAsString();
         if (xml.isNotEmpty() && restoreProject(xml, false))
-            refreshStatus("Sesión recuperada automáticamente");
+            refreshStatus(L"Sesión recuperada automáticamente");
     }
 
     startTimerHz(30);
@@ -275,7 +275,7 @@ void DawWorkspace::configureControls()
     }
     fitProjectButton_.setTooltip("Fit Project");
     fitSelectionButton_.setTooltip("Fit Selection");
-    resetWorkspaceButton_.setTooltip("Restaurar distribución del workspace");
+    resetWorkspaceButton_.setTooltip(L"Restaurar distribución del workspace");
     fitProjectButton_.onClick = [this] { fitProject(); };
     fitSelectionButton_.onClick = [this] { fitSelection(); };
     resetWorkspaceButton_.onClick = [this] { resetWorkspace(); };
@@ -464,13 +464,13 @@ void DawWorkspace::paint(juce::Graphics& g)
     g.drawText("INSPECTOR", inspector.reduced(10, 7).removeFromTop(18), juce::Justification::centredLeft);
     g.setColour(juce::Colour(kMuted));
     g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
-    g.drawText(selectedClipId_ >= 0 ? "CLIP · AUDIO" : (tracks_[selectedTrack_].midi ? "TRACK · MIDI" : "TRACK · AUDIO"),
+    g.drawText(selectedClipId_ >= 0 ? L"CLIP · AUDIO" : (tracks_[selectedTrack_].midi ? L"TRACK · MIDI" : L"TRACK · AUDIO"),
                inspector.getX() + 10, inspector.getY() + 23, std::max(0, inspector.getWidth() - 20), 14,
                juce::Justification::centredLeft);
 
     g.setColour(juce::Colour(kText));
     g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
-    g.drawText("MIXER · QUICK VIEW", mixer.getX() + 10, mixer.getY() + 5, 180, 18, juce::Justification::centredLeft);
+    g.drawText(L"MIXER · QUICK VIEW", mixer.getX() + 10, mixer.getY() + 5, 180, 18, juce::Justification::centredLeft);
     auto mixerContent = mixer.reduced(8, 25);
     const int visibleMixerTracks = std::min(8, trackCount_);
     const int mixerStripWidth = visibleMixerTracks > 0 ? std::max(1, mixerContent.getWidth() / visibleMixerTracks) : mixerContent.getWidth();
@@ -550,7 +550,7 @@ void DawWorkspace::paint(juce::Graphics& g)
         g.setFont(juce::FontOptions(10.5f));
         g.setColour(juce::Colour(kMuted));
         const juce::String typeText = tracks_[t].midi ? "MIDI / PIANO ROLL" : "AUDIO";
-        g.drawText(typeText + juce::String("  ·  ") + juce::String(gainToDb(tracks_[t].gain), 1) + " dB",
+        g.drawText(typeText + juce::String(L"  ·  ") + juce::String(gainToDb(tracks_[t].gain), 1) + " dB",
                    meta.removeFromLeft(std::max(48, meta.getWidth() - 74)), juce::Justification::centredLeft);
 
         auto chipArea = meta.reduced(0, 3);
@@ -703,7 +703,7 @@ void DawWorkspace::paint(juce::Graphics& g)
 
     g.setColour(juce::Colour(0xff6f8492));
     g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
-    g.drawText("J3 ARRANGER  ·  AUDIO + MIDI  ·  SPACE PLAY/STOP  ·  CTRL+S  ·  CTRL+Z/Y",
+    g.drawText(L"J3 ARRANGER  ·  AUDIO + MIDI  ·  SPACE PLAY/STOP  ·  CTRL+S  ·  CTRL+Z/Y",
                std::max(8, getWidth() - 540), mixer.getBottom() - 18, std::min(532, getWidth() - 16), 15,
                juce::Justification::centredRight);
 }
@@ -1568,7 +1568,7 @@ void DawWorkspace::mouseDoubleClick(const juce::MouseEvent& e)
                 selectedClipId_ = c->id;
                 selectedTrack_ = c->track;
                 fitSelection();
-                refreshStatus("Editor de audio · waveform ampliada");
+                refreshStatus(L"Editor de audio · waveform ampliada");
                 return;
             }
 
@@ -1658,7 +1658,7 @@ void DawWorkspace::addTrack()
 {
     if (trackCount_ >= kMaxTracks)
     {
-        refreshStatus("Máximo de 48 pistas alcanzado");
+        refreshStatus(L"Máximo de 48 pistas alcanzado");
         return;
     }
     const int i = trackCount_++;
@@ -1678,7 +1678,7 @@ void DawWorkspace::addMidiTrack()
 {
     if (trackCount_ >= kMaxTracks)
     {
-        refreshStatus("Máximo de 48 pistas alcanzado");
+        refreshStatus(L"Máximo de 48 pistas alcanzado");
         return;
     }
     const int i = trackCount_++;
@@ -1695,7 +1695,7 @@ void DawWorkspace::addMidiTrack()
     markRenderDirty();
     syncInspector();
     repaint();
-    refreshStatus("Pista MIDI creada · doble clic para dibujar notas");
+    refreshStatus(L"Pista MIDI creada · doble clic para dibujar notas");
 }
 
 void DawWorkspace::addMidiNote(int track, double startBeat, int note, double lengthBeats, float velocity)
@@ -1737,7 +1737,7 @@ void DawWorkspace::addPattern16()
     for (int step = 0; step < 16; ++step)
         addMidiNote(selectedTrack_, start + step * 0.25, pattern[static_cast<std::size_t>(step)],
                     0.22, step % 4 == 0 ? 0.92f : 0.70f);
-    refreshStatus("Pattern MIDI de 16 pasos creado · editable en el piano roll");
+    refreshStatus(L"Pattern MIDI de 16 pasos creado · editable en el piano roll");
 }
 
 DawWorkspace::ClipAudioData* DawWorkspace::audioForPath(const juce::String& path) const
@@ -1809,7 +1809,7 @@ void DawWorkspace::importFiles(const juce::StringArray& files, int targetTrack, 
         }
         if (static_cast<int>(clips_.size()) >= kMaxClips)
         {
-            lastError = "Máximo de 512 clips alcanzado";
+            lastError = L"Máximo de 512 clips alcanzado";
             break;
         }
 
@@ -1979,7 +1979,7 @@ void DawWorkspace::normalizeSelectedClip()
 
         if (peak <= 1.0e-7f)
         {
-            refreshStatus("Normalize: el clip no contiene señal útil.");
+            refreshStatus(L"Normalize: el clip no contiene señal útil.");
             return;
         }
 
@@ -1993,7 +1993,7 @@ void DawWorkspace::normalizeSelectedClip()
         markRenderDirty();
         syncInspector();
         repaint();
-        refreshStatus("Clip normalizado a -1 dBFS de pico · no destructivo");
+        refreshStatus(L"Clip normalizado a -1 dBFS de pico · no destructivo");
         return;
     }
 }
@@ -2011,7 +2011,7 @@ void DawWorkspace::reverseSelectedClip()
         markRenderDirty();
         syncInspector();
         repaint();
-        refreshStatus(clip.reversed ? "Reverse activado · no destructivo"
+        refreshStatus(clip.reversed ? L"Reverse activado · no destructivo"
                                     : "Reverse desactivado");
         return;
     }
@@ -2022,7 +2022,7 @@ void DawWorkspace::crossfadeSelectedClip()
     auto* selected = clipAt({ -1, -1 });
     if (selected == nullptr)
     {
-        refreshStatus("Crossfade: seleccioná un clip de audio.");
+        refreshStatus(L"Crossfade: seleccioná un clip de audio.");
         return;
     }
 
@@ -2069,7 +2069,7 @@ void DawWorkspace::crossfadeSelectedClip()
     markRenderDirty();
     syncInspector();
     repaint();
-    refreshStatus("Crossfade equal-power aplicado · " + juce::String(overlap, 2) + " beats");
+    refreshStatus(L"Crossfade equal-power aplicado · " + juce::String(overlap, 2) + " beats");
 }
 
 void DawWorkspace::bounceSelectedClip()
@@ -2077,7 +2077,7 @@ void DawWorkspace::bounceSelectedClip()
     auto* clip = clipAt({ -1, -1 });
     if (clip == nullptr || clip->audio == nullptr)
     {
-        refreshStatus("Bounce: seleccioná un clip de audio.");
+        refreshStatus(L"Bounce: seleccioná un clip de audio.");
         return;
     }
 
@@ -2090,7 +2090,7 @@ void DawWorkspace::bounceSelectedClip()
     if (sourceSamples <= 0 || outputSamples64 <= 0
         || outputSamples64 > static_cast<std::int64_t>(std::numeric_limits<int>::max()))
     {
-        refreshStatus("Bounce: duración de clip inválida o demasiado grande.");
+        refreshStatus(L"Bounce: duración de clip inválida o demasiado grande.");
         return;
     }
     const int outputSamples = static_cast<int>(outputSamples64);
@@ -2168,7 +2168,7 @@ void DawWorkspace::bounceSelectedClip()
     markRenderDirty();
     syncInspector();
     repaint();
-    refreshStatus("Bounce in place listo · " + file.getFileName());
+    refreshStatus(L"Bounce in place listo · " + file.getFileName());
 }
 
 void DawWorkspace::togglePlay()
@@ -2250,7 +2250,7 @@ bool DawWorkspace::startTrackRecording()
 
     if (recordArmedCount_ <= 0)
     {
-        refreshStatus("Armá al menos una pista de audio para grabar.");
+        refreshStatus(L"Armá al menos una pista de audio para grabar.");
         return false;
     }
 
@@ -2261,7 +2261,7 @@ bool DawWorkspace::startTrackRecording()
         .getChildFile(now.formatted("%H%M%S-DAW"));
     if (!currentTakeDirectory_.createDirectory())
     {
-        refreshStatus("No se pudo crear la carpeta de grabación DAW.");
+        refreshStatus(L"No se pudo crear la carpeta de grabación DAW.");
         return false;
     }
 
@@ -2292,8 +2292,8 @@ bool DawWorkspace::startTrackRecording()
         togglePlay();
 
     recordButton_.setButtonText("STOP REC");
-    refreshStatus("REC DAW activo · " + juce::String(recordArmedCount_)
-        + " pista(s) armada(s) · entradas activas en orden");
+    refreshStatus(L"REC DAW activo · " + juce::String(recordArmedCount_)
+        + L" pista(s) armada(s) · entradas activas en orden");
     repaint();
     return true;
 }
@@ -2309,14 +2309,14 @@ void DawWorkspace::stopTrackRecording(bool importTake)
 
     if (!ok)
     {
-        refreshStatus("La grabación terminó con error: " + juce::String(error));
+        refreshStatus(L"La grabación terminó con error: " + juce::String(error));
         return;
     }
 
     if (importTake)
         importRecordedTake();
     else
-        refreshStatus("Grabación DAW detenida.");
+        refreshStatus(L"Grabación DAW detenida.");
 }
 
 void DawWorkspace::importRecordedTake()
@@ -2341,7 +2341,7 @@ void DawWorkspace::importRecordedTake()
         }
         if (static_cast<int>(clips_.size()) >= kMaxClips)
         {
-            lastError = "Máximo de 512 clips alcanzado";
+            lastError = L"Máximo de 512 clips alcanzado";
             break;
         }
 
@@ -2366,7 +2366,7 @@ void DawWorkspace::importRecordedTake()
         rebuildRenderState();
         syncInspector();
         autosaveRecovery();
-        refreshStatus("Toma DAW importada · " + juce::String(imported) + " clip(s)");
+        refreshStatus(L"Toma DAW importada · " + juce::String(imported) + " clip(s)");
     }
     else
     {
@@ -2708,7 +2708,7 @@ void DawWorkspace::timerCallback()
 void DawWorkspace::emergencyStop()
 {
     stopTransport(false);
-    refreshStatus("STOP ALL · reproducción detenida");
+    refreshStatus(L"STOP ALL · reproducción detenida");
 }
 
 void DawWorkspace::setTempoFromHost(double value)
@@ -2924,7 +2924,7 @@ bool DawWorkspace::saveProject(const juce::File& file)
     projectFile_ = target;
     projectDirty_ = false;
     recoveryFile().deleteFile();
-    refreshStatus("Guardado · " + target.getFileName());
+    refreshStatus(L"Guardado · " + target.getFileName());
     return true;
 }
 
@@ -2981,7 +2981,7 @@ void DawWorkspace::newProject()
         tracks_[i].colour = trackColour(i);
     }
     tracks_[0].name = "Voz";
-    tracks_[1].name = "Batería";
+    tracks_[1].name = L"Batería";
     tracks_[2].name = "Bajo";
     tracks_[3].name = "Guitarra";
     tracks_[4].name = "Teclado";
