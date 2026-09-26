@@ -342,11 +342,33 @@ class AudioClipRoutingEditor final : public juce::Component
 {
 public:
     AudioClipRoutingEditor(const juce::String& clipName,
+                           const juce::String& filePath,
                            int currentInsert,
+                           float gainDb,
+                           double startBeat,
+                           double lengthBeats,
+                           double durationSeconds,
+                           double fadeInBeats,
+                           double fadeOutBeats,
+                           bool reversed,
                            std::function<void(int)> onRoute,
+                           std::function<void(float)> onGain,
+                           std::function<void(double)> onFadeIn,
+                           std::function<void(double)> onFadeOut,
+                           std::function<void(bool)> onReverse,
+                           std::function<void()> onNormalize,
+                           std::function<void()> onReplace,
+                           std::function<void()> onReveal,
                            std::function<void(int)> onOpenMixer,
                            std::function<void(int)> onOpenFx)
         : onRoute_(std::move(onRoute)),
+          onGain_(std::move(onGain)),
+          onFadeIn_(std::move(onFadeIn)),
+          onFadeOut_(std::move(onFadeOut)),
+          onReverse_(std::move(onReverse)),
+          onNormalize_(std::move(onNormalize)),
+          onReplace_(std::move(onReplace)),
+          onReveal_(std::move(onReveal)),
           onOpenMixer_(std::move(onOpenMixer)),
           onOpenFx_(std::move(onOpenFx))
     {
@@ -356,11 +378,25 @@ public:
         addAndMakeVisible(title_);
 
         name_.setText(clipName.isNotEmpty() ? clipName : "Audio", juce::dontSendNotification);
-        name_.setFont(juce::FontOptions(14.0f));
-        name_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
+        name_.setFont(juce::FontOptions(15.0f, juce::Font::bold));
+        name_.setColour(juce::Label::textColourId, juce::Colour(kText));
         addAndMakeVisible(name_);
 
-        routeLabel_.setText("MIXER ROUTING", juce::dontSendNotification);
+        file_.setText(filePath, juce::dontSendNotification);
+        file_.setFont(juce::FontOptions(11.0f));
+        file_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
+        file_.setTooltip(filePath);
+        addAndMakeVisible(file_);
+
+        info_.setText("Start " + juce::String(startBeat, 2) + " beats"
+                      + juce::String::fromUTF8(" · Length ") + juce::String(lengthBeats, 2) + " beats"
+                      + juce::String::fromUTF8(" · Source ") + juce::String(durationSeconds, 2) + " s",
+                      juce::dontSendNotification);
+        info_.setFont(juce::FontOptions(12.0f));
+        info_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
+        addAndMakeVisible(info_);
+
+        routeLabel_.setText("TRACK ROUTING", juce::dontSendNotification);
         routeLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
         routeLabel_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
         addAndMakeVisible(routeLabel_);
@@ -375,8 +411,50 @@ public:
         };
         addAndMakeVisible(insertBox_);
 
-        mixerButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173246));
+        configureSlider(gain_, -60.0, 12.0, 0.1, gainDb, " dB");
+        gain_.setTooltip("Clip gain antes de entrar al mixer.");
+        gain_.onValueChange = [this] { if (onGain_) onGain_(static_cast<float>(gain_.getValue())); };
+        addAndMakeVisible(gain_);
+
+        configureSlider(fadeIn_, 0.0, std::max(0.25, lengthBeats), 0.01,
+                        juce::jlimit(0.0, std::max(0.25, lengthBeats), fadeInBeats), " beats");
+        fadeIn_.setTooltip("Fade In del clip.");
+        fadeIn_.onValueChange = [this] { if (onFadeIn_) onFadeIn_(fadeIn_.getValue()); };
+        addAndMakeVisible(fadeIn_);
+
+        configureSlider(fadeOut_, 0.0, std::max(0.25, lengthBeats), 0.01,
+                        juce::jlimit(0.0, std::max(0.25, lengthBeats), fadeOutBeats), " beats");
+        fadeOut_.setTooltip("Fade Out del clip.");
+        fadeOut_.onValueChange = [this] { if (onFadeOut_) onFadeOut_(fadeOut_.getValue()); };
+        addAndMakeVisible(fadeOut_);
+
+        gainLabel_.setText("VOLUME", juce::dontSendNotification);
+        fadeInLabel_.setText("FADE IN", juce::dontSendNotification);
+        fadeOutLabel_.setText("FADE OUT", juce::dontSendNotification);
+        for (auto* label : { &gainLabel_, &fadeInLabel_, &fadeOutLabel_ })
+        {
+            label->setFont(juce::FontOptions(10.5f, juce::Font::bold));
+            label->setColour(juce::Label::textColourId, juce::Colour(kMuted));
+            addAndMakeVisible(*label);
+        }
+
+        reverse_.setButtonText("REVERSE");
+        reverse_.setToggleState(reversed, juce::dontSendNotification);
+        reverse_.setColour(juce::ToggleButton::textColourId, juce::Colour(kText));
+        reverse_.onClick = [this] { if (onReverse_) onReverse_(reverse_.getToggleState()); };
+        addAndMakeVisible(reverse_);
+
+        for (auto* button : { &normalize_, &replace_, &reveal_, &mixerButton_, &fxButton_ })
+        {
+            button->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173246));
+            addAndMakeVisible(*button);
+        }
+        normalize_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff22527a));
         fxButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff22527a));
+
+        normalize_.onClick = [this] { if (onNormalize_) onNormalize_(); };
+        replace_.onClick = [this] { if (onReplace_) onReplace_(); };
+        reveal_.onClick = [this] { if (onReveal_) onReveal_(); };
         mixerButton_.onClick = [this]
         {
             const int insert = juce::jlimit(0, 47, insertBox_.getSelectedId() - 1);
@@ -387,17 +465,15 @@ public:
             const int insert = juce::jlimit(0, 47, insertBox_.getSelectedId() - 1);
             if (onOpenFx_) onOpenFx_(insert);
         };
-        addAndMakeVisible(mixerButton_);
-        addAndMakeVisible(fxButton_);
 
-        hint_.setText(juce::String::fromUTF8("Este audio entra al Insert seleccionado. Fader, pan, bus/DCA y los 8 FX slots procesan su señal."),
-                      juce::dontSendNotification);
-        hint_.setFont(juce::FontOptions(12.0f));
-        hint_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
-        hint_.setJustificationType(juce::Justification::topLeft);
+        hint_.setText(juce::String::fromUTF8(
+            "Flujo real: AUDIO CLIP → TRACK → MIXER INSERT → FX CHAIN → BUS / MASTER → OUTPUT."),
+            juce::dontSendNotification);
+        hint_.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        hint_.setColour(juce::Label::textColourId, juce::Colour(kAccent));
         addAndMakeVisible(hint_);
 
-        setSize(470, 226);
+        setSize(640, 430);
     }
 
     void paint(juce::Graphics& g) override
@@ -406,7 +482,7 @@ public:
         g.setColour(juce::Colour(kBorder));
         g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 8.0f, 1.0f);
         g.setColour(juce::Colour(kAccent));
-        g.fillRoundedRectangle(18.0f, 63.0f, static_cast<float>(getWidth() - 36), 2.0f, 1.0f);
+        g.fillRoundedRectangle(18.0f, 94.0f, static_cast<float>(getWidth() - 36), 2.0f, 1.0f);
     }
 
     void resized() override
@@ -414,31 +490,88 @@ public:
         auto r = getLocalBounds().reduced(18);
         title_.setBounds(r.removeFromTop(28));
         name_.setBounds(r.removeFromTop(24));
-        r.removeFromTop(12);
+        file_.setBounds(r.removeFromTop(20));
+        info_.setBounds(r.removeFromTop(22));
+        r.removeFromTop(10);
+
         routeLabel_.setBounds(r.removeFromTop(18));
-        insertBox_.setBounds(r.removeFromTop(32));
+        insertBox_.setBounds(r.removeFromTop(34));
         r.removeFromTop(10);
-        auto buttons = r.removeFromTop(34);
-        mixerButton_.setBounds(buttons.removeFromLeft(142));
-        buttons.removeFromLeft(8);
-        fxButton_.setBounds(buttons.removeFromLeft(142));
+
+        auto labels = r.removeFromTop(18);
+        gainLabel_.setBounds(labels.removeFromLeft(190));
+        labels.removeFromLeft(12);
+        fadeInLabel_.setBounds(labels.removeFromLeft(190));
+        labels.removeFromLeft(12);
+        fadeOutLabel_.setBounds(labels.removeFromLeft(190));
+
+        auto sliders = r.removeFromTop(42);
+        gain_.setBounds(sliders.removeFromLeft(190));
+        sliders.removeFromLeft(12);
+        fadeIn_.setBounds(sliders.removeFromLeft(190));
+        sliders.removeFromLeft(12);
+        fadeOut_.setBounds(sliders.removeFromLeft(190));
         r.removeFromTop(10);
-        hint_.setBounds(r);
+
+        auto tools = r.removeFromTop(34);
+        reverse_.setBounds(tools.removeFromLeft(110));
+        tools.removeFromLeft(8);
+        normalize_.setBounds(tools.removeFromLeft(120));
+        tools.removeFromLeft(8);
+        replace_.setBounds(tools.removeFromLeft(140));
+        tools.removeFromLeft(8);
+        reveal_.setBounds(tools.removeFromLeft(160));
+        r.removeFromTop(12);
+
+        auto buttons = r.removeFromTop(36);
+        mixerButton_.setBounds(buttons.removeFromLeft(190));
+        buttons.removeFromLeft(10);
+        fxButton_.setBounds(buttons.removeFromLeft(190));
+        r.removeFromTop(14);
+        hint_.setBounds(r.removeFromTop(28));
     }
 
 private:
+    static void configureSlider(juce::Slider& slider, double min, double max, double step,
+                                double value, const juce::String& suffix)
+    {
+        slider.setSliderStyle(juce::Slider::LinearHorizontal);
+        slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 80, 24);
+        slider.setRange(min, max, step);
+        slider.setValue(value, juce::dontSendNotification);
+        slider.setTextValueSuffix(suffix);
+    }
+
     juce::Label title_;
     juce::Label name_;
+    juce::Label file_;
+    juce::Label info_;
     juce::Label routeLabel_;
+    juce::Label gainLabel_;
+    juce::Label fadeInLabel_;
+    juce::Label fadeOutLabel_;
     juce::ComboBox insertBox_;
+    juce::Slider gain_;
+    juce::Slider fadeIn_;
+    juce::Slider fadeOut_;
+    juce::ToggleButton reverse_;
+    juce::TextButton normalize_ { "NORMALIZE" };
+    juce::TextButton replace_ { "REPLACE AUDIO" };
+    juce::TextButton reveal_ { "OPEN LOCATION" };
     juce::TextButton mixerButton_ { "OPEN MIXER" };
     juce::TextButton fxButton_ { "FX / PLUGINS" };
     juce::Label hint_;
     std::function<void(int)> onRoute_;
+    std::function<void(float)> onGain_;
+    std::function<void(double)> onFadeIn_;
+    std::function<void(double)> onFadeOut_;
+    std::function<void(bool)> onReverse_;
+    std::function<void()> onNormalize_;
+    std::function<void()> onReplace_;
+    std::function<void()> onReveal_;
     std::function<void(int)> onOpenMixer_;
     std::function<void(int)> onOpenFx_;
-};
-}
+};}
 
 DawWorkspace::DawWorkspace()
 {
@@ -2171,7 +2304,15 @@ void DawWorkspace::openSelectedClipEditor()
 
     auto editor = std::make_unique<AudioClipRoutingEditor>(
         clipName,
+        selected->audio->path,
         insert,
+        gainToDb(selected->gain),
+        selected->startBeat,
+        selected->lengthBeats,
+        selected->audio->durationSeconds,
+        selected->fadeInBeats,
+        selected->fadeOutBeats,
+        selected->reversed,
         [safe, clipId](int newInsert)
         {
             if (safe == nullptr)
@@ -2194,6 +2335,123 @@ void DawWorkspace::openSelectedClipEditor()
                 safe->refreshStatus("Mixer Insert " + juce::String(newInsert + 1));
                 return;
             }
+        },
+        [safe, clipId](float db)
+        {
+            if (safe == nullptr) return;
+            for (auto& clip : safe->clips_)
+                if (clip.id == clipId)
+                {
+                    safe->checkpointUndo();
+                    clip.gain = dbToGain(db);
+                    safe->projectDirty_ = true;
+                    safe->markRenderDirty();
+                    safe->rebuildRenderState();
+                    safe->syncInspector();
+                    safe->repaint();
+                    return;
+                }
+        },
+        [safe, clipId](double beats)
+        {
+            if (safe == nullptr) return;
+            for (auto& clip : safe->clips_)
+                if (clip.id == clipId)
+                {
+                    clip.fadeInBeats = juce::jlimit(0.0, clip.lengthBeats, beats);
+                    safe->projectDirty_ = true;
+                    safe->markRenderDirty();
+                    safe->rebuildRenderState();
+                    safe->syncInspector();
+                    safe->repaint();
+                    return;
+                }
+        },
+        [safe, clipId](double beats)
+        {
+            if (safe == nullptr) return;
+            for (auto& clip : safe->clips_)
+                if (clip.id == clipId)
+                {
+                    clip.fadeOutBeats = juce::jlimit(0.0, clip.lengthBeats, beats);
+                    safe->projectDirty_ = true;
+                    safe->markRenderDirty();
+                    safe->rebuildRenderState();
+                    safe->syncInspector();
+                    safe->repaint();
+                    return;
+                }
+        },
+        [safe, clipId](bool shouldReverse)
+        {
+            if (safe == nullptr) return;
+            for (auto& clip : safe->clips_)
+                if (clip.id == clipId)
+                {
+                    safe->checkpointUndo();
+                    clip.reversed = shouldReverse;
+                    safe->projectDirty_ = true;
+                    safe->markRenderDirty();
+                    safe->rebuildRenderState();
+                    safe->syncInspector();
+                    safe->repaint();
+                    return;
+                }
+        },
+        [safe, clipId]
+        {
+            if (safe == nullptr) return;
+            safe->selectedClipId_ = clipId;
+            safe->normalizeSelectedClip();
+        },
+        [safe, clipId]
+        {
+            if (safe == nullptr) return;
+            safe->chooser_ = std::make_unique<juce::FileChooser>(
+                "Replace audio", juce::File{}, "*.wav;*.mp3;*.flac;*.aif;*.aiff");
+            safe->chooser_->launchAsync(
+                juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                [safe, clipId](const juce::FileChooser& chooser)
+                {
+                    if (safe == nullptr) return;
+                    const auto file = chooser.getResult();
+                    if (!file.existsAsFile()) return;
+                    juce::String error;
+                    auto* audio = safe->loadAudioFile(file, error);
+                    if (audio == nullptr)
+                    {
+                        safe->refreshStatus(error);
+                        return;
+                    }
+                    for (auto& clip : safe->clips_)
+                        if (clip.id == clipId)
+                        {
+                            safe->checkpointUndo();
+                            clip.audio = audio;
+                            clip.sourceOffsetSeconds = 0.0;
+                            clip.lengthBeats = std::max(0.05, audio->durationSeconds * safe->bpm() / 60.0);
+                            clip.fadeInBeats = std::min(clip.fadeInBeats, clip.lengthBeats);
+                            clip.fadeOutBeats = std::min(clip.fadeOutBeats, clip.lengthBeats);
+                            safe->projectDirty_ = true;
+                            safe->markRenderDirty();
+                            safe->rebuildRenderState();
+                            safe->syncInspector();
+                            safe->autosaveRecovery();
+                            safe->repaint();
+                            safe->refreshStatus("Audio replaced: " + file.getFileName());
+                            return;
+                        }
+                });
+        },
+        [safe, clipId]
+        {
+            if (safe == nullptr) return;
+            for (const auto& clip : safe->clips_)
+                if (clip.id == clipId && clip.audio != nullptr)
+                {
+                    juce::File(clip.audio->path).revealToUser();
+                    return;
+                }
         },
         [safe](int targetInsert)
         {
