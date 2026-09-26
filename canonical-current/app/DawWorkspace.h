@@ -67,6 +67,8 @@ private:
         double sampleRate { 48000.0 };
         juce::String path;
         double durationSeconds { 0.0 };
+        std::vector<int> transientSamples;
+        bool transientsAnalyzed { false };
     };
 
     struct Track
@@ -208,6 +210,9 @@ private:
     void reverseSelectedClip();
     void crossfadeSelectedClip();
     void bounceSelectedClip();
+    void detectTransientsSelectedClip();
+    void timeStretchSelectedClip(double factor);
+    void autoWarpSelectedClip();
     void stopTransport(bool returnToStart);
     void togglePlay();
     void setTransportBeat(double beat) noexcept;
