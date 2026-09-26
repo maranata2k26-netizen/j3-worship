@@ -1923,6 +1923,11 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     shuttingDown_.store(true, std::memory_order_release);
+    if (pluginScanThread_.joinable())
+    {
+        pluginScanThread_.request_stop();
+        pluginScanThread_.join();
+    }
     stopTimer();
     liveMonitorEnabled_.store(false, std::memory_order_release);
     recordingEnabled_.store(false, std::memory_order_release);
@@ -3555,17 +3560,25 @@ void MainComponent::scanVst3Plugins()
         "Escaneando VST3 reales en segundo plano... podés seguir usando el audio.",
         juce::dontSendNotification);
 
+    if (pluginScanThread_.joinable())
+        pluginScanThread_.join();
+
     auto safe = juce::Component::SafePointer<MainComponent>(this);
-    std::thread([safe, roots = std::move(roots)]() mutable
+    pluginScanThread_ = std::jthread([safe, roots = std::move(roots)](std::stop_token stop) mutable
     {
         j3::PluginCatalog scannedBundles;
         scannedBundles.scan(roots);
+        if (stop.stop_requested())
+            return;
 
         std::vector<juce::PluginDescription> descriptions;
         juce::VST3PluginFormat scannerFormat;
 
         for (const auto& record : scannedBundles.plugins())
         {
+            if (stop.stop_requested())
+                return;
+
             const juce::String bundlePath(record.path.wstring().c_str());
             juce::OwnedArray<juce::PluginDescription> types;
             scannerFormat.findAllTypesForFile(types, bundlePath);
@@ -3573,6 +3586,9 @@ void MainComponent::scanVst3Plugins()
                 if (type != nullptr)
                     descriptions.push_back(*type);
         }
+
+        if (stop.stop_requested())
+            return;
 
         std::sort(descriptions.begin(), descriptions.end(),
             [](const juce::PluginDescription& a, const juce::PluginDescription& b)
@@ -3612,7 +3628,7 @@ void MainComponent::scanVst3Plugins()
                         + " bundles. Waves shells incluidos como plugins individuales.",
                     juce::dontSendNotification);
             });
-    }).detach();
+    });
 }
 
 void MainComponent::chooseAdditionalVst3Folder()
