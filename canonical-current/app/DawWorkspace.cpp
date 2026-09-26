@@ -66,6 +66,7 @@ DawWorkspace::DawWorkspace()
     tracks_[7].name = "FX";
 
     configureControls();
+    loadWorkspaceState();
     syncInspector();
     rebuildRenderState();
 
@@ -85,6 +86,7 @@ DawWorkspace::~DawWorkspace()
     stopTimer();
     if (trackRecording_.load(std::memory_order_acquire))
         stopTrackRecording(false);
+    saveWorkspaceState();
     autosaveRecovery();
 }
 
@@ -122,7 +124,7 @@ void DawWorkspace::configureControls()
                 juce::StringArray paths;
                 for (const auto& f : c.getResults()) paths.add(f.getFullPathName());
                 if (!paths.isEmpty())
-                    importFiles(paths, selectedTrack_, beatAtX(static_cast<float>(headerWidth_ + 12)));
+                    importFiles(paths, selectedTrack_, beatAtX(static_cast<float>(timelineBounds().getX() + headerWidth_ + 12)));
             });
     };
     addTrackButton_.onClick = [this] { checkpointUndo(); addTrack(); };
@@ -197,6 +199,35 @@ void DawWorkspace::configureControls()
     };
     addAndMakeVisible(snapBox_);
 
+    workspaceBox_.addItem("LIVE", 1);
+    workspaceBox_.addItem("MIX", 2);
+    workspaceBox_.addItem("RECORD", 3);
+    workspaceBox_.addItem("EDIT", 4);
+    workspaceBox_.addItem("IEM", 5);
+    workspaceBox_.setSelectedId(workspacePreset_, juce::dontSendNotification);
+    workspaceBox_.setTooltip("Workspace: reorganiza Browser, Inspector, Mixer y Arranger");
+    workspaceBox_.onChange = [this] { applyWorkspacePreset(workspaceBox_.getSelectedId()); };
+    addAndMakeVisible(workspaceBox_);
+
+    for (auto* b : { &fitProjectButton_, &fitSelectionButton_, &resetWorkspaceButton_ })
+    {
+        addButton(*b);
+        b->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff142735));
+    }
+    fitProjectButton_.setTooltip("Fit Project");
+    fitSelectionButton_.setTooltip("Fit Selection");
+    resetWorkspaceButton_.setTooltip("Restaurar distribución del workspace");
+    fitProjectButton_.onClick = [this] { fitProject(); };
+    fitSelectionButton_.onClick = [this] { fitSelection(); };
+    resetWorkspaceButton_.onClick = [this] { resetWorkspace(); };
+
+    browserSearch_.setTextToShowWhenEmpty("Buscar canciones, samples, plugins...", juce::Colour(kMuted));
+    browserSearch_.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff0a151e));
+    browserSearch_.setColour(juce::TextEditor::textColourId, juce::Colour(kText));
+    browserSearch_.setColour(juce::TextEditor::outlineColourId, juce::Colour(kBorder));
+    browserSearch_.setTooltip("Buscar en el Browser");
+    addAndMakeVisible(browserSearch_);
+
     trackNameEditor_.setSelectAllWhenFocused(true);
     trackNameEditor_.setColour(juce::TextEditor::backgroundColourId, juce::Colour(kPanel2));
     trackNameEditor_.setColour(juce::TextEditor::textColourId, juce::Colour(kText));
@@ -227,6 +258,14 @@ void DawWorkspace::configureControls()
     setupDb(clipGainSlider_, -36.0, 18.0, " dB");
     setupDb(fadeInSlider_, 0.0, 16.0, " b");
     setupDb(fadeOutSlider_, 0.0, 16.0, " b");
+
+    trackVolumeSlider_.setDoubleClickReturnValue(true, 0.0);
+    trackPanSlider_.setDoubleClickReturnValue(true, 0.0);
+    clipGainSlider_.setDoubleClickReturnValue(true, 0.0);
+    fadeInSlider_.setDoubleClickReturnValue(true, 0.0);
+    fadeOutSlider_.setDoubleClickReturnValue(true, 0.0);
+    bpmSlider_.setDoubleClickReturnValue(true, 120.0);
+    zoomSlider_.setDoubleClickReturnValue(true, 1.0);
 
     trackVolumeSlider_.onValueChange = [this]
     {
@@ -323,20 +362,82 @@ void DawWorkspace::paint(juce::Graphics& g)
     g.fillRect(toolbar);
     g.setColour(juce::Colour(kBorder));
     g.drawHorizontalLine(toolbar.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
-    g.setColour(juce::Colour(0xff355064).withAlpha(0.7f));
-    g.drawVerticalLine(535, 8.0f, static_cast<float>(toolbar.getBottom() - 8));
-    g.drawVerticalLine(std::max(0, getWidth() - 292), 8.0f, static_cast<float>(toolbar.getBottom() - 8));
 
-    auto inspector = bounds.removeFromBottom(inspectorHeight_);
-    juce::ColourGradient inspectorGradient(juce::Colour(0xff0d1a24), 0.0f, static_cast<float>(inspector.getY()),
-                                           juce::Colour(0xff081119), 0.0f, static_cast<float>(inspector.getBottom()), false);
-    g.setGradientFill(inspectorGradient);
-    g.fillRect(inspector);
-    g.setColour(juce::Colour(kBorder));
-    g.drawHorizontalLine(inspector.getY(), 0.0f, static_cast<float>(getWidth()));
-
+    const auto browser = browserBounds();
+    const auto inspector = inspectorBounds();
+    const auto mixer = mixerBounds();
     const auto tl = timelineBounds();
     const auto ruler = rulerBounds();
+
+    g.setColour(juce::Colour(0xff0a141c));
+    g.fillRect(browser);
+    g.setColour(juce::Colour(0xff0d1922));
+    g.fillRect(inspector);
+    g.setColour(juce::Colour(0xff09131b));
+    g.fillRect(mixer);
+
+    g.setColour(juce::Colour(kBorder));
+    g.drawVerticalLine(browser.getRight() - 1, static_cast<float>(browser.getY()), static_cast<float>(browser.getBottom()));
+    g.drawVerticalLine(inspector.getX(), static_cast<float>(inspector.getY()), static_cast<float>(inspector.getBottom()));
+    g.drawHorizontalLine(mixer.getY(), 0.0f, static_cast<float>(getWidth()));
+
+    g.setColour(juce::Colour(kText));
+    g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    g.drawText("BROWSER", browser.reduced(10, 7).removeFromTop(18), juce::Justification::centredLeft);
+    static const std::array<juce::String, 7> browserItems {
+        "Canciones", "Setlists", "Pads", "Samples", "Plugins", "Favoritos", "Proyectos"
+    };
+    int browserY = browser.getY() + 70;
+    for (std::size_t i = 0; i < browserItems.size(); ++i)
+    {
+        juce::Rectangle<int> item(browser.getX() + 8, browserY, std::max(0, browser.getWidth() - 16), 27);
+        const bool active = static_cast<int>(i) == selectedBrowserItem_;
+        g.setColour(juce::Colour(active ? 0xff132a38 : 0xff0e1b24));
+        g.fillRoundedRectangle(item.toFloat(), 4.0f);
+        g.setColour(juce::Colour(active ? kText : kMuted));
+        g.setFont(juce::FontOptions(11.0f, active ? juce::Font::bold : juce::Font::plain));
+        g.drawText(browserItems[i], item.reduced(8, 0), juce::Justification::centredLeft);
+        browserY += 31;
+    }
+
+    g.setColour(juce::Colour(kText));
+    g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    g.drawText("INSPECTOR", inspector.reduced(10, 7).removeFromTop(18), juce::Justification::centredLeft);
+    g.setColour(juce::Colour(kMuted));
+    g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+    g.drawText(selectedClipId_ >= 0 ? "CLIP · AUDIO" : (tracks_[selectedTrack_].midi ? "TRACK · MIDI" : "TRACK · AUDIO"),
+               inspector.getX() + 10, inspector.getY() + 23, std::max(0, inspector.getWidth() - 20), 14,
+               juce::Justification::centredLeft);
+
+    g.setColour(juce::Colour(kText));
+    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+    g.drawText("MIXER · QUICK VIEW", mixer.getX() + 10, mixer.getY() + 5, 180, 18, juce::Justification::centredLeft);
+    auto mixerContent = mixer.reduced(8, 25);
+    const int visibleMixerTracks = std::min(8, trackCount_);
+    const int mixerStripWidth = visibleMixerTracks > 0 ? std::max(1, mixerContent.getWidth() / visibleMixerTracks) : mixerContent.getWidth();
+    for (int i = 0; i < visibleMixerTracks; ++i)
+    {
+        auto strip = mixerContent.removeFromLeft(mixerStripWidth).reduced(2);
+        const bool selected = i == selectedTrack_;
+        g.setColour(juce::Colour(selected ? 0xff152a38 : 0xff0d1a23));
+        g.fillRoundedRectangle(strip.toFloat(), 4.0f);
+        g.setColour(tracks_[i].colour);
+        g.fillRect(strip.removeFromTop(3));
+        g.setColour(juce::Colour(kText));
+        g.setFont(juce::FontOptions(10.0f, selected ? juce::Font::bold : juce::Font::plain));
+        g.drawFittedText(tracks_[i].name, strip.removeFromTop(20).reduced(4, 0), juce::Justification::centred, 1);
+        const float normGain = juce::jlimit(0.0f, 1.0f,
+            static_cast<float>((gainToDb(tracks_[i].gain) + 60.0) / 72.0));
+        auto meter = strip.reduced(6, 5);
+        g.setColour(juce::Colour(0xff1a2b35));
+        g.fillRoundedRectangle(meter.toFloat(), 2.0f);
+        auto level = meter;
+        level.setY(meter.getBottom() - static_cast<int>(meter.getHeight() * normGain));
+        level.setHeight(meter.getBottom() - level.getY());
+        g.setColour(tracks_[i].mute ? juce::Colour(kDanger).withAlpha(0.45f) : tracks_[i].colour.withAlpha(0.75f));
+        g.fillRoundedRectangle(level.toFloat(), 2.0f);
+    }
+
     g.setColour(juce::Colour(0xff09131b));
     g.fillRect(tl);
     g.setColour(juce::Colour(0xff101e28));
@@ -349,7 +450,7 @@ void DawWorkspace::paint(juce::Graphics& g)
     for (int beat = firstBeat; beat <= lastBeat; ++beat)
     {
         const float x = xForBeat(static_cast<double>(beat));
-        if (x < headerWidth_ || x > getWidth()) continue;
+        if (x < tl.getX() + headerWidth_ || x > tl.getRight()) continue;
         const bool bar = beat % 4 == 0;
         g.setColour(juce::Colour(bar ? 0xff365064 : 0xff1c2e3a));
         g.drawVerticalLine(static_cast<int>(x), static_cast<float>(ruler.getY()), static_cast<float>(tl.getBottom()));
@@ -361,20 +462,22 @@ void DawWorkspace::paint(juce::Graphics& g)
         }
     }
 
+    g.saveState();
+    g.reduceClipRegion(tl);
     g.setColour(juce::Colour(0xff0b1720));
     g.fillRect(tl.withWidth(headerWidth_));
     g.setColour(juce::Colour(kBorder));
-    g.drawVerticalLine(headerWidth_ - 1, static_cast<float>(tl.getY()), static_cast<float>(tl.getBottom()));
+    g.drawVerticalLine(tl.getX() + headerWidth_ - 1, static_cast<float>(tl.getY()), static_cast<float>(tl.getBottom()));
 
     for (int t = 0; t < trackCount_; ++t)
     {
         auto header = trackHeaderBounds(t);
-        auto row = header.withX(headerWidth_).withWidth(std::max(0, getWidth() - headerWidth_));
+        auto row = header.withX(tl.getX() + headerWidth_).withWidth(std::max(0, tl.getWidth() - headerWidth_));
         const bool selected = t == selectedTrack_;
         g.setColour(juce::Colour(selected ? 0xff142a38 : (t % 2 == 0 ? 0xff0b151e : 0xff0d1821)));
         g.fillRect(row);
         g.setColour(juce::Colour(kBorder).withAlpha(0.55f));
-        g.drawHorizontalLine(row.getBottom() - 1, static_cast<float>(headerWidth_), static_cast<float>(getWidth()));
+        g.drawHorizontalLine(row.getBottom() - 1, static_cast<float>(tl.getX() + headerWidth_), static_cast<float>(tl.getRight()));
 
         g.setColour(juce::Colour(selected ? 0xff172a37 : 0xff101d27));
         g.fillRect(header);
@@ -444,6 +547,7 @@ void DawWorkspace::paint(juce::Graphics& g)
                     double u1 = static_cast<double>(px + 1) / columns;
                     auto sampleFor = [&](double u)
                     {
+                        if (clip.reversed) u = 1.0 - u;
                         double raw = sourceStart + u * wantedSource;
                         if (clip.loop && sourceSamples > 0)
                             raw = std::fmod(std::max(0.0, raw), static_cast<double>(sourceSamples));
@@ -468,6 +572,16 @@ void DawWorkspace::paint(juce::Graphics& g)
                     g.drawVerticalLine(static_cast<int>(x), wave.getCentreY() - h, wave.getCentreY() + h);
                 }
             }
+        }
+
+        if (clip.reversed)
+        {
+            g.setColour(juce::Colour(0xff071018).withAlpha(0.78f));
+            auto rev = juce::Rectangle<float>(cb.getRight() - 36.0f, cb.getY() + 4.0f, 30.0f, 15.0f);
+            g.fillRoundedRectangle(rev, 3.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.9f));
+            g.setFont(juce::FontOptions(8.5f, juce::Font::bold));
+            g.drawText("REV", rev.toNearestInt(), juce::Justification::centred);
         }
 
         if (clip.fadeInBeats > 0.0 || clip.fadeOutBeats > 0.0)
@@ -512,10 +626,12 @@ void DawWorkspace::paint(juce::Graphics& g)
         }
     }
 
+    g.restoreState();
+
     const double posBeat = (static_cast<double>(transportSamples_.load(std::memory_order_relaxed))
         / std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed))) * bpm() / 60.0;
     const float playX = xForBeat(posBeat);
-    if (playX >= headerWidth_ && playX <= getWidth())
+    if (playX >= tl.getX() + headerWidth_ && playX <= tl.getRight())
     {
         g.setColour(juce::Colour(kAccent));
         g.drawVerticalLine(static_cast<int>(playX), static_cast<float>(ruler.getY()), static_cast<float>(tl.getBottom()));
@@ -529,7 +645,7 @@ void DawWorkspace::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff6f8492));
     g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
     g.drawText("J3 ARRANGER  ·  AUDIO + MIDI  ·  SPACE PLAY/STOP  ·  CTRL+S  ·  CTRL+Z/Y",
-               std::max(8, getWidth() - 540), getHeight() - 18, std::min(532, getWidth() - 16), 15,
+               std::max(8, getWidth() - 540), mixer.getBottom() - 18, std::min(532, getWidth() - 16), 15,
                juce::Justification::centredRight);
 }
 
@@ -541,16 +657,16 @@ void DawWorkspace::resized()
     toolbar.removeFromTop(4);
     auto bottomRow = toolbar.removeFromTop(28);
 
-    auto takeLeft = [](juce::Rectangle<int>& row, juce::Component& c, int width)
+    auto takeLeft = [](juce::Rectangle<int>& row, juce::Component& component, int width)
     {
         const int w = std::min(width, std::max(0, row.getWidth()));
-        c.setBounds(row.removeFromLeft(w));
+        component.setBounds(row.removeFromLeft(w));
         if (row.getWidth() > 0) row.removeFromLeft(std::min(4, row.getWidth()));
     };
-    auto takeRight = [](juce::Rectangle<int>& row, juce::Component& c, int width)
+    auto takeRight = [](juce::Rectangle<int>& row, juce::Component& component, int width)
     {
         const int w = std::min(width, std::max(0, row.getWidth()));
-        c.setBounds(row.removeFromRight(w));
+        component.setBounds(row.removeFromRight(w));
         if (row.getWidth() > 0) row.removeFromRight(std::min(4, row.getWidth()));
     };
 
@@ -578,50 +694,136 @@ void DawWorkspace::resized()
     takeLeft(bottomRow, duplicateButton_, 74);
     takeLeft(bottomRow, deleteButton_, 60);
     bottomRow.removeFromLeft(std::min(8, bottomRow.getWidth()));
-    takeLeft(bottomRow, bpmSlider_, 142);
-    takeLeft(bottomRow, snapBox_, 106);
+    takeLeft(bottomRow, bpmSlider_, 136);
+    takeLeft(bottomRow, snapBox_, 102);
+
+    takeRight(bottomRow, resetWorkspaceButton_, 68);
+    takeRight(bottomRow, workspaceBox_, 94);
+    takeRight(bottomRow, fitSelectionButton_, 44);
+    takeRight(bottomRow, fitProjectButton_, 44);
     zoomSlider_.setBounds(bottomRow);
 
-    auto inspector = r.removeFromBottom(inspectorHeight_).reduced(8, 8);
-    auto top = inspector.removeFromTop(32);
-    trackNameEditor_.setBounds(top.removeFromLeft(170));
-    top.removeFromLeft(6);
-    trackMuteButton_.setBounds(top.removeFromLeft(38));
-    trackSoloButton_.setBounds(top.removeFromLeft(38));
-    trackArmButton_.setBounds(top.removeFromLeft(48));
-    top.removeFromLeft(8);
-    trackVolumeSlider_.setBounds(top.removeFromLeft(176));
-    trackPanSlider_.setBounds(top.removeFromLeft(144));
-    top.removeFromLeft(8);
-    clipMuteButton_.setBounds(top.removeFromLeft(86));
-    clipLoopButton_.setBounds(top.removeFromLeft(86));
-    statusLabel_.setBounds(top);
+    auto browser = browserBounds().reduced(9, 8);
+    browser.removeFromTop(24);
+    browserSearch_.setBounds(browser.removeFromTop(30));
+
+    auto inspector = inspectorBounds().reduced(10, 8);
+    inspector.removeFromTop(27);
+    trackNameEditor_.setBounds(inspector.removeFromTop(30));
+    inspector.removeFromTop(7);
+
+    auto trackButtons = inspector.removeFromTop(28);
+    trackMuteButton_.setBounds(trackButtons.removeFromLeft(42));
+    trackButtons.removeFromLeft(5);
+    trackSoloButton_.setBounds(trackButtons.removeFromLeft(42));
+    trackButtons.removeFromLeft(5);
+    trackArmButton_.setBounds(trackButtons.removeFromLeft(54));
 
     inspector.removeFromTop(8);
-    auto bottom = inspector.removeFromTop(32);
-    clipGainSlider_.setBounds(bottom.removeFromLeft(190));
-    bottom.removeFromLeft(8);
-    fadeInSlider_.setBounds(bottom.removeFromLeft(180));
-    fadeOutSlider_.setBounds(bottom.removeFromLeft(180));
+    trackVolumeSlider_.setBounds(inspector.removeFromTop(30));
+    trackPanSlider_.setBounds(inspector.removeFromTop(30));
+    inspector.removeFromTop(8);
 
+    auto clipButtons = inspector.removeFromTop(28);
+    clipMuteButton_.setBounds(clipButtons.removeFromLeft(std::min(92, clipButtons.getWidth() / 2)));
+    clipButtons.removeFromLeft(std::min(5, clipButtons.getWidth()));
+    clipLoopButton_.setBounds(clipButtons);
+
+    inspector.removeFromTop(7);
+    clipGainSlider_.setBounds(inspector.removeFromTop(30));
+    fadeInSlider_.setBounds(inspector.removeFromTop(30));
+    fadeOutSlider_.setBounds(inspector.removeFromTop(30));
+
+    statusLabel_.setBounds(inspector.removeFromBottom(std::min(54, inspector.getHeight())));
     repaint();
 }
 
 juce::Rectangle<int> DawWorkspace::timelineBounds() const
 {
-    return { 0, toolbarHeight_ + rulerHeight_, getWidth(),
-             std::max(0, getHeight() - toolbarHeight_ - rulerHeight_ - inspectorHeight_) };
+    const int left = juce::jlimit(140, std::max(140, getWidth() / 3), browserWidth_);
+    const int right = juce::jlimit(220, std::max(220, getWidth() / 3), inspectorWidth_);
+    const int bottom = juce::jlimit(96, std::max(96, getHeight() / 2), mixerHeight_);
+    return { left, toolbarHeight_ + rulerHeight_,
+             std::max(0, getWidth() - left - right),
+             std::max(0, getHeight() - toolbarHeight_ - rulerHeight_ - bottom) };
 }
 
 juce::Rectangle<int> DawWorkspace::rulerBounds() const
 {
-    return { 0, toolbarHeight_, getWidth(), rulerHeight_ };
+    const auto tl = timelineBounds();
+    return { tl.getX(), toolbarHeight_, tl.getWidth(), rulerHeight_ };
+}
+
+juce::Rectangle<int> DawWorkspace::browserBounds() const
+{
+    const auto tl = timelineBounds();
+    return { 0, toolbarHeight_, tl.getX(), std::max(0, getHeight() - toolbarHeight_ - mixerBounds().getHeight()) };
+}
+
+juce::Rectangle<int> DawWorkspace::inspectorBounds() const
+{
+    const auto tl = timelineBounds();
+    return { tl.getRight(), toolbarHeight_, std::max(0, getWidth() - tl.getRight()),
+             std::max(0, getHeight() - toolbarHeight_ - mixerBounds().getHeight()) };
+}
+
+juce::Rectangle<int> DawWorkspace::mixerBounds() const
+{
+    const int h = juce::jlimit(96, std::max(96, getHeight() / 2), mixerHeight_);
+    return { 0, std::max(toolbarHeight_, getHeight() - h), getWidth(), h };
+}
+
+bool DawWorkspace::validateLayoutForTesting(juce::String& report) const
+{
+    const auto local = getLocalBounds();
+    const auto browser = browserBounds();
+    const auto timeline = timelineBounds();
+    const auto inspector = inspectorBounds();
+    const auto mixer = mixerBounds();
+
+    auto fail = [&report](const juce::String& message)
+    {
+        report = message;
+        return false;
+    };
+
+    if (!local.contains(browser) || !local.contains(timeline) || !local.contains(inspector) || !local.contains(mixer))
+        return fail("major workspace region escaped the component bounds");
+    if (timeline.getWidth() < 360 || timeline.getHeight() < 180)
+        return fail("arranger viewport is too small");
+    if (browser.getWidth() < 140 || inspector.getWidth() < 220 || mixer.getHeight() < 96)
+        return fail("browser, inspector or mixer fell below its professional minimum");
+    if (browser.getRight() != timeline.getX() || inspector.getX() != timeline.getRight()
+        || mixer.getY() != timeline.getBottom())
+        return fail("workspace regions overlap or leave an unintended gap");
+
+    for (int i = 0; i < getNumChildComponents(); ++i)
+    {
+        const auto* child = getChildComponent(i);
+        if (child == nullptr || !child->isVisible()) continue;
+        const auto bounds = child->getBounds();
+        if (bounds.getWidth() <= 0 || bounds.getHeight() <= 0)
+            return fail("visible control has an empty layout: " + child->getName());
+        if (!local.contains(bounds))
+            return fail("visible control escaped the viewport: " + child->getName());
+    }
+
+    if (!browser.contains(browserSearch_.getBounds()))
+        return fail("browser search escaped the browser panel");
+    if (!inspector.contains(trackNameEditor_.getBounds())
+        || !inspector.contains(trackVolumeSlider_.getBounds())
+        || !inspector.contains(trackPanSlider_.getBounds())
+        || !inspector.contains(clipGainSlider_.getBounds()))
+        return fail("inspector controls escaped the inspector panel");
+
+    report = "OK";
+    return true;
 }
 
 juce::Rectangle<int> DawWorkspace::trackHeaderBounds(int track) const
 {
     const auto tl = timelineBounds();
-    return { 0, tl.getY() + (track - firstVisibleTrack_) * trackHeight_, headerWidth_, trackHeight_ };
+    return { tl.getX(), tl.getY() + (track - firstVisibleTrack_) * trackHeight_, headerWidth_, trackHeight_ };
 }
 
 juce::Rectangle<float> DawWorkspace::clipBounds(const Clip& clip) const
@@ -718,12 +920,14 @@ double DawWorkspace::pixelsPerBeat() const noexcept
 
 double DawWorkspace::beatAtX(float x) const noexcept
 {
-    return std::max(0.0, viewStartBeat_ + (static_cast<double>(x) - headerWidth_) / pixelsPerBeat());
+    const auto tl = timelineBounds();
+    return std::max(0.0, viewStartBeat_ + (static_cast<double>(x) - (tl.getX() + headerWidth_)) / pixelsPerBeat());
 }
 
 float DawWorkspace::xForBeat(double beat) const noexcept
 {
-    return static_cast<float>(headerWidth_ + (beat - viewStartBeat_) * pixelsPerBeat());
+    const auto tl = timelineBounds();
+    return static_cast<float>(tl.getX() + headerWidth_ + (beat - viewStartBeat_) * pixelsPerBeat());
 }
 
 double DawWorkspace::snapBeat(double beat) const noexcept
@@ -740,26 +944,342 @@ double DawWorkspace::projectEndBeat() const noexcept
     return end;
 }
 
+void DawWorkspace::fitProject()
+{
+    const auto tl = timelineBounds();
+    const double endBeat = std::max(4.0, projectEndBeat());
+    const double usable = std::max(80, tl.getWidth() - headerWidth_ - 24);
+    zoom_ = juce::jlimit(0.5, 4.0, usable / (44.0 * endBeat));
+    viewStartBeat_ = 0.0;
+    zoomSlider_.setValue(zoom_, juce::dontSendNotification);
+    repaint();
+}
+
+void DawWorkspace::fitSelection()
+{
+    double startBeat = 0.0;
+    double endBeat = 0.0;
+    bool found = false;
+    if (const auto* c = clipAt({ -1, -1 }))
+    {
+        startBeat = c->startBeat;
+        endBeat = c->startBeat + c->lengthBeats;
+        found = true;
+    }
+    if (!found && selectedMidiNoteId_ >= 0)
+    {
+        for (const auto& n : midiNotes_)
+            if (n.id == selectedMidiNoteId_)
+            {
+                startBeat = n.startBeat;
+                endBeat = n.startBeat + n.lengthBeats;
+                found = true;
+                break;
+            }
+    }
+    if (!found) { fitProject(); return; }
+
+    const auto tl = timelineBounds();
+    const double pad = std::max(0.5, (endBeat - startBeat) * 0.12);
+    const double span = std::max(0.5, (endBeat - startBeat) + pad * 2.0);
+    const double usable = std::max(80, tl.getWidth() - headerWidth_ - 24);
+    zoom_ = juce::jlimit(0.5, 4.0, usable / (44.0 * span));
+    viewStartBeat_ = std::max(0.0, startBeat - pad);
+    zoomSlider_.setValue(zoom_, juce::dontSendNotification);
+    repaint();
+}
+
+juce::File DawWorkspace::workspaceStateFile() const
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("J3 Worship")
+        .getChildFile("workspace.xml");
+}
+
+void DawWorkspace::loadWorkspaceState()
+{
+    const auto file = workspaceStateFile();
+    if (!file.existsAsFile()) return;
+    auto xml = juce::parseXML(file.loadFileAsString());
+    if (xml == nullptr || !xml->hasTagName("J3Workspace")) return;
+
+    workspacePreset_ = juce::jlimit(1, 5, xml->getIntAttribute("preset", 4));
+    browserWidth_ = juce::jlimit(140, 360, xml->getIntAttribute("browserWidth", 210));
+    inspectorWidth_ = juce::jlimit(220, 420, xml->getIntAttribute("inspectorWidth", 285));
+    mixerHeight_ = juce::jlimit(96, 360, xml->getIntAttribute("mixerHeight", 125));
+    trackHeight_ = juce::jlimit(44, 150, xml->getIntAttribute("trackHeight", 76));
+    workspaceBox_.setSelectedId(workspacePreset_, juce::dontSendNotification);
+}
+
+void DawWorkspace::saveWorkspaceState() const
+{
+    juce::XmlElement xml("J3Workspace");
+    xml.setAttribute("preset", workspacePreset_);
+    xml.setAttribute("browserWidth", browserWidth_);
+    xml.setAttribute("inspectorWidth", inspectorWidth_);
+    xml.setAttribute("mixerHeight", mixerHeight_);
+    xml.setAttribute("trackHeight", trackHeight_);
+    auto file = workspaceStateFile();
+    file.getParentDirectory().createDirectory();
+    file.replaceWithText(xml.toString());
+}
+
+void DawWorkspace::applyWorkspacePreset(int preset)
+{
+    workspacePreset_ = juce::jlimit(1, 5, preset);
+    switch (workspacePreset_)
+    {
+        case 1: browserWidth_ = 180; inspectorWidth_ = 230; mixerHeight_ = 168; trackHeight_ = 72; break;
+        case 2: browserWidth_ = 150; inspectorWidth_ = 245; mixerHeight_ = 245; trackHeight_ = 64; break;
+        case 3: browserWidth_ = 165; inspectorWidth_ = 255; mixerHeight_ = 175; trackHeight_ = 76; break;
+        case 5: browserWidth_ = 150; inspectorWidth_ = 225; mixerHeight_ = 220; trackHeight_ = 66; break;
+        default: browserWidth_ = 210; inspectorWidth_ = 285; mixerHeight_ = 125; trackHeight_ = 82; break;
+    }
+    workspaceBox_.setSelectedId(workspacePreset_, juce::dontSendNotification);
+    resized();
+    saveWorkspaceState();
+    refreshStatus("Workspace " + workspaceBox_.getText());
+}
+
+void DawWorkspace::resetWorkspace()
+{
+    zoom_ = 1.0;
+    viewStartBeat_ = 0.0;
+    firstVisibleTrack_ = 0;
+    applyWorkspacePreset(4);
+    zoomSlider_.setValue(zoom_, juce::dontSendNotification);
+    refreshStatus("Workspace restablecido");
+}
+
+void DawWorkspace::showContextMenu(juce::Point<int> point)
+{
+    juce::PopupMenu menu;
+    const bool hasClip = selectedClipId_ >= 0;
+    const bool hasMidi = selectedMidiNoteId_ >= 0;
+
+    if (hasClip)
+    {
+        menu.addItem(1, "Dividir en playhead");
+        menu.addItem(2, "Duplicar");
+        menu.addItem(3, "Mute / Unmute");
+        menu.addItem(4, "Loop / No Loop");
+        menu.addSeparator();
+        menu.addItem(7, "Normalize");
+        menu.addItem(8, "Reverse");
+        menu.addItem(5, "Fit Selection");
+        menu.addSeparator();
+        menu.addItem(6, "Eliminar");
+    }
+    else if (hasMidi)
+    {
+        menu.addItem(2, "Duplicar nota");
+        menu.addItem(5, "Fit Selection");
+        menu.addSeparator();
+        menu.addItem(6, "Eliminar nota");
+    }
+    else
+    {
+        menu.addItem(10, "Renombrar pista");
+        menu.addItem(11, "Agregar pista de audio");
+        menu.addItem(12, "Agregar pista MIDI");
+        menu.addSeparator();
+        menu.addItem(13, "Fit Project");
+        menu.addItem(14, "Reset Workspace");
+    }
+
+    juce::Component::SafePointer<DawWorkspace> safe(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea({ point.x, point.y, 1, 1 }),
+        [safe](int result)
+        {
+            if (safe == nullptr || result == 0) return;
+            switch (result)
+            {
+                case 1: safe->splitSelectedClipAtPlayhead(); break;
+                case 2: safe->duplicateSelectedClip(); break;
+                case 3:
+                    for (auto& c : safe->clips_) if (c.id == safe->selectedClipId_)
+                    {
+                        safe->checkpointUndo(); c.muted = !c.muted; safe->projectDirty_ = true;
+                        safe->markRenderDirty(); safe->syncInspector(); safe->repaint(); break;
+                    }
+                    break;
+                case 4:
+                    for (auto& c : safe->clips_) if (c.id == safe->selectedClipId_)
+                    {
+                        safe->checkpointUndo(); c.loop = !c.loop; safe->projectDirty_ = true;
+                        safe->markRenderDirty(); safe->syncInspector(); safe->repaint(); break;
+                    }
+                    break;
+                case 5: safe->fitSelection(); break;
+                case 6: safe->deleteSelectedClip(); break;
+                case 7: safe->normalizeSelectedClip(); break;
+                case 8: safe->reverseSelectedClip(); break;
+                case 10: safe->trackNameEditor_.grabKeyboardFocus(); safe->trackNameEditor_.selectAll(); break;
+                case 11: safe->checkpointUndo(); safe->addTrack(); break;
+                case 12: safe->checkpointUndo(); safe->addMidiTrack(); break;
+                case 13: safe->fitProject(); break;
+                case 14: safe->resetWorkspace(); break;
+                default: break;
+            }
+        });
+}
+
+void DawWorkspace::mouseMove(const juce::MouseEvent& e)
+{
+    const auto browser = browserBounds();
+    const auto inspector = inspectorBounds();
+    const auto mixer = mixerBounds();
+    if (browser.contains(e.getPosition()) && e.y >= browser.getY() + 70 && e.y < browser.getY() + 70 + 7 * 31)
+    {
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
+        return;
+    }
+    if (std::abs(e.x - browser.getRight()) <= splitterSize_
+        || std::abs(e.x - inspector.getX()) <= splitterSize_)
+    {
+        setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+        return;
+    }
+    if (std::abs(e.y - mixer.getY()) <= splitterSize_)
+    {
+        setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+        return;
+    }
+
+    if (const auto* c = clipAt(e.getPosition()))
+    {
+        const auto cb = clipBounds(*c);
+        if (std::abs(static_cast<float>(e.x) - cb.getX()) <= 7.0f
+            || std::abs(static_cast<float>(e.x) - cb.getRight()) <= 7.0f)
+            setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+        else
+            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        return;
+    }
+    setMouseCursor(juce::MouseCursor::NormalCursor);
+}
+
+void DawWorkspace::mouseExit(const juce::MouseEvent&)
+{
+    setMouseCursor(juce::MouseCursor::NormalCursor);
+}
+
 void DawWorkspace::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
     if (e.y < toolbarHeight_) return;
 
-    if (e.y >= timelineBounds().getY() && e.x < headerWidth_)
+    const auto tl = timelineBounds();
+    const auto browser = browserBounds();
+    const auto inspector = inspectorBounds();
+    const auto mixer = mixerBounds();
+
+    if (std::abs(e.x - browser.getRight()) <= splitterSize_ && e.y >= browser.getY() && e.y < browser.getBottom())
     {
-        const int t = trackAtY(e.y);
-        if (t >= 0)
+        dragMode_ = DragMode::resizeBrowser;
+        dragStartPoint_ = e.getPosition();
+        dragStartBrowserWidth_ = browserWidth_;
+        return;
+    }
+    if (std::abs(e.x - inspector.getX()) <= splitterSize_ && e.y >= inspector.getY() && e.y < inspector.getBottom())
+    {
+        dragMode_ = DragMode::resizeInspector;
+        dragStartPoint_ = e.getPosition();
+        dragStartInspectorWidth_ = inspectorWidth_;
+        return;
+    }
+    if (std::abs(e.y - mixer.getY()) <= splitterSize_)
+    {
+        dragMode_ = DragMode::resizeMixer;
+        dragStartPoint_ = e.getPosition();
+        dragStartMixerHeight_ = mixerHeight_;
+        return;
+    }
+
+    if (browser.contains(e.getPosition()))
+    {
+        const int item = (e.y - (browser.getY() + 70)) / 31;
+        if (item >= 0 && item < 7)
         {
-            selectedTrack_ = t;
+            selectedBrowserItem_ = item;
+            repaint();
+            switch (item)
+            {
+                case 0:
+                case 1:
+                    if (onOpenSetlist) onOpenSetlist();
+                    break;
+                case 2:
+                    if (onOpenPads) onOpenPads();
+                    break;
+                case 3:
+                    importButton_.triggerClick();
+                    break;
+                case 4:
+                case 5:
+                    if (onOpenPlugins) onOpenPlugins();
+                    break;
+                case 6:
+                    openProjectInteractive();
+                    break;
+                default:
+                    break;
+            }
+        }
+        return;
+    }
+
+    if (mixer.contains(e.getPosition()))
+    {
+        auto content = mixer.reduced(8, 25);
+        const int count = std::min(8, trackCount_);
+        if (count > 0)
+        {
+            const int stripW = std::max(1, content.getWidth() / count);
+            const int idx = juce::jlimit(0, count - 1, (e.x - content.getX()) / stripW);
+            selectedTrack_ = idx;
+            selectedClipId_ = -1;
+            selectedMidiNoteId_ = -1;
             syncInspector();
             repaint();
         }
         return;
     }
 
-    if (e.y >= rulerBounds().getY() && e.y < rulerBounds().getBottom() && e.x >= headerWidth_)
+    if (e.y >= tl.getY() && e.x >= tl.getX() && e.x < tl.getX() + headerWidth_)
     {
-        setTransportBeat(snapBeat(beatAtX(static_cast<float>(e.x))));
+        const int t = trackAtY(e.y);
+        if (t >= 0)
+        {
+            selectedTrack_ = t;
+            selectedClipId_ = -1;
+            selectedMidiNoteId_ = -1;
+
+            const auto header = trackHeaderBounds(t).reduced(9, 7);
+            const int chipStart = header.getRight() - 69;
+            if (!e.mods.isPopupMenu() && e.x >= chipStart && e.y >= header.getY() + 25)
+            {
+                const int chip = juce::jlimit(0, 2, (e.x - chipStart) / 23);
+                checkpointUndo();
+                if (chip == 0) tracks_[t].mute = !tracks_[t].mute;
+                else if (chip == 1) tracks_[t].solo = !tracks_[t].solo;
+                else if (!tracks_[t].midi) tracks_[t].armed = !tracks_[t].armed;
+                projectDirty_ = true;
+                markRenderDirty();
+            }
+
+            syncInspector();
+            repaint();
+            if (e.mods.isPopupMenu())
+                showContextMenu(e.getScreenPosition());
+        }
+        return;
+    }
+
+    if (rulerBounds().contains(e.getPosition()) && e.x >= tl.getX() + headerWidth_)
+    {
+        setTransportBeat(e.mods.isCtrlDown() ? beatAtX(static_cast<float>(e.x))
+                                             : snapBeat(beatAtX(static_cast<float>(e.x))));
         repaint();
         return;
     }
@@ -769,6 +1289,10 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
         selectedMidiNoteId_ = n->id;
         selectedClipId_ = -1;
         selectedTrack_ = n->track;
+        if (e.mods.isPopupMenu())
+        {
+            syncInspector(); repaint(); showContextMenu(e.getScreenPosition()); return;
+        }
         dragStartPoint_ = e.getPosition();
         dragStartBeat_ = n->startBeat;
         dragStartLength_ = n->lengthBeats;
@@ -784,20 +1308,35 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    if (auto* c = clipAt(e.getPosition()))
+    if (auto* selected = clipAt(e.getPosition()))
     {
         selectedMidiNoteId_ = -1;
-        selectedClipId_ = c->id;
-        selectedTrack_ = c->track;
-        dragStartPoint_ = e.getPosition();
-        dragStartBeat_ = c->startBeat;
-        dragStartLength_ = c->lengthBeats;
-        dragStartOffsetSeconds_ = c->sourceOffsetSeconds;
-        dragStartTrack_ = c->track;
-        dragUndoSnapshot_ = serializeProject();
-        dragChanged_ = false;
+        selectedClipId_ = selected->id;
+        selectedTrack_ = selected->track;
+        if (e.mods.isPopupMenu())
+        {
+            syncInspector(); repaint(); showContextMenu(e.getScreenPosition()); return;
+        }
 
-        const auto cb = clipBounds(*c);
+        if (e.mods.isAltDown() && static_cast<int>(clips_.size()) < kMaxClips)
+        {
+            checkpointUndo();
+            Clip copy = *selected;
+            copy.id = nextClipId_++;
+            clips_.push_back(copy);
+            selectedClipId_ = copy.id;
+            selected = clipAt({ -1, -1 });
+        }
+
+        dragStartPoint_ = e.getPosition();
+        dragStartBeat_ = selected->startBeat;
+        dragStartLength_ = selected->lengthBeats;
+        dragStartOffsetSeconds_ = selected->sourceOffsetSeconds;
+        dragStartTrack_ = selected->track;
+        dragUndoSnapshot_ = e.mods.isAltDown() ? juce::String() : serializeProject();
+        dragChanged_ = e.mods.isAltDown();
+
+        const auto cb = clipBounds(*selected);
         if (std::abs(static_cast<float>(e.x) - cb.getX()) <= 7.0f)
             dragMode_ = DragMode::trimLeft;
         else if (std::abs(static_cast<float>(e.x) - cb.getRight()) <= 7.0f)
@@ -815,12 +1354,41 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
     if (t >= 0) selectedTrack_ = t;
     syncInspector();
     repaint();
+    if (e.mods.isPopupMenu())
+        showContextMenu(e.getScreenPosition());
 }
 
 void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
 {
     if (dragMode_ == DragMode::none) return;
+
+    if (dragMode_ == DragMode::resizeBrowser)
+    {
+        browserWidth_ = juce::jlimit(140, std::max(140, getWidth() / 3),
+                                    dragStartBrowserWidth_ + e.x - dragStartPoint_.x);
+        resized();
+        return;
+    }
+    if (dragMode_ == DragMode::resizeInspector)
+    {
+        inspectorWidth_ = juce::jlimit(220, std::max(220, getWidth() / 3),
+                                      dragStartInspectorWidth_ - (e.x - dragStartPoint_.x));
+        resized();
+        return;
+    }
+    if (dragMode_ == DragMode::resizeMixer)
+    {
+        mixerHeight_ = juce::jlimit(96, std::max(96, getHeight() / 2),
+                                   dragStartMixerHeight_ - (e.y - dragStartPoint_.y));
+        resized();
+        return;
+    }
+
     const double deltaBeat = static_cast<double>(e.x - dragStartPoint_.x) / pixelsPerBeat();
+    const auto quantize = [this, &e](double beat)
+    {
+        return e.mods.isCtrlDown() ? std::max(0.0, beat) : snapBeat(beat);
+    };
 
     if (dragMode_ == DragMode::midiMove || dragMode_ == DragMode::midiResize)
     {
@@ -829,7 +1397,7 @@ void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
             if (n.id != selectedMidiNoteId_) continue;
             if (dragMode_ == DragMode::midiMove)
             {
-                n.startBeat = snapBeat(dragStartBeat_ + deltaBeat);
+                n.startBeat = quantize(dragStartBeat_ + deltaBeat);
                 const int newTrack = trackAtY(e.y);
                 if (newTrack >= 0 && tracks_[newTrack].midi)
                     n.track = newTrack;
@@ -838,36 +1406,36 @@ void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
             else
             {
                 const double raw = dragStartLength_ + deltaBeat;
-                const double snapped = snapBeats_ > 0.0 ? snapBeat(raw) : raw;
-                n.lengthBeats = std::max(0.125, snapped);
+                n.lengthBeats = std::max(0.125, e.mods.isCtrlDown() ? raw : snapBeat(raw));
             }
             break;
         }
     }
     else
     {
-        auto* c = clipAt({ -1, -1 });
-        if (c == nullptr) return;
+        auto* clip = clipAt({ -1, -1 });
+        if (clip == nullptr) return;
         const int newTrack = trackAtY(e.y);
         if (dragMode_ == DragMode::move)
         {
-            c->startBeat = snapBeat(dragStartBeat_ + deltaBeat);
-            if (newTrack >= 0 && !tracks_[newTrack].midi) c->track = newTrack;
+            clip->startBeat = quantize(dragStartBeat_ + deltaBeat);
+            if (newTrack >= 0 && !tracks_[newTrack].midi) clip->track = newTrack;
         }
         else if (dragMode_ == DragMode::trimRight)
         {
-            c->lengthBeats = std::max(snapBeats_ > 0.0 ? snapBeats_ : 0.05,
-                                      snapBeat(dragStartLength_ + deltaBeat));
+            const double raw = dragStartLength_ + deltaBeat;
+            clip->lengthBeats = std::max(e.mods.isCtrlDown() ? 0.05 : (snapBeats_ > 0.0 ? snapBeats_ : 0.05),
+                                         e.mods.isCtrlDown() ? raw : snapBeat(raw));
         }
         else if (dragMode_ == DragMode::trimLeft)
         {
             const double oldEnd = dragStartBeat_ + dragStartLength_;
-            double newStart = snapBeat(dragStartBeat_ + deltaBeat);
+            double newStart = quantize(dragStartBeat_ + deltaBeat);
             newStart = juce::jlimit(0.0, oldEnd - 0.05, newStart);
             const double shiftedBeats = newStart - dragStartBeat_;
-            c->startBeat = newStart;
-            c->lengthBeats = oldEnd - newStart;
-            c->sourceOffsetSeconds = std::max(0.0, dragStartOffsetSeconds_ + shiftedBeats * 60.0 / bpm());
+            clip->startBeat = newStart;
+            clip->lengthBeats = oldEnd - newStart;
+            clip->sourceOffsetSeconds = std::max(0.0, dragStartOffsetSeconds_ + shiftedBeats * 60.0 / bpm());
         }
     }
 
@@ -882,19 +1450,39 @@ void DawWorkspace::mouseUp(const juce::MouseEvent&)
 {
     if (dragChanged_ && dragUndoSnapshot_.isNotEmpty())
         pushUndoSnapshot(dragUndoSnapshot_);
+
+    const bool resizedWorkspace = dragMode_ == DragMode::resizeBrowser
+                               || dragMode_ == DragMode::resizeInspector
+                               || dragMode_ == DragMode::resizeMixer;
     dragMode_ = DragMode::none;
     dragUndoSnapshot_.clear();
     dragChanged_ = false;
+    if (resizedWorkspace) saveWorkspaceState();
 }
 
 void DawWorkspace::mouseDoubleClick(const juce::MouseEvent& e)
 {
-    if (e.x >= headerWidth_ && e.y >= timelineBounds().getY())
+    const auto tl = timelineBounds();
+    if (e.y >= tl.getY() && e.x >= tl.getX() && e.x < tl.getX() + headerWidth_)
     {
         const int track = trackAtY(e.y);
         if (track >= 0)
         {
-            const double beat = snapBeat(beatAtX(static_cast<float>(e.x)));
+            selectedTrack_ = track;
+            syncInspector();
+            trackNameEditor_.grabKeyboardFocus();
+            trackNameEditor_.selectAll();
+        }
+        return;
+    }
+
+    if (e.x >= tl.getX() + headerWidth_ && e.x < tl.getRight() && e.y >= tl.getY() && e.y < tl.getBottom())
+    {
+        const int track = trackAtY(e.y);
+        if (track >= 0)
+        {
+            const double beat = e.mods.isCtrlDown() ? beatAtX(static_cast<float>(e.x))
+                                                    : snapBeat(beatAtX(static_cast<float>(e.x)));
             if (tracks_[track].midi)
             {
                 checkpointUndo();
@@ -903,14 +1491,23 @@ void DawWorkspace::mouseDoubleClick(const juce::MouseEvent& e)
                 return;
             }
 
+            if (const auto* c = clipAt(e.getPosition()); c != nullptr)
+            {
+                selectedClipId_ = c->id;
+                selectedTrack_ = c->track;
+                fitSelection();
+                refreshStatus("Editor de audio · waveform ampliada");
+                return;
+            }
+
             chooser_ = std::make_unique<juce::FileChooser>(
                 "Importar audio", juce::File{}, "*.wav;*.mp3;*.flac;*.aif;*.aiff");
             chooser_->launchAsync(juce::FileBrowserComponent::openMode
                                     | juce::FileBrowserComponent::canSelectMultipleItems,
-                [this, track, beat](const juce::FileChooser& c)
+                [this, track, beat](const juce::FileChooser& chooser)
                 {
                     juce::StringArray paths;
-                    for (const auto& f : c.getResults()) paths.add(f.getFullPathName());
+                    for (const auto& file : chooser.getResults()) paths.add(file.getFullPathName());
                     if (!paths.isEmpty()) importFiles(paths, track, beat);
                 });
         }
@@ -921,8 +1518,22 @@ void DawWorkspace::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWh
 {
     if (e.mods.isCtrlDown())
     {
-        zoom_ = juce::jlimit(0.5, 4.0, zoom_ + wheel.deltaY * 0.35);
-        zoomSlider_.setValue(zoom_, juce::dontSendNotification);
+        const auto tl = timelineBounds();
+        const double before = beatAtX(static_cast<float>(e.x));
+        const double nextZoom = juce::jlimit(0.5, 4.0, zoom_ * (1.0 + static_cast<double>(wheel.deltaY) * 0.55));
+        if (std::abs(nextZoom - zoom_) > 0.0001)
+        {
+            zoom_ = nextZoom;
+            const double cursorPx = static_cast<double>(e.x - (tl.getX() + headerWidth_));
+            viewStartBeat_ = std::max(0.0, before - cursorPx / pixelsPerBeat());
+            zoomSlider_.setValue(zoom_, juce::dontSendNotification);
+        }
+    }
+    else if (e.mods.isAltDown())
+    {
+        const int oldHeight = trackHeight_;
+        trackHeight_ = juce::jlimit(44, 150, trackHeight_ + (wheel.deltaY > 0.0f ? 6 : -6));
+        if (trackHeight_ != oldHeight) resized();
     }
     else if (e.mods.isShiftDown() || std::abs(wheel.deltaX) > std::abs(wheel.deltaY))
     {
@@ -1254,6 +1865,68 @@ void DawWorkspace::splitSelectedClipAtPlayhead()
         markRenderDirty();
         syncInspector();
         repaint();
+        return;
+    }
+}
+
+void DawWorkspace::normalizeSelectedClip()
+{
+    for (auto& clip : clips_)
+    {
+        if (clip.id != selectedClipId_ || clip.audio == nullptr)
+            continue;
+
+        const auto& audio = clip.audio->samples;
+        const int totalSamples = audio.getNumSamples();
+        if (totalSamples <= 0)
+            return;
+
+        const int start = juce::jlimit(0, totalSamples - 1,
+            static_cast<int>(std::llround(clip.sourceOffsetSeconds * clip.audio->sampleRate)));
+        const double seconds = clip.lengthBeats * 60.0 / std::max(1.0, bpm());
+        const int wanted = std::max(1, static_cast<int>(std::llround(seconds * clip.audio->sampleRate)));
+        const int count = std::max(1, std::min(wanted, totalSamples - start));
+
+        float peak = 0.0f;
+        for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+            peak = std::max(peak, audio.getMagnitude(ch, start, count));
+
+        if (peak <= 1.0e-7f)
+        {
+            refreshStatus("Normalize: el clip no contiene señal útil.");
+            return;
+        }
+
+        checkpointUndo();
+        constexpr float targetPeak = 0.89125094f; // -1 dBFS
+        const float normalizedGain = targetPeak / peak;
+        const float minGain = dbToGain(-36.0);
+        const float maxGain = dbToGain(18.0);
+        clip.gain = juce::jlimit(minGain, maxGain, normalizedGain);
+        projectDirty_ = true;
+        markRenderDirty();
+        syncInspector();
+        repaint();
+        refreshStatus("Clip normalizado a -1 dBFS de pico · no destructivo");
+        return;
+    }
+}
+
+void DawWorkspace::reverseSelectedClip()
+{
+    for (auto& clip : clips_)
+    {
+        if (clip.id != selectedClipId_)
+            continue;
+
+        checkpointUndo();
+        clip.reversed = !clip.reversed;
+        projectDirty_ = true;
+        markRenderDirty();
+        syncInspector();
+        repaint();
+        refreshStatus(clip.reversed ? "Reverse activado · no destructivo"
+                                    : "Reverse desactivado");
         return;
     }
 }
@@ -1598,6 +2271,7 @@ void DawWorkspace::rebuildRenderState()
         rc.gain = c.gain;
         rc.muted = c.muted;
         rc.loop = c.loop;
+        rc.reversed = c.reversed;
         rc.fadeInSamples = static_cast<std::int64_t>(std::llround(c.fadeInBeats * secondsPerBeat * state.sampleRate));
         rc.fadeOutSamples = static_cast<std::int64_t>(std::llround(c.fadeOutBeats * secondsPerBeat * state.sampleRate));
         state.endSample = std::max(state.endSample, rc.startSample + rc.lengthSamples);
@@ -1664,7 +2338,8 @@ void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noe
         for (std::int64_t global = ovStart; global < ovEnd; ++global)
         {
             const std::int64_t local = global - clipStart;
-            double srcPos = sourceOffset + static_cast<double>(local) * ratio;
+            const std::int64_t mappedLocal = clip.reversed ? (clip.lengthSamples - 1 - local) : local;
+            double srcPos = sourceOffset + static_cast<double>(mappedLocal) * ratio;
             if (clip.loop)
             {
                 srcPos = std::fmod(srcPos, static_cast<double>(srcSamples));
@@ -1891,6 +2566,7 @@ juce::String DawWorkspace::serializeProject() const
         x->setAttribute("gain", c.gain);
         x->setAttribute("muted", c.muted);
         x->setAttribute("loop", c.loop);
+        x->setAttribute("reversed", c.reversed);
         x->setAttribute("fadeInBeats", c.fadeInBeats);
         x->setAttribute("fadeOutBeats", c.fadeOutBeats);
         x->setAttribute("colour", static_cast<int>(c.colour.getARGB()));
@@ -1975,6 +2651,7 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
             c.gain = static_cast<float>(x->getDoubleAttribute("gain", 1.0));
             c.muted = x->getBoolAttribute("muted", false);
             c.loop = x->getBoolAttribute("loop", false);
+            c.reversed = x->getBoolAttribute("reversed", false);
             c.fadeInBeats = std::max(0.0, x->getDoubleAttribute("fadeInBeats", 0.0));
             c.fadeOutBeats = std::max(0.0, x->getDoubleAttribute("fadeOutBeats", 0.0));
             c.colour = juce::Colour(static_cast<juce::uint32>(x->getIntAttribute("colour", static_cast<int>(tracks_[c.track].colour.getARGB()))));

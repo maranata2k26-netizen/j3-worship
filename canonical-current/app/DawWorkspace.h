@@ -25,6 +25,8 @@ public:
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
+    void mouseMove(const juce::MouseEvent&) override;
+    void mouseExit(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     bool keyPressed(const juce::KeyPress&) override;
 
@@ -49,6 +51,9 @@ public:
     std::function<void()> onOpenPlugins;
     std::function<void()> onOpenPads;
     std::function<void()> onOpenIem;
+    std::function<void()> onOpenSetlist;
+
+    bool validateLayoutForTesting(juce::String& report) const;
 
 private:
     static constexpr int kMaxTracks = 48;
@@ -96,6 +101,7 @@ private:
         float gain { 1.0f };
         bool muted { false };
         bool loop { false };
+        bool reversed { false };
         double fadeInBeats { 0.0 };
         double fadeOutBeats { 0.0 };
         juce::Colour colour;
@@ -129,6 +135,7 @@ private:
         float gain { 1.0f };
         bool muted { false };
         bool loop { false };
+        bool reversed { false };
         std::int64_t fadeInSamples { 0 };
         std::int64_t fadeOutSamples { 0 };
     };
@@ -147,7 +154,11 @@ private:
         bool anySolo { false };
     };
 
-    enum class DragMode { none, move, trimLeft, trimRight, midiMove, midiResize };
+    enum class DragMode
+    {
+        none, move, trimLeft, trimRight, midiMove, midiResize,
+        resizeBrowser, resizeInspector, resizeMixer
+    };
 
     void timerCallback() override;
     void configureControls();
@@ -156,6 +167,9 @@ private:
 
     juce::Rectangle<int> timelineBounds() const;
     juce::Rectangle<int> rulerBounds() const;
+    juce::Rectangle<int> browserBounds() const;
+    juce::Rectangle<int> inspectorBounds() const;
+    juce::Rectangle<int> mixerBounds() const;
     juce::Rectangle<int> trackHeaderBounds(int track) const;
     juce::Rectangle<float> clipBounds(const Clip& clip) const;
     juce::Rectangle<float> midiNoteBounds(const MidiNote& note) const;
@@ -171,6 +185,14 @@ private:
     float xForBeat(double beat) const noexcept;
     double snapBeat(double beat) const noexcept;
     double projectEndBeat() const noexcept;
+    void fitProject();
+    void fitSelection();
+    void applyWorkspacePreset(int preset);
+    void resetWorkspace();
+    void loadWorkspaceState();
+    void saveWorkspaceState() const;
+    juce::File workspaceStateFile() const;
+    void showContextMenu(juce::Point<int> point);
 
     void addTrack();
     void addMidiTrack();
@@ -182,6 +204,8 @@ private:
     void deleteSelectedClip();
     void duplicateSelectedClip();
     void splitSelectedClipAtPlayhead();
+    void normalizeSelectedClip();
+    void reverseSelectedClip();
     void stopTransport(bool returnToStart);
     void togglePlay();
     void setTransportBeat(double beat) noexcept;
@@ -245,10 +269,15 @@ private:
     double zoom_ { 1.0 };
     int trackHeight_ { 76 };
     int firstVisibleTrack_ { 0 };
-    int headerWidth_ { 190 };
+    int headerWidth_ { 182 };
     int rulerHeight_ { 30 };
-    int toolbarHeight_ { 70 };
-    int inspectorHeight_ { 98 };
+    int toolbarHeight_ { 72 };
+    int browserWidth_ { 190 };
+    int inspectorWidth_ { 260 };
+    int mixerHeight_ { 138 };
+    int splitterSize_ { 5 };
+    int workspacePreset_ { 4 };
+    int selectedBrowserItem_ { 0 };
     double snapBeats_ { 0.25 };
 
     DragMode dragMode_ { DragMode::none };
@@ -258,6 +287,9 @@ private:
     double dragStartOffsetSeconds_ { 0.0 };
     int dragStartTrack_ { 0 };
     int dragStartMidiPitch_ { 60 };
+    int dragStartBrowserWidth_ { 190 };
+    int dragStartInspectorWidth_ { 260 };
+    int dragStartMixerHeight_ { 138 };
     juce::String dragUndoSnapshot_;
     bool dragChanged_ { false };
 
@@ -293,6 +325,11 @@ private:
     juce::Slider bpmSlider_;
     juce::Slider zoomSlider_;
     juce::ComboBox snapBox_;
+    juce::ComboBox workspaceBox_;
+    juce::TextButton fitProjectButton_ { "FIT" };
+    juce::TextButton fitSelectionButton_ { "SEL" };
+    juce::TextButton resetWorkspaceButton_ { "RESET UI" };
+    juce::TextEditor browserSearch_;
 
     juce::TextEditor trackNameEditor_;
     juce::Slider trackVolumeSlider_;

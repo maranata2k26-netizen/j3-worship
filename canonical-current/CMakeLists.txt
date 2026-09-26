@@ -2,13 +2,14 @@ cmake_minimum_required(VERSION 3.24)
 if(POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
-project(J3Worship VERSION 1.2.0 LANGUAGES C CXX)
+project(J3Worship VERSION 1.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 if(MSVC)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  add_compile_options(/utf-8)
 endif()
 
 add_library(j3core
@@ -70,7 +71,7 @@ if(J3_BUILD_DESKTOP_APP)
     PRODUCT_NAME "J3 Worship"
     COMPANY_NAME "J3 Worship"
     BUNDLE_ID "com.j3worship.desktop"
-    VERSION "1.2.0"
+    VERSION "1.3.0"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/J3WorshipLogo.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/resources/J3WorshipLogo.png"
     NEEDS_CURL FALSE
@@ -116,4 +117,32 @@ if(J3_BUILD_DESKTOP_APP)
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/dist"
   )
+
+  juce_add_console_app(J3WorshipUiLayoutTests
+    PRODUCT_NAME "J3 Worship UI Layout Tests"
+  )
+  juce_generate_juce_header(J3WorshipUiLayoutTests)
+  target_sources(J3WorshipUiLayoutTests PRIVATE
+    tests/test_ui_layout.cpp
+    app/DawWorkspace.cpp
+    app/DawWorkspace.h
+  )
+  target_include_directories(J3WorshipUiLayoutTests PRIVATE include)
+  target_compile_definitions(J3WorshipUiLayoutTests PRIVATE
+    JUCE_ASIO=1
+    JUCE_WASAPI=1
+    JUCE_DIRECTSOUND=0
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+  )
+  target_link_libraries(J3WorshipUiLayoutTests PRIVATE
+    j3core
+    juce::juce_audio_utils
+    juce::juce_audio_formats
+    juce::juce_dsp
+    juce::juce_gui_extra
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags
+  )
+  add_test(NAME j3ui_layout_tests COMMAND J3WorshipUiLayoutTests)
 endif()

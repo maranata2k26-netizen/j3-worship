@@ -65,15 +65,28 @@ public:
         if (editor_ == nullptr && plugin_ != nullptr)
             editor_ = std::make_unique<juce::GenericAudioProcessorEditor>(*plugin_);
 
+        int maxWidth = 1180;
+        int maxHeight = 820;
+        if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+        {
+            const auto work = display->userBounds;
+            const int workWidth = static_cast<int>(std::lround(work.getWidth()));
+            const int workHeight = static_cast<int>(std::lround(work.getHeight()));
+            maxWidth = std::max(420, std::min(1180, workWidth - 80));
+            maxHeight = std::max(320, std::min(820, workHeight - 100));
+        }
+
         if (editor_ != nullptr)
         {
             addAndMakeVisible(*editor_);
-            setSize(juce::jlimit(520, 1180, editor_->getWidth()),
-                    juce::jlimit(420, 820, editor_->getHeight()));
+            const int minWidth = std::min(520, maxWidth);
+            const int minHeight = std::min(420, maxHeight);
+            setSize(juce::jlimit(minWidth, maxWidth, editor_->getWidth()),
+                    juce::jlimit(minHeight, maxHeight, editor_->getHeight()));
         }
         else
         {
-            setSize(640, 480);
+            setSize(std::min(640, maxWidth), std::min(480, maxHeight));
         }
     }
 
@@ -508,7 +521,7 @@ MainComponent::MainComponent()
     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(brandLabel_);
 
-    versionLabel_.setText("1.2.0", juce::dontSendNotification);
+    versionLabel_.setText("1.3.0", juce::dontSendNotification);
     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
     addAndMakeVisible(versionLabel_);
@@ -523,6 +536,9 @@ MainComponent::MainComponent()
     safetyLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff402a14));
     safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffffc247));
+    safetyLabel_.setTooltip("LIVE SAFE: estado global de audio, routing, XRUNs, grabación y protección de plugins.");
+    safetyLabel_.setInterceptsMouseClicks(true, false);
+    safetyLabel_.addMouseListener(this, false);
     addAndMakeVisible(safetyLabel_);
 
     for (int id = 1; id <= 6; ++id)
@@ -1287,6 +1303,11 @@ MainComponent::MainComponent()
         tabs_.setCurrentTabIndex(7);
         refreshIemUi();
     };
+    dawWorkspace_.onOpenSetlist = [this]
+    {
+        tabs_.setCurrentTabIndex(2);
+        refreshDashboard();
+    };
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(42);
     tabs_.addTab("LIVE", juce::Colour(panel), &mixerPage_, false);
@@ -1341,6 +1362,35 @@ MainComponent::~MainComponent()
     deviceManager_.closeAudioDevice();
     getRuntimeLockFile().deleteFile();
     setLookAndFeel(nullptr);
+}
+
+void MainComponent::mouseUp(const juce::MouseEvent& e)
+{
+    if (e.eventComponent != &safetyLabel_)
+        return;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(safetyLabel_.getText());
+    const auto label = safetyLabel_.getText();
+    const juce::String summary = label.containsIgnoreCase("NO AUDIO")
+        ? "No hay interfaz de audio activa."
+        : (label.containsIgnoreCase("WARN")
+            ? "Hay una advertencia de rendimiento, grabación, plugin o salida."
+            : (label.containsIgnoreCase("CHECK")
+                ? "Revisá interfaz y routing antes del show."
+                : "Audio y routing sin alertas detectadas."));
+    menu.addItem(100, summary, false);
+    menu.addSeparator();
+    menu.addItem(1, "Abrir diagnóstico completo");
+
+    juce::Component::SafePointer<MainComponent> safe(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&safetyLabel_),
+        [safe](int result)
+        {
+            if (safe == nullptr || result != 1) return;
+            safe->updateDiagnostics();
+            safe->tabs_.setCurrentTabIndex(11);
+        });
 }
 
 void MainComponent::paint(juce::Graphics& g)
@@ -2927,6 +2977,7 @@ void MainComponent::openSelectedPluginEditor()
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = true;
+    options.componentToCentreAround = this;
     options.launchAsync();
 }
 
@@ -3306,6 +3357,11 @@ void MainComponent::updateDiagnostics()
         const bool safeRouting = routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load());
         const auto outputFaults = outputSafetyEvents_.load(std::memory_order_relaxed);
         const auto recordingDrops = recorder_.overflowCount();
+        const bool bufferRisk = bs < 32 || bs > 1024;
+        const auto freeDiskBytes = recordingsRoot().getParentDirectory().getBytesFreeOnVolume();
+        const bool diskLow = freeDiskBytes >= 0 && freeDiskBytes < (2LL * 1024LL * 1024LL * 1024LL);
+        const int midiInputs = juce::MidiInput::getAvailableDevices().size();
+        const int midiOutputs = juce::MidiOutput::getAvailableDevices().size();
         bool pluginProtectionActive = false;
         for (int ch = 0; ch < kMaxChannels && !pluginProtectionActive; ++ch)
             for (int slot = 0; slot < kPluginSlots; ++slot)
@@ -3317,7 +3373,7 @@ void MainComponent::updateDiagnostics()
 
         const bool hardUnsafe = !audioRunning_.load(std::memory_order_acquire) || !safeRouting;
         const bool degraded = xruns > 0 || outputFaults > 0 || recordingDrops > 0
-            || recorder_.hasWorkerError() || pluginProtectionActive;
+            || recorder_.hasWorkerError() || pluginProtectionActive || bufferRisk || diskLow;
 
         if (hardUnsafe)
         {
@@ -3345,10 +3401,19 @@ void MainComponent::updateDiagnostics()
         report << "\n\n";
         report << "✓ I/O\n    " << activeInputs << " active inputs  ·  " << activeOutputs << " active outputs\n\n";
         report << "✓ SAMPLE RATE\n    " << juce::String(sr, 0) << " Hz\n\n";
-        report << "✓ BUFFER\n    " << bs << " samples\n\n";
+        report << (bufferRisk ? "⚠" : "✓") << " BUFFER\n    " << bs << " samples";
+        if (bufferRisk)
+            report << (bs < 32 ? "  ·  demasiado bajo para un show estable" : "  ·  demasiado alto para monitoreo en vivo");
+        report << "\n\n";
         report << "✓ REPORTED I/O LATENCY\n    Input " << juce::String(inLatencyMs, 2)
                << " ms  ·  Output " << juce::String(outLatencyMs, 2) << " ms\n\n";
         report << (xruns == 0 ? "✓" : "⚠") << " XRUNS / DROPOUTS\n    " << xruns << "\n\n";
+        report << "✓ MIDI\n    " << midiInputs << " input(s) · " << midiOutputs << " output(s)\n\n";
+        report << (diskLow ? "⚠" : "✓") << " RECORDING DISK\n    "
+               << juce::String(static_cast<double>(std::max<std::int64_t>(0, freeDiskBytes)) / (1024.0 * 1024.0 * 1024.0), 1)
+               << " GB libres\n\n";
+        report << "✓ VST3\n    " << pluginCatalog_.plugins().size()
+               << " plugin(s) en catálogo · escaneo manual, nunca durante LIVE\n\n";
         report << (pluginProtectionActive ? "⚠" : "✓") << " PLUGIN PROTECTION\n    "
                << (pluginProtectionActive ? "Uno o más VST3 fueron auto-bypasseados para proteger el audio."
                                           : "Sin fallos de plugins detectados.")
