@@ -45,7 +45,8 @@ private:
         MixerStrip(int index, const juce::String& title,
                    std::atomic<float>& gain, std::atomic<float>& pan,
                    std::atomic<bool>& muted, std::atomic<float>& meter,
-                   std::atomic<int>& bus, std::atomic<int>& dca);
+                   std::atomic<int>& bus, std::atomic<int>& dca,
+                   std::function<void(int)> onOpenFx);
         void paint(juce::Graphics&) override;
         void resized() override;
         void timerTick();
@@ -63,11 +64,13 @@ private:
         juce::Slider fader_;
         juce::Slider panSlider_;
         juce::ToggleButton muteButton_ { "MUTE" };
+        juce::TextButton fxButton_ { "FX" };
         juce::ComboBox busBox_;
         juce::ComboBox dcaBox_;
         double meterValue_ { 0.0 };
         juce::ProgressBar meterBar_;
         std::array<float, 32> meterHistory_ {};
+        std::function<void(int)> onOpenFx_;
     };
 
     class GroupStrip final : public juce::Component
@@ -145,6 +148,7 @@ private:
     void restoreSavedPluginsAfterScan();
     bool pluginMutationLocked() const noexcept;
     const float* processPluginChain(int channel, const float* input, int numSamples) noexcept;
+    void processPluginChainStereo(int channel, float* left, float* right, int numSamples) noexcept;
     bool routeIsSafe(int paLeft, int paRight, int clickOutput) const noexcept;
     bool iemRouteIsSafe(int mix, int left, int right) const noexcept;
     void scheduleReconnect();
@@ -228,6 +232,7 @@ private:
     std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginStateBase64_{};
     juce::AudioBuffer<float> pluginScratch_;
     juce::AudioBuffer<float> pluginGuardScratch_;
+    juce::AudioBuffer<float> dawMixerScratch_;
     juce::MidiBuffer pluginMidiScratch_;
     bool pluginsScanned_ { false };
 
