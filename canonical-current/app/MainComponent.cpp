@@ -4846,6 +4846,8 @@ void MainComponent::updateDiagnostics()
         {
             if (dawOutputUnavailable_.load(std::memory_order_relaxed))
                 report << juce::String::fromUTF8("✕ DAW PLAYBACK\n    NO HAY SALIDA DE AUDIO ACTIVA. Abrí AUDIO / MIDI y activá al menos una salida.\n\n");
+            else if (dawFxSilenceFallbackActive_.load(std::memory_order_relaxed))
+                report << juce::String::fromUTF8("⚠ DAW PLAYBACK\n    Una cadena DSP/VST devolvió silencio total mientras el tema tenía señal. J3 activó DRY SAFE automáticamente para que PLAY siga siendo audible.\n\n");
             else if (dawOutputFallbackActive_.load(std::memory_order_relaxed))
                 report << juce::String::fromUTF8("⚠ DAW PLAYBACK\n    La salida PA guardada no está activa. J3 está usando automáticamente una salida activa de respaldo.\n\n");
             else
@@ -4913,6 +4915,11 @@ void MainComponent::updateDiagnostics()
         {
             statusLabel_.setText(juce::String::fromUTF8("PLAYBACK SILENCIADO · revisá MUTE / FADER / BUS / DCA en el mixer"), juce::dontSendNotification);
             statusLabel_.setColour(juce::Label::textColourId, juce::Colour(danger));
+        }
+        else if (dawWorkspace_.isPlaying() && dawFxSilenceFallbackActive_.load(std::memory_order_relaxed))
+        {
+            statusLabel_.setText(juce::String::fromUTF8("PLAYBACK · DRY SAFE activo · una cadena FX estaba devolviendo silencio"), juce::dontSendNotification);
+            statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
         }
         else if (dawWorkspace_.isPlaying() && dawOutputFallbackActive_.load(std::memory_order_relaxed))
         {
@@ -5185,6 +5192,55 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
         dawMixerScratch_.clear(0, numSamples);
         dawWorkspace_.renderToMixer(dawMixerScratch_, kMaxChannels, numSamples);
 
+        float dryDawPeak = 0.0f;
+        const bool dryScratchReady = dawDryScratch_.getNumChannels() >= 2
+            && dawDryScratch_.getNumSamples() >= numSamples;
+        if (dryScratchReady)
+        {
+            dawDryScratch_.clear(0, numSamples);
+            auto* dryL = dawDryScratch_.getWritePointer(0);
+            auto* dryR = dawDryScratch_.getWritePointer(1);
+            const float master = masterGain_.load(std::memory_order_relaxed);
+
+            for (int ch = 0; ch < kMaxChannels; ++ch)
+            {
+                if (channelMute_[ch].load(std::memory_order_relaxed))
+                    continue;
+
+                const int dca = channelDca_[ch].load(std::memory_order_relaxed);
+                if (dca >= 0 && dca < kDcas && dcaMute_[dca].load(std::memory_order_relaxed))
+                    continue;
+
+                const int bus = channelBus_[ch].load(std::memory_order_relaxed);
+                if (bus >= 0 && bus < kBuses && busMute_[bus].load(std::memory_order_relaxed))
+                    continue;
+
+                float gain = channelGain_[ch].load(std::memory_order_relaxed)
+                    * (dca >= 0 && dca < kDcas ? dcaGain_[dca].load(std::memory_order_relaxed) : 1.0f)
+                    * master;
+                if (bus >= 0 && bus < kBuses)
+                    gain *= busGain_[bus].load(std::memory_order_relaxed);
+                if (gain <= 1.0e-8f)
+                    continue;
+
+                const float pan = juce::jlimit(-1.0f, 1.0f, channelPan_[ch].load(std::memory_order_relaxed));
+                const auto* rawL = dawMixerScratch_.getReadPointer(ch * 2);
+                const auto* rawR = dawMixerScratch_.getReadPointer(ch * 2 + 1);
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    float l = rawL[i];
+                    float r = rawR[i];
+                    if (pan < 0.0f) r *= 1.0f + pan;
+                    else if (pan > 0.0f) l *= 1.0f - pan;
+                    l *= gain;
+                    r *= gain;
+                    dryL[i] += l;
+                    dryR[i] += r;
+                    dryDawPeak = std::max(dryDawPeak, std::max(std::abs(l), std::abs(r)));
+                }
+            }
+        }
+
         if (dawAudible)
         {
             if (busAvailable)
@@ -5194,6 +5250,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             auto* outR = outputChannelData[playbackRight];
             const bool monoPa = playbackLeft == playbackRight;
             const float master = masterGain_.load(std::memory_order_relaxed);
+            float processedDawPeak = 0.0f;
 
             for (int ch = 0; ch < kMaxChannels; ++ch)
             {
@@ -5236,15 +5293,27 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
                     {
                         busScratch_.getWritePointer(bus * 2)[i] += l;
                         busScratch_.getWritePointer(bus * 2 + 1)[i] += r;
+                        if (!busMute_[bus].load(std::memory_order_relaxed))
+                        {
+                            const float busOutGain = busGain_[bus].load(std::memory_order_relaxed) * master;
+                            processedDawPeak = std::max(processedDawPeak,
+                                std::max(std::abs(l * busOutGain), std::abs(r * busOutGain)));
+                        }
                     }
                     else if (monoPa)
                     {
-                        outL[i] += (l + r) * 0.70710678f * master;
+                        const float v = (l + r) * 0.70710678f * master;
+                        outL[i] += v;
+                        processedDawPeak = std::max(processedDawPeak, std::abs(v));
                     }
                     else
                     {
-                        outL[i] += l * master;
-                        outR[i] += r * master;
+                        const float outSampleL = l * master;
+                        const float outSampleR = r * master;
+                        outL[i] += outSampleL;
+                        outR[i] += outSampleR;
+                        processedDawPeak = std::max(processedDawPeak,
+                            std::max(std::abs(outSampleL), std::abs(outSampleR)));
                     }
                 }
 
@@ -5274,7 +5343,35 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
                     }
                 }
             }
+
+            const bool fxSilencedRealSignal = dryScratchReady
+                && dryDawPeak > 1.0e-4f
+                && processedDawPeak < 1.0e-7f;
+            dawFxSilenceFallbackActive_.store(fxSilencedRealSignal, std::memory_order_relaxed);
+            if (fxSilencedRealSignal)
+            {
+                const auto* dryL = dawDryScratch_.getReadPointer(0);
+                const auto* dryR = dawDryScratch_.getReadPointer(1);
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    if (monoPa)
+                        outL[i] += (dryL[i] + dryR[i]) * 0.70710678f;
+                    else
+                    {
+                        outL[i] += dryL[i];
+                        outR[i] += dryR[i];
+                    }
+                }
+            }
         }
+        else
+        {
+            dawFxSilenceFallbackActive_.store(false, std::memory_order_relaxed);
+        }
+    }
+    else
+    {
+        dawFxSilenceFallbackActive_.store(false, std::memory_order_relaxed);
     }
 
     // Soft output protection is applied after live inputs, pads and DAW playback have been summed.
@@ -5362,6 +5459,9 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     pluginGuardScratch_.clear();
     dawMixerScratch_.setSize(kMaxChannels * 2, preparedBlock, false, true, false);
     dawMixerScratch_.clear();
+    dawDryScratch_.setSize(2, preparedBlock, false, true, false);
+    dawDryScratch_.clear();
+    dawFxSilenceFallbackActive_.store(false, std::memory_order_release);
     outputSafetyEvents_.store(0, std::memory_order_release);
     for (int ch = 0; ch < kMaxChannels; ++ch)
     {

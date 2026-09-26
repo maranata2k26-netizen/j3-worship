@@ -255,6 +255,7 @@ private:
     juce::AudioBuffer<float> pluginScratch_;
     juce::AudioBuffer<float> pluginGuardScratch_;
     juce::AudioBuffer<float> dawMixerScratch_;
+    juce::AudioBuffer<float> dawDryScratch_;
     juce::MidiBuffer pluginMidiScratch_;
     bool pluginsScanned_ { false };
     std::atomic<bool> pluginScanBusy_ { false };
@@ -291,6 +292,7 @@ private:
     bool updatePromptShown_ { false };
     std::atomic<bool> dawOutputFallbackActive_ { false };
     std::atomic<bool> dawOutputUnavailable_ { false };
+    std::atomic<bool> dawFxSilenceFallbackActive_ { false };
 
     juce::Image brandLogo_;
     juce::Label brandLabel_;

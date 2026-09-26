@@ -40,7 +40,7 @@ jobs:
       - name: Upload UI layout snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-UI-Layout-1.10.2
+          name: J3Worship-UI-Layout-1.10.3
           path: canonical-current/build-win/ui-snapshots/*.png
           if-no-files-found: error
 
@@ -62,6 +62,40 @@ jobs:
           if (!(Test-Path $iscc)) { throw "ISCC.exe not found" }
           & $iscc "canonical-current/installer/J3Worship.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - name: Legacy 1.9 updater compatibility smoke test
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Setup.exe").Path
+          $sourceExe = (Resolve-Path "canonical-current/dist/J3Worship.exe").Path
+          $legacyDir = Join-Path $env:RUNNER_TEMP "J3WorshipLegacy19"
+          $updaterDir = Join-Path $env:TEMP "J3WorshipUpdater"
+          $legacyExe = Join-Path $legacyDir "J3Worship.exe"
+          New-Item -ItemType Directory -Force -Path $legacyDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $updaterDir | Out-Null
+          Set-Content -Path $legacyExe -Value "legacy 1.9 executable placeholder" -Encoding ascii
+
+          $script = Join-Path $updaterDir "apply-update.cmd"
+          @(
+            '@echo off',
+            'timeout /t 2 /nobreak >nul',
+            ('start /wait "" "' + $setup + '" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS'),
+            ('start "" "' + $legacyExe + '"'),
+            'del "%~f0"'
+          ) | Set-Content -Path $script -Encoding ascii
+
+          $log = Join-Path $env:RUNNER_TEMP "j3-legacy19-update.log"
+          $p = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content $log -ErrorAction SilentlyContinue; throw "Legacy 1.9 compatibility install failed: $($p.ExitCode)" }
+
+          $expected = (Get-FileHash $sourceExe -Algorithm SHA256).Hash
+          $actual = (Get-FileHash $legacyExe -Algorithm SHA256).Hash
+          if ($actual -ne $expected) {
+            Get-Content $script -ErrorAction SilentlyContinue
+            Get-Content $log -ErrorAction SilentlyContinue
+            throw "Legacy 1.9 updater did not replace the exact executable it would reopen"
+          }
+          Remove-Item $script -Force -ErrorAction SilentlyContinue
 
       - name: In-place updater target smoke test
         shell: pwsh
@@ -116,14 +150,14 @@ jobs:
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.10.2
+          name: J3Worship-Windows-1.10.3
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Setup-1.10.2
+          name: J3Worship-Setup-1.10.3
           path: canonical-current/dist-installer/J3Worship-Setup.exe
           if-no-files-found: error
       - name: Publish official GitHub Release

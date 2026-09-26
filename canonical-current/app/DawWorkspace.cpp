@@ -3607,7 +3607,8 @@ void DawWorkspace::rebuildRenderState()
     const double secondsPerBeat = 60.0 / std::max(1.0, state.bpm);
     for (const auto& c : clips_)
     {
-        if (state.clipCount >= kMaxClips || c.audio == nullptr) break;
+        if (state.clipCount >= kMaxClips) break;
+        if (c.audio == nullptr) continue;
         auto& rc = state.clips[state.clipCount++];
         rc.audio = c.audio;
         rc.track = c.track;
@@ -3676,6 +3677,14 @@ void DawWorkspace::renderBlock(float* masterLeft,
     const int index = activeRenderState_.load(std::memory_order_acquire);
     renderReaders_[index].fetch_add(1, std::memory_order_acq_rel);
     const auto& state = renderStates_[index];
+    if (state.clipCount == 0 && state.midiNoteCount == 0)
+    {
+        playing_.store(false, std::memory_order_release);
+        transportSamples_.store(0, std::memory_order_relaxed);
+        renderReaders_[index].fetch_sub(1, std::memory_order_acq_rel);
+        return;
+    }
+
     const std::int64_t blockStart = transportSamples_.load(std::memory_order_relaxed);
     const std::int64_t blockEnd = blockStart + numSamples;
 
