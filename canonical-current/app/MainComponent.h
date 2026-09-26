@@ -19,6 +19,7 @@
 #include <functional>
 #include <utility>
 #include <optional>
+#include <vector>
 
 class MainComponent final : public juce::Component,
                             private juce::AudioIODeviceCallback,
@@ -142,6 +143,7 @@ private:
     void removeSetlistSong();
     void loadSelectedSong();
     void scanVst3Plugins();
+    void refreshPluginBrowser();
     void refreshPluginUi();
     void loadSelectedPlugin();
     void loadPluginPathIntoSlot(const juce::String& path, int channel, int slot);
@@ -238,6 +240,9 @@ private:
     juce::AudioBuffer<float> dawMixerScratch_;
     juce::MidiBuffer pluginMidiScratch_;
     bool pluginsScanned_ { false };
+    std::vector<int> pluginBrowserIndices_;
+    juce::StringArray favoritePluginPaths_;
+    juce::StringArray recentPluginPaths_;
 
     std::array<std::array<std::atomic<float>, kMaxChannels>, kIemMixes> iemSendGain_{};
     std::array<std::array<std::atomic<float>, kMaxChannels>, kIemMixes> iemSendPan_{};
@@ -264,6 +269,7 @@ private:
     std::atomic<bool> updateBusy_ { false };
     bool updatePromptShown_ { false };
     std::atomic<bool> dawOutputFallbackActive_ { false };
+    std::atomic<bool> dawOutputUnavailable_ { false };
 
     juce::Image brandLogo_;
     juce::Label brandLabel_;
@@ -373,7 +379,10 @@ private:
     juce::Label pluginsTitle_;
     juce::ComboBox pluginChannelBox_;
     juce::ComboBox pluginSlotBox_;
+    juce::TextEditor pluginSearch_;
+    juce::ComboBox pluginCategoryBox_;
     juce::ComboBox pluginCatalogBox_;
+    juce::ToggleButton favoritePluginButton_ { "★ FAVORITE" };
     juce::TextButton scanPluginsButton_ { "SCAN VST3" };
     juce::TextButton loadPluginButton_ { "LOAD INSERT" };
     juce::TextButton removePluginButton_ { "REMOVE" };
