@@ -3408,10 +3408,16 @@ void MainComponent::refreshRoutingControls()
     }
 
     const auto names = device->getOutputChannelNames();
+    const auto activeMask = device->getActiveOutputChannels();
     const int outputCount = names.size();
+    std::vector<bool> active(static_cast<std::size_t>(std::max(0, outputCount)), false);
     for (int i = 0; i < outputCount; ++i)
     {
-        const auto label = juce::String(i + 1) + juce::String::fromUTF8(" · ") + outputName(*device, i);
+        const bool enabled = activeMask[i];
+        active[static_cast<std::size_t>(i)] = enabled;
+        auto label = juce::String(i + 1) + juce::String::fromUTF8(" · ") + outputName(*device, i);
+        if (!enabled)
+            label << juce::String::fromUTF8(" · INACTIVA");
         paLeftBox_.addItem(label, i + 1);
         paRightBox_.addItem(label, i + 1);
         clickBox_.addItem(label, i + 2);
@@ -3419,17 +3425,18 @@ void MainComponent::refreshRoutingControls()
         iemOutRightBox_.addItem(label, i + 2);
     }
 
-    const int left = juce::jlimit(0, std::max(0, outputCount - 1), paLeft_.load());
-    const int rightDefault = outputCount > 1 ? 1 : 0;
-    const int currentRight = paRight_.load();
-    const int right = juce::jlimit(0, std::max(0, outputCount - 1), currentRight >= 0 && currentRight < outputCount ? currentRight : rightDefault);
+    const auto selected = j3::chooseActiveStereoOutputs(active, paLeft_.load(), paRight_.load());
+    const int left = selected.left;
+    const int right = selected.right;
     paLeft_.store(left);
     paRight_.store(right);
-    paLeftBox_.setSelectedId(outputCount > 0 ? left + 1 : 0, juce::dontSendNotification);
-    paRightBox_.setSelectedId(outputCount > 0 ? right + 1 : 0, juce::dontSendNotification);
+    paLeftBox_.setSelectedId(left >= 0 ? left + 1 : 0, juce::dontSendNotification);
+    paRightBox_.setSelectedId(right >= 0 ? right + 1 : 0, juce::dontSendNotification);
 
     int click = clickOutput_.load();
-    if (click >= 0 && click < outputCount && click != left && click != right)
+    if (click >= 0 && click < outputCount
+        && active[static_cast<std::size_t>(click)]
+        && click != left && click != right)
         clickBox_.setSelectedId(click + 2, juce::dontSendNotification);
     else
     {
@@ -3447,6 +3454,7 @@ void MainComponent::refreshRoutingControls()
         const int l = iemOutLeft_[m].load(std::memory_order_relaxed);
         const int r = iemOutRight_[m].load(std::memory_order_relaxed);
         const bool valid = l >= 0 && r >= 0 && l < outputCount && r < outputCount && l != r
+            && active[static_cast<std::size_t>(l)] && active[static_cast<std::size_t>(r)]
             && !occupied[static_cast<std::size_t>(l)] && !occupied[static_cast<std::size_t>(r)];
         if (valid)
         {
@@ -3460,8 +3468,16 @@ void MainComponent::refreshRoutingControls()
         }
     }
 
+    juce::String routeNote;
+    if (!selected.valid())
+        routeNote = juce::String::fromUTF8("\n⚠ No hay salidas activas. Abrí AUDIO / MIDI.");
+    else if (selected.usedFallback)
+        routeNote = juce::String::fromUTF8("\n✓ J3 corrigió automáticamente el PA a salidas activas ") + juce::String(left + 1)
+            + "/" + juce::String(right + 1);
+
     setupDeviceLabel_.setText("Device: " + device->getName() + "\nDriver: " + deviceManager_.getCurrentAudioDeviceType()
-        + "\nOutputs: " + juce::String(outputCount) + juce::String::fromUTF8(" · Inputs: ") + juce::String(device->getInputChannelNames().size()),
+        + "\nOutputs: " + juce::String(outputCount) + juce::String::fromUTF8(" · Inputs: ") + juce::String(device->getInputChannelNames().size())
+        + routeNote,
         juce::dontSendNotification);
     refreshIemUi();
     rebuildMixerBank();
