@@ -1,5 +1,5 @@
 #define MyAppName "J3 Worship"
-#define MyAppVersion "1.3.0"
+#define MyAppVersion "1.4.0"
 #define MyAppPublisher "J3 Worship"
 #define MyAppExeName "J3Worship.exe"
 
@@ -19,7 +19,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 SetupIconFile=..\resources\J3Worship.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
-VersionInfoVersion=1.3.0.0
+VersionInfoVersion=1.4.0.0
 VersionInfoCompany=J3 Worship
 VersionInfoDescription=J3 Worship Installer
 VersionInfoProductName=J3 Worship

@@ -128,19 +128,19 @@ public:
 
     void paint(juce::Graphics& g) override
     {
-        static constexpr const char* trackNames[8] {
-            "Voz Líder", "Coros", "Guitarra", "Bajo",
-            "Teclado", "Batería", "Secuencias", "Click"
+        static const juce::String trackNames[8] {
+            juce::String::fromUTF8("Voz Líder"), "Coros", "Guitarra", "Bajo",
+            "Teclado", juce::String::fromUTF8("Batería"), "Secuencias", "Click"
         };
-        static constexpr const char* cells[8][8] {
+        static const juce::String cells[8][8] {
             { "Intro", "Verse 1", "Pre-Chorus", "Chorus", "Verse 2", "Bridge", "Instrumental", "Ending" },
-            { "Pad 1", "Pad 2", "Pad 3", "Pad 4", "Ambiente", "Drone", "Shimmer", "—" },
-            { "Clean", "Drive", "Ambient", "Solo", "—", "—", "—", "—" },
-            { "Intro", "Verse", "Chorus", "Bridge", "—", "—", "—", "—" },
-            { "Piano", "Pad", "Strings", "Synth", "Ambient", "—", "—", "—" },
-            { "Kit 1", "Kit 2", "Loop", "Percusión", "Shaker", "—", "—", "—" },
-            { "FX 1", "FX 2", "Drone", "Risers", "Impactos", "—", "—", "—" },
-            { "Click", "Guía", "Metron", "—", "—", "—", "—", "—" }
+            { "Pad 1", "Pad 2", "Pad 3", "Pad 4", "Ambiente", "Drone", "Shimmer", juce::String::fromUTF8("—") },
+            { "Clean", "Drive", "Ambient", "Solo", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") },
+            { "Intro", "Verse", "Chorus", "Bridge", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") },
+            { "Piano", "Pad", "Strings", "Synth", "Ambient", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") },
+            { "Kit 1", "Kit 2", "Loop", juce::String::fromUTF8("Percusión"), "Shaker", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") },
+            { "FX 1", "FX 2", "Drone", "Risers", "Impactos", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") },
+            { "Click", juce::String::fromUTF8("Guía"), "Metron", juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—"), juce::String::fromUTF8("—") }
         };
         static constexpr std::uint32_t trackColours[8] {
             0xff168cff, 0xff9a4cf3, 0xff1bcf7a, 0xffffc52f,
@@ -179,7 +179,7 @@ public:
                     col == columns - 1 ? area.getWidth() - x : colW,
                     row == rows - 1 ? area.getHeight() - y : rowH).reduced(1);
 
-                const bool populated = juce::String(cells[col][row]) != "—";
+                const bool populated = juce::String(cells[col][row]) != juce::String::fromUTF8("—");
                 auto base = populated ? colour.withAlpha(0.28f) : juce::Colour(0xff182129);
                 if (row == selectedScene_)
                     base = populated ? colour.withAlpha(0.58f) : juce::Colour(0xff22303b);
@@ -194,7 +194,7 @@ public:
                     auto textArea = cell.reduced(5, 0);
                     g.setColour(row == selectedScene_ ? juce::Colours::white : juce::Colour(0xffd9e4ec));
                     g.setFont(juce::FontOptions(10.5f));
-                    g.drawText("▶", textArea.removeFromLeft(14), juce::Justification::centred);
+                    g.drawText(juce::String::fromUTF8("▶"), textArea.removeFromLeft(14), juce::Justification::centred);
                     g.drawText(cells[col][row], textArea, juce::Justification::centredLeft, true);
                 }
             }
@@ -521,7 +521,7 @@ MainComponent::MainComponent()
     brandLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     addAndMakeVisible(brandLabel_);
 
-    versionLabel_.setText("1.3.0", juce::dontSendNotification);
+    versionLabel_.setText("1.4.0", juce::dontSendNotification);
     versionLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     versionLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6f7b8a));
     addAndMakeVisible(versionLabel_);
@@ -531,12 +531,12 @@ MainComponent::MainComponent()
     statusLabel_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
     addAndMakeVisible(statusLabel_);
 
-    safetyLabel_.setText("LIVE SAFE · CHECK", juce::dontSendNotification);
+    safetyLabel_.setText(juce::String::fromUTF8("LIVE SAFE · CHECK"), juce::dontSendNotification);
     safetyLabel_.setJustificationType(juce::Justification::centred);
     safetyLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff402a14));
     safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffffc247));
-    safetyLabel_.setTooltip("LIVE SAFE: estado global de audio, routing, XRUNs, grabación y protección de plugins.");
+    safetyLabel_.setTooltip(juce::String::fromUTF8("LIVE SAFE: estado global de audio, routing, XRUNs, grabación y protección de plugins."));
     safetyLabel_.setInterceptsMouseClicks(true, false);
     safetyLabel_.addMouseListener(this, false);
     addAndMakeVisible(safetyLabel_);
@@ -569,7 +569,7 @@ MainComponent::MainComponent()
             if (device == nullptr || device->getActiveInputChannels().countNumberOfSetBits() == 0)
             {
                 liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
-                showAudioError("No hay entradas de audio activas. Configurá primero AUDIO / MIDI.");
+                showAudioError(juce::String::fromUTF8("No hay entradas de audio activas. Configurá primero AUDIO / MIDI."));
                 return;
             }
             if (!routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load()))
@@ -588,11 +588,11 @@ MainComponent::MainComponent()
     nowLabel_.setFont(juce::FontOptions(32.0f, juce::Font::bold));
     nowLabel_.setColour(juce::Label::textColourId, juce::Colour(text));
     nowLabel_.setJustificationType(juce::Justification::centred);
-    nextLabel_.setText("NEXT: —", juce::dontSendNotification);
+    nextLabel_.setText(juce::String::fromUTF8("NEXT: —"), juce::dontSendNotification);
     nextLabel_.setFont(juce::FontOptions(20.0f));
     nextLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffbdc6d3));
     nextLabel_.setJustificationType(juce::Justification::centred);
-    liveHint_.setText("LIVE WORSHIP · cambios cuantizados · FREE / PAD mantiene ambiente · monitoreo PA arranca apagado", juce::dontSendNotification);
+    liveHint_.setText(juce::String::fromUTF8("LIVE WORSHIP · cambios cuantizados · FREE / PAD mantiene ambiente · monitoreo PA arranca apagado"), juce::dontSendNotification);
     liveHint_.setJustificationType(juce::Justification::centred);
     liveHint_.setColour(juce::Label::textColourId, juce::Colour(mutedText));
     livePage_.addAndMakeVisible(nowLabel_);
@@ -702,7 +702,7 @@ MainComponent::MainComponent()
         });
     mixerPage_.addAndMakeVisible(*sessionGrid_);
 
-    dashboardSetlistTitle_.setText("BIBLIOTECA · SETLIST", juce::dontSendNotification);
+    dashboardSetlistTitle_.setText(juce::String::fromUTF8("BIBLIOTECA · SETLIST"), juce::dontSendNotification);
     dashboardSetlistTitle_.setFont(juce::FontOptions(17.0f, juce::Font::bold));
     dashboardSongInfo_.setFont(juce::FontOptions(14.0f));
     dashboardSongInfo_.setJustificationType(juce::Justification::topLeft);
@@ -721,7 +721,7 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(dashboardLoadSongButton_);
     mixerPage_.addAndMakeVisible(dashboardSongInfo_);
 
-    dashboardIemTitle_.setText("IEM · MONITORES", juce::dontSendNotification);
+    dashboardIemTitle_.setText(juce::String::fromUTF8("IEM · MONITORES"), juce::dontSendNotification);
     dashboardIemTitle_.setFont(juce::FontOptions(16.0f, juce::Font::bold));
     for (int i = 0; i < kIemMixes; ++i)
         dashboardIemMixBox_.addItem("MIX " + juce::String(i + 1), i + 1);
@@ -748,7 +748,7 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(dashboardIemMixBox_);
     mixerPage_.addAndMakeVisible(dashboardIemMasterSlider_);
 
-    dashboardRecordTitle_.setText("GRABACIÓN", juce::dontSendNotification);
+    dashboardRecordTitle_.setText(juce::String::fromUTF8("GRABACIÓN"), juce::dontSendNotification);
     dashboardRecordTitle_.setFont(juce::FontOptions(16.0f, juce::Font::bold));
     dashboardRecordButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(danger).darker(0.35f));
     dashboardRecordButton_.onClick = [this] { startStopRecording(); };
@@ -765,11 +765,11 @@ MainComponent::MainComponent()
     mixerPage_.addAndMakeVisible(dashboardPluginsTitle_);
     mixerPage_.addAndMakeVisible(dashboardPluginsInfo_);
 
-    dashboardLiveTitle_.setText("LIVE · SECCIONES", juce::dontSendNotification);
+    dashboardLiveTitle_.setText(juce::String::fromUTF8("LIVE · SECCIONES"), juce::dontSendNotification);
     dashboardLiveTitle_.setFont(juce::FontOptions(14.0f, juce::Font::bold));
     dashboardStopButton_.setButtonText("STOP ALL");
     dashboardStopButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff7d1f2b));
-    dashboardStopButton_.setTooltip("Silencia PA, pads, click y reproducción inmediatamente. La grabación continúa.");
+    dashboardStopButton_.setTooltip(L"Silencia PA, pads, click y reproducción inmediatamente. La grabación continúa.");
     dashboardStopButton_.onClick = [this] { panicStopAll(); };
     mixerPage_.addAndMakeVisible(dashboardStopButton_);
     dashboardPadButton_.onClick = [this]
@@ -805,7 +805,7 @@ MainComponent::MainComponent()
     }
     refreshDashboard();
 
-    dspTitle_.setText("J3 CHANNEL DSP · EQ · GATE · COMP · DENOISE", juce::dontSendNotification);
+    dspTitle_.setText(juce::String::fromUTF8("J3 CHANNEL DSP · EQ · GATE · COMP · DENOISE"), juce::dontSendNotification);
     dspTitle_.setFont(juce::FontOptions(23.0f, juce::Font::bold));
     dspTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
     dspPage_.addAndMakeVisible(dspTitle_);
@@ -948,7 +948,7 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
 
-    pluginsTitle_.setText("VST3 INSERTS · 8 SLOTS PER INPUT", juce::dontSendNotification);
+    pluginsTitle_.setText(juce::String::fromUTF8("VST3 INSERTS · 8 SLOTS PER INPUT"), juce::dontSendNotification);
     pluginsTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
     pluginsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
     pluginsPage_.addAndMakeVisible(pluginsTitle_);
@@ -1028,7 +1028,7 @@ MainComponent::MainComponent()
         if (padEnabledButton_.getToggleState() && !padToPa_.load(std::memory_order_relaxed))
         {
             padEnabledButton_.setToggleState(false, juce::dontSendNotification);
-            showAudioError("J3 PADS no tiene una ruta activa. Habilitá ROUTE TO PA.");
+            showAudioError(juce::String::fromUTF8("J3 PADS no tiene una ruta activa. Habilitá ROUTE TO PA."));
             return;
         }
         ambientPad_.setEnabled(padEnabledButton_.getToggleState());
@@ -1093,7 +1093,7 @@ MainComponent::MainComponent()
                 transportRunning_.store(false, std::memory_order_release);
                 clickGenerator_.setEnabled(false);
             }
-            showAudioError("Elegí una salida CLICK / GUIDE distinta del PA antes de activar el click.");
+            showAudioError(juce::String::fromUTF8("Elegí una salida CLICK / GUIDE distinta del PA antes de activar el click."));
         }
         updateClickUi();
         saveAppState();
@@ -1319,7 +1319,7 @@ MainComponent::MainComponent()
     tabs_.addTab("PLUGINS", juce::Colour(panel), &pluginsPage_, false);
     tabs_.addTab("IEM", juce::Colour(panel), &iemPage_, false);
     tabs_.addTab("CLICK", juce::Colour(panel), &clickPage_, false);
-    tabs_.addTab("GRABACIÓN", juce::Colour(panel), &recordingPage_, false);
+    tabs_.addTab(juce::String::fromUTF8("GRABACIÓN"), juce::Colour(panel), &recordingPage_, false);
     tabs_.addTab("RUTEO", juce::Colour(panel), &setupPage_, false);
     tabs_.addTab("AJUSTES", juce::Colour(panel), &diagnosticsPage_, false);
     addAndMakeVisible(tabs_);
@@ -1375,13 +1375,13 @@ void MainComponent::mouseUp(const juce::MouseEvent& e)
     const juce::String summary = label.containsIgnoreCase("NO AUDIO")
         ? "No hay interfaz de audio activa."
         : (label.containsIgnoreCase("WARN")
-            ? "Hay una advertencia de rendimiento, grabación, plugin o salida."
+            ? juce::String::fromUTF8("Hay una advertencia de rendimiento, grabación, plugin o salida.")
             : (label.containsIgnoreCase("CHECK")
-                ? "Revisá interfaz y routing antes del show."
+                ? juce::String::fromUTF8("Revisá interfaz y routing antes del show.")
                 : "Audio y routing sin alertas detectadas."));
     menu.addItem(100, summary, false);
     menu.addSeparator();
-    menu.addItem(1, "Abrir diagnóstico completo");
+    menu.addItem(1, juce::String::fromUTF8("Abrir diagnóstico completo"));
 
     juce::Component::SafePointer<MainComponent> safe(this);
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&safetyLabel_),
@@ -1405,7 +1405,7 @@ void MainComponent::paint(juce::Graphics& g)
         g.drawImageWithin(brandLogo_, 14, 7, 58, 58, juce::RectanglePlacement::centred);
     g.setColour(juce::Colour(0xffaebdc8));
     g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
-    g.drawText("LIVE · MIX · IEM · RECORD · WORSHIP", 80, 48, 220, 14,
+    g.drawText(juce::String::fromUTF8("LIVE · MIX · IEM · RECORD · WORSHIP"), 80, 48, 220, 14,
                juce::Justification::centredLeft, false);
 }
 
@@ -1529,15 +1529,15 @@ void MainComponent::refreshDashboard()
         {
             juce::String info;
             info << (song->artist.empty() ? juce::String("Worship set") : juce::String(song->artist)) << "\n";
-            info << (song->key.empty() ? juce::String("Tono —") : "Tono " + juce::String(song->key))
-                 << "  ·  " << juce::String(song->bpm, 1) << " BPM";
+            info << (song->key.empty() ? juce::String(juce::String::fromUTF8("Tono —")) : "Tono " + juce::String(song->key))
+                 << juce::String::fromUTF8("  ·  ") << juce::String(song->bpm, 1) << " BPM";
             dashboardSongInfo_.setText(info, juce::dontSendNotification);
         }
     }
     else
     {
         juce::ignoreUnused(previousId);
-        dashboardSongInfo_.setText("Setlist vacío\nAgregá canciones en SETLIST.", juce::dontSendNotification);
+        dashboardSongInfo_.setText(juce::String::fromUTF8("Setlist vacío\nAgregá canciones en SETLIST."), juce::dontSendNotification);
     }
 
     const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
@@ -1548,7 +1548,7 @@ void MainComponent::refreshDashboard()
 
     const bool recording = recordingEnabled_.load(std::memory_order_acquire);
     dashboardRecordButton_.setButtonText(recording ? "DETENER" : "GRABAR");
-    dashboardRecordInfo_.setText(recording ? "Grabando multicanal…" : "Listo para grabación multicanal",
+    dashboardRecordInfo_.setText(recording ? juce::String::fromUTF8("Grabando multicanal…") : juce::String::fromUTF8("Listo para grabación multicanal"),
                                  juce::dontSendNotification);
 
     const int selectedPluginChannel = juce::jlimit(0, kMaxChannels - 1,
@@ -1563,7 +1563,7 @@ void MainComponent::refreshDashboard()
             continue;
         if (loadedPlugins < 3)
         {
-            if (loadedPlugins > 0) chain << " · ";
+            if (loadedPlugins > 0) chain << juce::String::fromUTF8(" · ");
             chain << (pluginNames_[selectedPluginChannel][slot].isNotEmpty()
                 ? pluginNames_[selectedPluginChannel][slot] : plugin->getName());
             if (pluginBypass_[selectedPluginChannel][slot].load(std::memory_order_relaxed))
@@ -1573,14 +1573,14 @@ void MainComponent::refreshDashboard()
         ++loadedPlugins;
     }
     if (loadedPlugins == 0)
-        chain << "Sin inserts · 8 slots disponibles";
+        chain << juce::String::fromUTF8("Sin inserts · 8 slots disponibles");
     else if (loadedPlugins > 3)
-        chain << " · +" << (loadedPlugins - 3);
+        chain << juce::String::fromUTF8(" · +") << (loadedPlugins - 3);
     dashboardPluginsInfo_.setText(chain, juce::dontSendNotification);
 
     dashboardPadButton_.setToggleState(padEnabledButton_.getToggleState(), juce::dontSendNotification);
     dashboardClickButton_.setToggleState(clickEnabledButton_.getToggleState(), juce::dontSendNotification);
-    dashboardTempoLabel_.setText(juce::String(bpmSlider_.getValue(), 1) + " BPM  ·  "
+    dashboardTempoLabel_.setText(juce::String(bpmSlider_.getValue(), 1) + juce::String::fromUTF8(" BPM  ·  ")
         + (padKeyBox_.getText().isNotEmpty() ? padKeyBox_.getText() : juce::String("C"))
         + (padMinorButton_.getToggleState() ? "m" : ""), juce::dontSendNotification);
 }
@@ -1606,13 +1606,13 @@ void MainComponent::checkForUpdatesAsync()
             {
                 safe->availableUpdate_ = *update;
                 safe->updateButton_.setButtonText("ACTUALIZAR " + update->versionText);
-                safe->updateButton_.setTooltip("Nueva versión disponible. Descarga verificada por SHA-256.");
+                safe->updateButton_.setTooltip(juce::String::fromUTF8("Nueva versión disponible. Descarga verificada por SHA-256."));
                 safe->updateButton_.setVisible(true);
                 safe->resized();
             }
             else if (error.isNotEmpty())
             {
-                safe->updateButton_.setTooltip("No se pudo comprobar la versión: " + error);
+                safe->updateButton_.setTooltip(juce::String::fromUTF8("No se pudo comprobar la versión: ") + error);
             }
         });
     }).detach();
@@ -1640,8 +1640,8 @@ void MainComponent::beginUpdateInstall()
         if (!safeToInstallNow())
         {
             juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
-                "Actualización lista",
-                "La nueva versión ya está descargada y verificada. Detené LIVE/CLICK y la grabación; después tocá INSTALAR.");
+                juce::String::fromUTF8("Actualización lista"),
+                juce::String::fromUTF8("La nueva versión ya está descargada y verificada. Detené LIVE/CLICK y la grabación; después tocá INSTALAR."));
             updateButton_.setButtonText("INSTALAR " + availableUpdate_->versionText);
             return;
         }
@@ -1660,7 +1660,7 @@ void MainComponent::beginUpdateInstall()
         return;
 
     updateButton_.setEnabled(false);
-    updateButton_.setButtonText("DESCARGANDO…");
+    updateButton_.setButtonText(juce::String::fromUTF8("DESCARGANDO…"));
     const auto update = *availableUpdate_;
     auto safe = juce::Component::SafePointer<MainComponent>(this);
     std::thread([safe, update]
@@ -1759,7 +1759,7 @@ void MainComponent::refreshDspUi()
         eqFreqSliders_[band].setValue(channelEqFreq_[ch][band].load(std::memory_order_relaxed), juce::dontSendNotification);
         eqGainSliders_[band].setValue(channelEqGain_[ch][band].load(std::memory_order_relaxed), juce::dontSendNotification);
     }
-    dspTitle_.setText("J3 CHANNEL DSP · " + inputChannelName(ch), juce::dontSendNotification);
+    dspTitle_.setText(juce::String::fromUTF8("J3 CHANNEL DSP · ") + inputChannelName(ch), juce::dontSendNotification);
 }
 
 void MainComponent::applyDspPreset(int preset)
@@ -1821,8 +1821,8 @@ void MainComponent::refreshSetlistUi()
         const auto* song = setlist_.song(i);
         if (song == nullptr) continue;
         juce::String label = juce::String(static_cast<int>(i + 1)) + ". " + juce::String(song->name);
-        if (!song->key.empty()) label << " · " << juce::String(song->key);
-        label << " · " << juce::String(song->bpm, 1) << " BPM";
+        if (!song->key.empty()) label << juce::String::fromUTF8(" · ") << juce::String(song->key);
+        label << juce::String::fromUTF8(" · ") << juce::String(song->bpm, 1) << " BPM";
         setlistSongBox_.addItem(label, static_cast<int>(i + 1));
     }
     if (previous >= 0 && previous < static_cast<int>(setlist_.size()))
@@ -1838,8 +1838,8 @@ void MainComponent::refreshSetlistUi()
     {
         info << "Selected: " << juce::String(song->name) << "\n";
         if (!song->artist.empty()) info << "Artist: " << juce::String(song->artist) << "\n";
-        info << "Key: " << (song->key.empty() ? juce::String("—") : juce::String(song->key))
-             << " · " << juce::String(song->bpm, 1) << " BPM · "
+        info << "Key: " << (song->key.empty() ? juce::String(juce::String::fromUTF8("—")) : juce::String(song->key))
+             << juce::String::fromUTF8(" · ") << juce::String(song->bpm, 1) << juce::String::fromUTF8(" BPM · ")
              << song->numerator << "/" << song->denominator << "\n";
         info << "LOAD INTO LIVE transfers tempo/time signature to J3 CLICK and LIVE.";
     }
@@ -1857,7 +1857,7 @@ void MainComponent::addSetlistSong()
     const auto name = songNameEditor_.getText().trim();
     if (name.isEmpty())
     {
-        showAudioError("Escribí el nombre de la canción antes de agregarla al setlist.");
+        showAudioError(juce::String::fromUTF8("Escribí el nombre de la canción antes de agregarla al setlist."));
         return;
     }
     j3::SongRef song;
@@ -1902,9 +1902,9 @@ void MainComponent::loadSelectedSong()
     else if (song->numerator == 2 && song->denominator == 4) signatureId = 4;
     timeSignatureBox_.setSelectedId(signatureId, juce::sendNotificationSync);
 
-    liveHint_.setText("SONG: " + juce::String(song->name) + " · "
-        + (song->key.empty() ? juce::String("KEY —") : "KEY " + juce::String(song->key))
-        + " · " + juce::String(song->bpm, 1) + " BPM · section changes remain quantized",
+    liveHint_.setText("SONG: " + juce::String(song->name) + juce::String::fromUTF8(" · ")
+        + (song->key.empty() ? juce::String(juce::String::fromUTF8("KEY —")) : "KEY " + juce::String(song->key))
+        + juce::String::fromUTF8(" · ") + juce::String(song->bpm, 1) + juce::String::fromUTF8(" BPM · section changes remain quantized"),
         juce::dontSendNotification);
 
     // If the key is recognisable, make J3 PADS follow it without auto-enabling audio.
@@ -1949,7 +1949,7 @@ void MainComponent::rebuildMixerBank()
             channelBus_[channel], channelDca_[channel]);
         mixerPage_.addAndMakeVisible(*strips_[i]);
     }
-    mixerBankLabel_.setText("INPUTS " + juce::String(mixerBankStart_ + 1) + "–"
+    mixerBankLabel_.setText("INPUTS " + juce::String(mixerBankStart_ + 1) + juce::String::fromUTF8("–")
         + juce::String(std::min(kMaxChannels, mixerBankStart_ + kVisibleChannels))
         + " / " + juce::String(kMaxChannels), juce::dontSendNotification);
     mixerPrevButton_.setEnabled(mixerBankStart_ > 0);
@@ -1967,7 +1967,7 @@ void MainComponent::rebuildIemBank()
             iemSendGain_[selectedIemMix_][channel], iemSendPan_[selectedIemMix_][channel]);
         iemPage_.addAndMakeVisible(*iemStrips_[i]);
     }
-    iemBankLabel_.setText("SOURCES " + juce::String(iemBankStart_ + 1) + "–"
+    iemBankLabel_.setText("SOURCES " + juce::String(iemBankStart_ + 1) + juce::String::fromUTF8("–")
         + juce::String(std::min(kMaxChannels, iemBankStart_ + kVisibleChannels))
         + " / " + juce::String(kMaxChannels), juce::dontSendNotification);
     iemPrevButton_.setEnabled(iemBankStart_ > 0);
@@ -2035,7 +2035,7 @@ void MainComponent::applyIemRoutingFromControls()
         iemOutRight_[mix].store(-1, std::memory_order_relaxed);
         iemOutLeftBox_.setSelectedId(1, juce::dontSendNotification);
         iemOutRightBox_.setSelectedId(1, juce::dontSendNotification);
-        showAudioError("J3 SAFE ROUTING bloqueó ese IEM: usá dos salidas libres, distintas del PA, CLICK y otros IEM.");
+        showAudioError(juce::String::fromUTF8("J3 SAFE ROUTING bloqueó ese IEM: usá dos salidas libres, distintas del PA, CLICK y otros IEM."));
         return;
     }
     iemOutLeft_[mix].store(left, std::memory_order_relaxed);
@@ -2650,7 +2650,7 @@ void MainComponent::startStopRecording()
         recordingEnabled_.store(false, std::memory_order_release);
         std::string error;
         if (!recorder_.stop(error) && !error.empty())
-            showAudioError("No se pudo finalizar la grabación: " + juce::String(error));
+            showAudioError(juce::String::fromUTF8("No se pudo finalizar la grabación: ") + juce::String(error));
         recordChannelCount_.store(0, std::memory_order_release);
         updateRecordingUi();
         return;
@@ -2678,7 +2678,7 @@ void MainComponent::startStopRecording()
     }
     if (channelNames.empty())
     {
-        showAudioError("No hay entradas activas para grabar. Activá entradas desde AUDIO / MIDI.");
+        showAudioError(juce::String::fromUTF8("No hay entradas activas para grabar. Activá entradas desde AUDIO / MIDI."));
         return;
     }
 
@@ -2688,7 +2688,7 @@ void MainComponent::startStopRecording()
     constexpr std::int64_t kMinimumRecordingFreeBytes = 1024LL * 1024LL * 1024LL;
     if (freeBytes >= 0 && freeBytes < kMinimumRecordingFreeBytes)
     {
-        showAudioError("Espacio insuficiente para una grabación segura. Liberá al menos 1 GB en el disco de grabaciones.");
+        showAudioError(juce::String::fromUTF8("Espacio insuficiente para una grabación segura. Liberá al menos 1 GB en el disco de grabaciones."));
         return;
     }
 
@@ -2728,15 +2728,15 @@ void MainComponent::updateRecordingUi()
     recordButton_.setButtonText(active ? "STOP RECORDING" : "RECORD SERVICE");
     recordButton_.setColour(juce::TextButton::buttonColourId, active ? juce::Colour(danger) : juce::Colour(0xff9b2430));
     juce::String status;
-    status << (active ? "● RECORDING\n" : "READY\n");
+    status << (active ? juce::String::fromUTF8("● RECORDING\n") : "READY\n");
     status << "Folder: " << recordingsRoot().getFullPathName() << "\n";
     status << "Individual WAV files: " << recordChannelCount_.load() << "\n";
     const auto drops = recorder_.overflowCount();
     status << "Dropped recording blocks: " << drops << "\n";
     if (recorder_.hasWorkerError())
-        status << "⚠ DISK WRITE ERROR — recording protection stopped the writer.\n";
+        status << juce::String::fromUTF8("⚠ DISK WRITE ERROR — recording protection stopped the writer.\n");
     else if (drops > 0)
-        status << "⚠ DISK TOO SLOW — el audio en vivo sigue protegido, revisá la grabación.\n";
+        status << juce::String::fromUTF8("⚠ DISK TOO SLOW — el audio en vivo sigue protegido, revisá la grabación.\n");
     status << "Audio is copied into a lock-free queue; disk I/O stays off the real-time callback.";
     recordingStatusLabel_.setText(status, juce::dontSendNotification);
 }
@@ -2767,7 +2767,7 @@ void MainComponent::scanVst3Plugins()
 {
     if (pluginMutationLocked())
     {
-        showAudioError("Por seguridad, el escaneo VST3 está bloqueado durante LIVE, reproducción o grabación. Detené el transporte y volvé a intentar.");
+        showAudioError(juce::String::fromUTF8("Por seguridad, el escaneo VST3 está bloqueado durante LIVE, reproducción o grabación. Detené el transporte y volvé a intentar."));
         return;
     }
 
@@ -2822,18 +2822,18 @@ void MainComponent::refreshPluginUi()
     loadPluginButton_.setEnabled(pluginsScanned_ && pluginCatalogBox_.getSelectedId() > 0);
 
     juce::String status;
-    status << "Channel: " << inputChannelName(ch) << " · Insert " << (slot + 1) << "\n";
+    status << "Channel: " << inputChannelName(ch) << juce::String::fromUTF8(" · Insert ") << (slot + 1) << "\n";
     if (loaded)
     {
         status << "Loaded: " << (pluginNames_[ch][slot].isNotEmpty() ? pluginNames_[ch][slot] : plugin->getName()) << "\n";
         const auto faults = pluginFaults_[ch][slot].load(std::memory_order_relaxed);
-        status << "Latency: " << plugin->getLatencySamples() << " samples · "
+        status << "Latency: " << plugin->getLatencySamples() << juce::String::fromUTF8(" samples · ")
                << (pluginBypass_[ch][slot].load(std::memory_order_relaxed) ? "BYPASSED" : "ACTIVE") << "\n";
         if (faults > 0)
-            status << "LIVE SAFE: auto-bypass por audio inválido/fallo (" << faults << ").\n";
+            status << juce::String::fromUTF8("LIVE SAFE: auto-bypass por audio inválido/fallo (") << faults << ").\n";
         status << (plugin->hasEditor()
             ? "OPEN PLUGIN abre la interfaz nativa del VST3."
-            : "OPEN PLUGIN abre el editor genérico de parámetros.");
+            : juce::String::fromUTF8("OPEN PLUGIN abre el editor genérico de parámetros."));
     }
     else if (pluginPaths_[ch][slot].isNotEmpty())
     {
@@ -2852,7 +2852,7 @@ void MainComponent::loadSelectedPlugin()
 {
     if (pluginMutationLocked())
     {
-        showAudioError("Por seguridad, no se cargan plugins nuevos durante LIVE, reproducción o grabación. Podés abrir o bypassar los que ya están cargados.");
+        showAudioError(juce::String::fromUTF8("Por seguridad, no se cargan plugins nuevos durante LIVE, reproducción o grabación. Podés abrir o bypassar los que ya están cargados."));
         return;
     }
 
@@ -2860,7 +2860,7 @@ void MainComponent::loadSelectedPlugin()
     const auto& plugins = pluginCatalog_.plugins();
     if (selected < 0 || selected >= static_cast<int>(plugins.size()))
     {
-        showAudioError("Seleccioná un VST3 del catálogo.");
+        showAudioError(juce::String::fromUTF8("Seleccioná un VST3 del catálogo."));
         return;
     }
     const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
@@ -2945,7 +2945,7 @@ void MainComponent::removeSelectedPlugin()
 {
     if (pluginMutationLocked())
     {
-        showAudioError("Por seguridad, no se quitan plugins durante LIVE, reproducción o grabación. Usá BYPASS si necesitás sacarlo de la cadena inmediatamente.");
+        showAudioError(juce::String::fromUTF8("Por seguridad, no se quitan plugins durante LIVE, reproducción o grabación. Usá BYPASS si necesitás sacarlo de la cadena inmediatamente."));
         return;
     }
 
@@ -2972,7 +2972,7 @@ void MainComponent::openSelectedPluginEditor()
     auto holder = std::make_unique<GenericPluginEditorHolder>(plugin);
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(holder.release());
-    options.dialogTitle = "J3 Worship · " + plugin->getName();
+    options.dialogTitle = juce::String::fromUTF8("J3 Worship · ") + plugin->getName();
     options.dialogBackgroundColour = juce::Colour(panel);
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
@@ -3074,9 +3074,9 @@ void MainComponent::refreshPadUi()
 
     juce::String info;
     info << "Chord: " << keys[static_cast<std::size_t>(keyIndex)] << (ambientPad_.minor() ? " minor" : " major") << "\n";
-    info << "Stereo ambient generator · continuous sustain · click-free fade in/out\n";
+    info << juce::String::fromUTF8("Stereo ambient generator · continuous sustain · click-free fade in/out\n");
     info << "Route: " << (padToPa_.load(std::memory_order_relaxed) ? "PA master" : "OFF")
-         << " · Output protection remains active.";
+         << juce::String::fromUTF8(" · Output protection remains active.");
     padInfoLabel_.setText(info, juce::dontSendNotification);
 }
 
@@ -3084,9 +3084,9 @@ void MainComponent::updateClickUi()
 {
     const int out = clickOutput_.load(std::memory_order_relaxed);
     juce::String route = "CLICK routing: ";
-    if (out < 0) route << "OFF — choose an output in AUDIO / ROUTING.";
+    if (out < 0) route << juce::String::fromUTF8("OFF — choose an output in AUDIO / ROUTING.");
     else route << "Output " << (out + 1) << ". J3 Safe Routing blocks this output if it is also used by PA.";
-    route << "\nTempo: " << juce::String(bpmSlider_.getValue(), 1) << " BPM · "
+    route << "\nTempo: " << juce::String(bpmSlider_.getValue(), 1) << juce::String::fromUTF8(" BPM · ")
           << clickGenerator_.numerator() << "/" << clickGenerator_.denominator();
     clickRouteLabel_.setText(route, juce::dontSendNotification);
 }
@@ -3106,7 +3106,7 @@ void MainComponent::configureAudio()
     if (error.isNotEmpty())
     {
         lastAudioError_ = error;
-        statusLabel_.setText("Audio: requiere configuración", juce::dontSendNotification);
+        statusLabel_.setText(juce::String::fromUTF8("Audio: requiere configuración"), juce::dontSendNotification);
         statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
         scheduleReconnect();
     }
@@ -3192,7 +3192,7 @@ void MainComponent::openAudioSettings()
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(selector.release());
-    options.dialogTitle = "J3 Worship — Audio / MIDI";
+    options.dialogTitle = juce::String::fromUTF8("J3 Worship — Audio / MIDI");
     options.dialogBackgroundColour = juce::Colour(panel);
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
@@ -3210,7 +3210,7 @@ void MainComponent::openDriverControlPanel()
             return;
         }
     }
-    showAudioError("El driver actual no expone un panel de control propio. Usá AUDIO / MIDI para cambiar sample rate, buffer o dispositivo.");
+    showAudioError(juce::String::fromUTF8("El driver actual no expone un panel de control propio. Usá AUDIO / MIDI para cambiar sample rate, buffer o dispositivo."));
 }
 
 void MainComponent::showAudioError(const juce::String& message)
@@ -3221,7 +3221,7 @@ void MainComponent::showAudioError(const juce::String& message)
 juce::String MainComponent::buildDeviceInventoryText() const
 {
     if (deviceInventory_.isEmpty())
-        return "No se escanearon drivers todavía.";
+        return juce::String::fromUTF8("No se escanearon drivers todavía.");
     return deviceInventory_;
 }
 
@@ -3239,7 +3239,7 @@ void MainComponent::refreshRoutingControls()
     auto* device = deviceManager_.getCurrentAudioDevice();
     if (device == nullptr)
     {
-        setupDeviceLabel_.setText("No hay interfaz activa. Abrí AUDIO / MIDI para elegir un driver.", juce::dontSendNotification);
+        setupDeviceLabel_.setText(juce::String::fromUTF8("No hay interfaz activa. Abrí AUDIO / MIDI para elegir un driver."), juce::dontSendNotification);
         clickBox_.setSelectedId(1, juce::dontSendNotification);
         iemOutLeftBox_.setSelectedId(1, juce::dontSendNotification);
         iemOutRightBox_.setSelectedId(1, juce::dontSendNotification);
@@ -3250,7 +3250,7 @@ void MainComponent::refreshRoutingControls()
     const int outputCount = names.size();
     for (int i = 0; i < outputCount; ++i)
     {
-        const auto label = juce::String(i + 1) + " · " + outputName(*device, i);
+        const auto label = juce::String(i + 1) + juce::String::fromUTF8(" · ") + outputName(*device, i);
         paLeftBox_.addItem(label, i + 1);
         paRightBox_.addItem(label, i + 1);
         clickBox_.addItem(label, i + 2);
@@ -3300,7 +3300,7 @@ void MainComponent::refreshRoutingControls()
     }
 
     setupDeviceLabel_.setText("Device: " + device->getName() + "\nDriver: " + deviceManager_.getCurrentAudioDeviceType()
-        + "\nOutputs: " + juce::String(outputCount) + " · Inputs: " + juce::String(device->getInputChannelNames().size()),
+        + "\nOutputs: " + juce::String(outputCount) + juce::String::fromUTF8(" · Inputs: ") + juce::String(device->getInputChannelNames().size()),
         juce::dontSendNotification);
     refreshIemUi();
     rebuildMixerBank();
@@ -3316,7 +3316,7 @@ void MainComponent::applyRoutingFromControls()
     if (!routeIsSafe(newLeft, newRight, newClick))
     {
         clickBox_.setSelectedId(clickOutput_.load() >= 0 ? clickOutput_.load() + 2 : 1, juce::dontSendNotification);
-        showAudioError("J3 SAFE ROUTING bloqueó esa selección: CLICK / GUIDE no puede compartir una salida usada por el PA.");
+        showAudioError(juce::String::fromUTF8("J3 SAFE ROUTING bloqueó esa selección: CLICK / GUIDE no puede compartir una salida usada por el PA."));
         return;
     }
 
@@ -3328,7 +3328,7 @@ void MainComponent::applyRoutingFromControls()
         if (l == newLeft || l == newRight || r == newLeft || r == newRight || l == newClick || r == newClick)
         {
             refreshRoutingControls();
-            showAudioError("J3 SAFE ROUTING bloqueó esa salida porque ya está dedicada a un IEM. Liberá primero ese IEM.");
+            showAudioError(juce::String::fromUTF8("J3 SAFE ROUTING bloqueó esa salida porque ya está dedicada a un IEM. Liberá primero ese IEM."));
             return;
         }
     }
@@ -3377,67 +3377,67 @@ void MainComponent::updateDiagnostics()
 
         if (hardUnsafe)
         {
-            safetyLabel_.setText("LIVE SAFE · CHECK", juce::dontSendNotification);
+            safetyLabel_.setText(juce::String::fromUTF8("LIVE SAFE · CHECK"), juce::dontSendNotification);
             safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff4a151c));
             safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffff7384));
         }
         else if (degraded)
         {
-            safetyLabel_.setText("LIVE SAFE · WARN", juce::dontSendNotification);
+            safetyLabel_.setText(juce::String::fromUTF8("LIVE SAFE · WARN"), juce::dontSendNotification);
             safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff4a3612));
             safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffffcf67));
         }
         else
         {
-            safetyLabel_.setText("LIVE SAFE ✓", juce::dontSendNotification);
+            safetyLabel_.setText(juce::String::fromUTF8("LIVE SAFE ✓"), juce::dontSendNotification);
             safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff123c2b));
             safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff73e7ad));
         }
 
-        report << "✓ AUDIO DEVICE\n    " << d->getName() << "\n\n";
-        report << (isAsio ? "✓" : "⚠") << " DRIVER TYPE\n    " << deviceManager_.getCurrentAudioDeviceType();
+        report << juce::String::fromUTF8("✓ AUDIO DEVICE\n    ") << d->getName() << "\n\n";
+        report << (isAsio ? juce::String::fromUTF8("✓") : juce::String::fromUTF8("⚠")) << " DRIVER TYPE\n    " << deviceManager_.getCurrentAudioDeviceType();
         if (!isAsio)
             report << "  (ASIO recommended for lowest-latency live use when the interface provides it)";
         report << "\n\n";
-        report << "✓ I/O\n    " << activeInputs << " active inputs  ·  " << activeOutputs << " active outputs\n\n";
-        report << "✓ SAMPLE RATE\n    " << juce::String(sr, 0) << " Hz\n\n";
-        report << (bufferRisk ? "⚠" : "✓") << " BUFFER\n    " << bs << " samples";
+        report << juce::String::fromUTF8("✓ I/O\n    ") << activeInputs << juce::String::fromUTF8(" active inputs  ·  ") << activeOutputs << " active outputs\n\n";
+        report << juce::String::fromUTF8("✓ SAMPLE RATE\n    ") << juce::String(sr, 0) << " Hz\n\n";
+        report << (bufferRisk ? juce::String::fromUTF8("⚠") : juce::String::fromUTF8("✓")) << " BUFFER\n    " << bs << " samples";
         if (bufferRisk)
-            report << (bs < 32 ? "  ·  demasiado bajo para un show estable" : "  ·  demasiado alto para monitoreo en vivo");
+            report << (bs < 32 ? juce::String::fromUTF8("  ·  demasiado bajo para un show estable") : juce::String::fromUTF8("  ·  demasiado alto para monitoreo en vivo"));
         report << "\n\n";
-        report << "✓ REPORTED I/O LATENCY\n    Input " << juce::String(inLatencyMs, 2)
-               << " ms  ·  Output " << juce::String(outLatencyMs, 2) << " ms\n\n";
-        report << (xruns == 0 ? "✓" : "⚠") << " XRUNS / DROPOUTS\n    " << xruns << "\n\n";
-        report << "✓ MIDI\n    " << midiInputs << " input(s) · " << midiOutputs << " output(s)\n\n";
-        report << (diskLow ? "⚠" : "✓") << " RECORDING DISK\n    "
+        report << juce::String::fromUTF8("✓ REPORTED I/O LATENCY\n    Input ") << juce::String(inLatencyMs, 2)
+               << juce::String::fromUTF8(" ms  ·  Output ") << juce::String(outLatencyMs, 2) << " ms\n\n";
+        report << (xruns == 0 ? juce::String::fromUTF8("✓") : juce::String::fromUTF8("⚠")) << " XRUNS / DROPOUTS\n    " << xruns << "\n\n";
+        report << juce::String::fromUTF8("✓ MIDI\n    ") << midiInputs << juce::String::fromUTF8(" input(s) · ") << midiOutputs << " output(s)\n\n";
+        report << (diskLow ? juce::String::fromUTF8("⚠") : juce::String::fromUTF8("✓")) << " RECORDING DISK\n    "
                << juce::String(static_cast<double>(std::max<std::int64_t>(0, freeDiskBytes)) / (1024.0 * 1024.0 * 1024.0), 1)
                << " GB libres\n\n";
-        report << "✓ VST3\n    " << pluginCatalog_.plugins().size()
-               << " plugin(s) en catálogo · escaneo manual, nunca durante LIVE\n\n";
-        report << (pluginProtectionActive ? "⚠" : "✓") << " PLUGIN PROTECTION\n    "
-               << (pluginProtectionActive ? "Uno o más VST3 fueron auto-bypasseados para proteger el audio."
+        report << juce::String::fromUTF8("✓ VST3\n    ") << pluginCatalog_.plugins().size()
+               << juce::String::fromUTF8(" plugin(s) en catálogo · escaneo manual, nunca durante LIVE\n\n");
+        report << (pluginProtectionActive ? juce::String::fromUTF8("⚠") : juce::String::fromUTF8("✓")) << " PLUGIN PROTECTION\n    "
+               << (pluginProtectionActive ? juce::String::fromUTF8("Uno o más VST3 fueron auto-bypasseados para proteger el audio.")
                                           : "Sin fallos de plugins detectados.")
                << "\n\n";
-        report << (routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load()) ? "✓" : "✕")
-               << " SAFE ROUTING\n    PA L " << (paLeft_.load() + 1) << "  ·  PA R " << (paRight_.load() + 1)
-               << "  ·  CLICK " << (clickOutput_.load() < 0 ? juce::String("OFF") : juce::String(clickOutput_.load() + 1)) << "\n\n";
-        report << (liveMonitorEnabled_.load() ? "⚠ LIVE INPUT MONITORING: ON" : "✓ LIVE INPUT MONITORING: OFF (safe default)") << "\n\n";
+        report << (routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load()) ? juce::String::fromUTF8("✓") : juce::String::fromUTF8("✕"))
+               << " SAFE ROUTING\n    PA L " << (paLeft_.load() + 1) << juce::String::fromUTF8("  ·  PA R ") << (paRight_.load() + 1)
+               << juce::String::fromUTF8("  ·  CLICK ") << (clickOutput_.load() < 0 ? juce::String("OFF") : juce::String(clickOutput_.load() + 1)) << "\n\n";
+        report << (liveMonitorEnabled_.load() ? juce::String::fromUTF8("⚠ LIVE INPUT MONITORING: ON") : juce::String::fromUTF8("✓ LIVE INPUT MONITORING: OFF (safe default)")) << "\n\n";
         if (lastAudioError_.isNotEmpty())
-            report << "⚠ LAST AUDIO ERROR\n    " << lastAudioError_ << "\n\n";
+            report << juce::String::fromUTF8("⚠ LAST AUDIO ERROR\n    ") << lastAudioError_ << "\n\n";
         report << "AVAILABLE AUDIO DRIVERS\n" << buildDeviceInventoryText();
 
-        statusLabel_.setText("Audio: " + d->getName() + " · " + deviceManager_.getCurrentAudioDeviceType()
-            + " · " + juce::String(sr / 1000.0, 1) + " kHz · " + juce::String(bs) + " smp", juce::dontSendNotification);
+        statusLabel_.setText("Audio: " + d->getName() + juce::String::fromUTF8(" · ") + deviceManager_.getCurrentAudioDeviceType()
+            + juce::String::fromUTF8(" · ") + juce::String(sr / 1000.0, 1) + juce::String::fromUTF8(" kHz · ") + juce::String(bs) + " smp", juce::dontSendNotification);
         statusLabel_.setColour(juce::Label::textColourId, xruns == 0 ? juce::Colour(good) : juce::Colour(warning));
     }
     else
     {
-        report = "✕ AUDIO DEVICE\n    No hay dispositivo seleccionado.\n\nAbrí AUDIO / MIDI y elegí un driver. J3 Worship soporta cualquier interfaz que Windows exponga a JUCE mediante ASIO o WASAPI.\n\nAVAILABLE AUDIO DRIVERS\n" + buildDeviceInventoryText();
+        report = juce::String::fromUTF8("✕ AUDIO DEVICE\n    No hay dispositivo seleccionado.\n\nAbrí AUDIO / MIDI y elegí un driver. J3 Worship soporta cualquier interfaz que Windows exponga a JUCE mediante ASIO o WASAPI.\n\nAVAILABLE AUDIO DRIVERS\n") + buildDeviceInventoryText();
         if (lastAudioError_.isNotEmpty())
             report << "\n\nLAST ERROR\n" << lastAudioError_;
         statusLabel_.setText("Audio: sin dispositivo", juce::dontSendNotification);
         statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
-        safetyLabel_.setText("LIVE SAFE · NO AUDIO", juce::dontSendNotification);
+        safetyLabel_.setText(juce::String::fromUTF8("LIVE SAFE · NO AUDIO"), juce::dontSendNotification);
         safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff4a151c));
         safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffff7384));
     }
@@ -3493,9 +3493,9 @@ void MainComponent::panicStopAll()
     stopLiveTransport();
     dawWorkspace_.emergencyStop();
 
-    statusLabel_.setText("STOP ALL · salidas de show silenciadas · grabación preservada", juce::dontSendNotification);
+    statusLabel_.setText(juce::String::fromUTF8("STOP ALL · salidas de show silenciadas · grabación preservada"), juce::dontSendNotification);
     statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
-    safetyLabel_.setText("LIVE SAFE · MUTED", juce::dontSendNotification);
+    safetyLabel_.setText(juce::String::fromUTF8("LIVE SAFE · MUTED"), juce::dontSendNotification);
     safetyLabel_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff402a14));
     safetyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffffc247));
     refreshPadUi();
@@ -3788,7 +3788,7 @@ void MainComponent::audioDeviceStopped()
         if (safe != nullptr)
         {
             safe->liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
-            safe->stopRecordingAfterDeviceLoss("La interfaz de audio se detuvo. La grabación fue finalizada de forma segura.");
+            safe->stopRecordingAfterDeviceLoss(juce::String::fromUTF8("La interfaz de audio se detuvo. La grabación fue finalizada de forma segura."));
             safe->updateDiagnostics();
         }
     });
@@ -3805,7 +3805,7 @@ void MainComponent::audioDeviceError(const juce::String& errorMessage)
         safe->liveMonitorEnabled_.store(false, std::memory_order_release);
         safe->liveMonitorButton_.setToggleState(false, juce::dontSendNotification);
         safe->stopRecordingAfterDeviceLoss("Error de interfaz: " + errorMessage);
-        safe->statusLabel_.setText("Audio error · intentando recuperar", juce::dontSendNotification);
+        safe->statusLabel_.setText(juce::String::fromUTF8("Audio error · intentando recuperar"), juce::dontSendNotification);
         safe->statusLabel_.setColour(juce::Label::textColourId, juce::Colour(danger));
         safe->scheduleReconnect();
         safe->updateDiagnostics();
@@ -3843,7 +3843,7 @@ void MainComponent::timerCallback()
     if (ticks % 30 == 0)
     {
         if (recordingEnabled_.load(std::memory_order_acquire) && recorder_.hasWorkerError())
-            stopRecordingAfterDeviceLoss("Grabación detenida por error de escritura en disco. El audio LIVE continúa protegido.");
+            stopRecordingAfterDeviceLoss(juce::String::fromUTF8("Grabación detenida por error de escritura en disco. El audio LIVE continúa protegido."));
 
         updateDiagnostics();
         updateClickUi();
