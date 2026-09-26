@@ -3107,6 +3107,93 @@ const float* MainComponent::processPluginChain(int channel, const float* input, 
     return pluginScratch_.getReadPointer(0);
 }
 
+void MainComponent::processPluginChainStereo(int channel, float* left, float* right, int numSamples) noexcept
+{
+    if (channel < 0 || channel >= kMaxChannels || left == nullptr || right == nullptr || numSamples <= 0
+        || pluginScratch_.getNumChannels() < 2 || pluginScratch_.getNumSamples() < numSamples
+        || pluginGuardScratch_.getNumChannels() < 2 || pluginGuardScratch_.getNumSamples() < numSamples)
+        return;
+
+    bool hasPlugin = false;
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+    {
+        if (!pluginBypass_[channel][slot].load(std::memory_order_relaxed)
+            && channelPlugins_[channel][slot].load(std::memory_order_acquire) != nullptr)
+        {
+            hasPlugin = true;
+            break;
+        }
+    }
+    if (!hasPlugin)
+        return;
+
+    pluginScratch_.copyFrom(0, 0, left, numSamples);
+    pluginScratch_.copyFrom(1, 0, right, numSamples);
+
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+    {
+        if (pluginBypass_[channel][slot].load(std::memory_order_relaxed))
+            continue;
+
+        auto plugin = channelPlugins_[channel][slot].load(std::memory_order_acquire);
+        if (plugin == nullptr)
+            continue;
+
+        const int channels = juce::jlimit(1, 2,
+            std::max(plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels()));
+
+        if (channels == 1)
+        {
+            auto* mono = pluginScratch_.getWritePointer(0);
+            const auto* stereoRight = pluginScratch_.getReadPointer(1);
+            for (int i = 0; i < numSamples; ++i)
+                mono[i] = (mono[i] + stereoRight[i]) * 0.70710678f;
+        }
+
+        for (int ch = 0; ch < channels; ++ch)
+            pluginGuardScratch_.copyFrom(ch, 0, pluginScratch_, ch, 0, numSamples);
+
+        bool restoreAndBypass = false;
+        try
+        {
+            juce::AudioBuffer<float> view(pluginScratch_.getArrayOfWritePointers(), channels, numSamples);
+            pluginMidiScratch_.clear();
+            plugin->processBlock(view, pluginMidiScratch_);
+
+            for (int ch = 0; ch < channels && !restoreAndBypass; ++ch)
+            {
+                const auto* data = pluginScratch_.getReadPointer(ch);
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    if (!std::isfinite(data[i]) || std::abs(data[i]) > 64.0f)
+                    {
+                        restoreAndBypass = true;
+                        break;
+                    }
+                }
+            }
+        }
+        catch (...)
+        {
+            restoreAndBypass = true;
+        }
+
+        if (restoreAndBypass)
+        {
+            for (int ch = 0; ch < channels; ++ch)
+                pluginScratch_.copyFrom(ch, 0, pluginGuardScratch_, ch, 0, numSamples);
+            pluginBypass_[channel][slot].store(true, std::memory_order_release);
+            pluginFaults_[channel][slot].fetch_add(1, std::memory_order_relaxed);
+        }
+
+        if (channels == 1)
+            pluginScratch_.copyFrom(1, 0, pluginScratch_, 0, 0, numSamples);
+    }
+
+    juce::FloatVectorOperations::copy(left, pluginScratch_.getReadPointer(0), numSamples);
+    juce::FloatVectorOperations::copy(right, pluginScratch_.getReadPointer(1), numSamples);
+}
+
 void MainComponent::refreshPadUi()
 {
     static const std::array<juce::String, 12> keys { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
