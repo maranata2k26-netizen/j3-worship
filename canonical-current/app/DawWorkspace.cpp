@@ -4102,8 +4102,28 @@ void DawWorkspace::renderBlock(float* masterLeft,
 void DawWorkspace::timerCallback()
 {
     if (renderDirty_.load(std::memory_order_acquire)) rebuildRenderState();
+
+    const bool liveLock = liveSessionActive();
+    for (auto* component : { static_cast<juce::Component*>(&newButton_),
+                             static_cast<juce::Component*>(&openButton_),
+                             static_cast<juce::Component*>(&importButton_),
+                             static_cast<juce::Component*>(&addTrackButton_),
+                             static_cast<juce::Component*>(&addMidiTrackButton_),
+                             static_cast<juce::Component*>(&patternButton_),
+                             static_cast<juce::Component*>(&splitButton_),
+                             static_cast<juce::Component*>(&duplicateButton_),
+                             static_cast<juce::Component*>(&deleteButton_),
+                             static_cast<juce::Component*>(&trackNameEditor_),
+                             static_cast<juce::Component*>(&clipGainSlider_),
+                             static_cast<juce::Component*>(&clipMuteButton_),
+                             static_cast<juce::Component*>(&clipLoopButton_),
+                             static_cast<juce::Component*>(&clipMixerBox_),
+                             static_cast<juce::Component*>(&fadeInSlider_),
+                             static_cast<juce::Component*>(&fadeOutSlider_) })
+        component->setEnabled(!liveLock);
+
     const bool nowPlaying = playing_.load(std::memory_order_acquire);
-    playButton_.setButtonText(nowPlaying ? "PAUSE" : "PLAY");
+    playButton_.setButtonText(liveLock ? "STOP CLIPS" : (nowPlaying ? "PAUSE" : "PLAY"));
     if (nowPlaying != lastReportedPlaying_)
     {
         lastReportedPlaying_ = nowPlaying;
