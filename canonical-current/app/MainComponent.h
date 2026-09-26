@@ -16,6 +16,8 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <functional>
+#include <utility>
 #include <optional>
 
 class MainComponent final : public juce::Component,
