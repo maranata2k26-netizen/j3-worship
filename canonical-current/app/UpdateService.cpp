@@ -50,14 +50,14 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
 #if JUCE_WINDOWS
     if (!url.startsWithIgnoreCase("https://"))
     {
-        error = L"La actualización fue bloqueada porque la URL no usa HTTPS.";
+        error = juce::String::fromUTF8("La actualización fue bloqueada porque la URL no usa HTTPS.");
         return false;
     }
 
     const auto wideUrl = utf8ToWide(url);
     if (wideUrl.empty())
     {
-        error = L"URL de actualización inválida.";
+        error = juce::String::fromUTF8("URL de actualización inválida.");
         return false;
     }
 
@@ -70,7 +70,7 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
     if (!WinHttpCrackUrl(wideUrl.c_str(), 0, 0, &parts)
         || parts.nScheme != INTERNET_SCHEME_HTTPS)
     {
-        error = L"No se pudo interpretar la URL segura de actualización.";
+        error = juce::String::fromUTF8("No se pudo interpretar la URL segura de actualización.");
         return false;
     }
 
@@ -86,7 +86,7 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
         WINHTTP_NO_PROXY_BYPASS, 0) };
     if (session.handle == nullptr)
     {
-        error = L"No se pudo iniciar la conexión para buscar actualizaciones.";
+        error = juce::String::fromUTF8("No se pudo iniciar la conexión para buscar actualizaciones.");
         return false;
     }
     WinHttpSetTimeouts(session, 5000, 5000, 10000, 15000);
@@ -102,7 +102,7 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) };
     if (request.handle == nullptr)
     {
-        error = L"No se pudo crear la solicitud de actualización.";
+        error = juce::String::fromUTF8("No se pudo crear la solicitud de actualización.");
         return false;
     }
 
@@ -111,7 +111,7 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
         || !WinHttpReceiveResponse(request, nullptr))
     {
-        error = L"No se pudo descargar la información de actualización.";
+        error = juce::String::fromUTF8("No se pudo descargar la información de actualización.");
         return false;
     }
 
@@ -123,7 +123,7 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
             WINHTTP_NO_HEADER_INDEX)
         || status < 200 || status >= 300)
     {
-        error = L"El servidor de actualizaciones respondió con HTTP " + juce::String(static_cast<int>(status)) + ".";
+        error = juce::String::fromUTF8("El servidor de actualizaciones respondió con HTTP ") + juce::String(static_cast<int>(status)) + ".";
         return false;
     }
 
@@ -134,14 +134,14 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
         DWORD available = 0;
         if (!WinHttpQueryDataAvailable(request, &available))
         {
-            error = L"Se interrumpió la descarga de actualización.";
+            error = juce::String::fromUTF8("Se interrumpió la descarga de actualización.");
             return false;
         }
         if (available == 0)
             break;
         if (bytes.getSize() + available > maxDownloadBytes)
         {
-            error = L"La descarga de actualización excede el tamaño permitido.";
+            error = juce::String::fromUTF8("La descarga de actualización excede el tamaño permitido.");
             return false;
         }
 
@@ -149,7 +149,7 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
         DWORD read = 0;
         if (!WinHttpReadData(request, buffer.data(), available, &read))
         {
-            error = L"No se pudo completar la descarga de actualización.";
+            error = juce::String::fromUTF8("No se pudo completar la descarga de actualización.");
             return false;
         }
         if (read > 0)
@@ -158,7 +158,7 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
     return bytes.getSize() > 0;
 #else
     juce::ignoreUnused(url, bytes);
-    error = L"Las actualizaciones automáticas están disponibles en Windows.";
+    error = juce::String::fromUTF8("Las actualizaciones automáticas están disponibles en Windows.");
     return false;
 #endif
 }
@@ -176,7 +176,7 @@ std::optional<AvailableUpdate> UpdateService::checkLatest(j3::SemVer current, ju
     auto* release = parsed.getDynamicObject();
     if (release == nullptr)
     {
-        error = L"La respuesta de actualizaciones no tiene un formato válido.";
+        error = juce::String::fromUTF8("La respuesta de actualizaciones no tiene un formato válido.");
         return std::nullopt;
     }
 
@@ -184,7 +184,7 @@ std::optional<AvailableUpdate> UpdateService::checkLatest(j3::SemVer current, ju
     const auto parsedVersion = j3::Updater::parseVersion(tag.toStdString());
     if (!parsedVersion.has_value())
     {
-        error = L"La última versión publicada tiene un número inválido.";
+        error = juce::String::fromUTF8("La última versión publicada tiene un número inválido.");
         return std::nullopt;
     }
 
@@ -257,7 +257,7 @@ bool UpdateService::downloadAndVerify(const AvailableUpdate& update, juce::File&
         .getChildFile("J3WorshipUpdater");
     if (!folder.createDirectory())
     {
-        error = L"No se pudo crear la carpeta temporal de actualización.";
+        error = juce::String::fromUTF8("No se pudo crear la carpeta temporal de actualización.");
         return false;
     }
 
@@ -274,7 +274,7 @@ bool UpdateService::downloadAndVerify(const AvailableUpdate& update, juce::File&
     if (actual != update.sha256.toLowerCase())
     {
         installer.deleteFile();
-        error = L"La actualización descargada no pasó la verificación SHA-256.";
+        error = juce::String::fromUTF8("La actualización descargada no pasó la verificación SHA-256.");
         return false;
     }
     return true;
@@ -285,7 +285,7 @@ bool UpdateService::launchInstallerAndRestart(const juce::File& installer, juce:
 #if JUCE_WINDOWS
     if (!installer.existsAsFile())
     {
-        error = L"El instalador de actualización ya no está disponible.";
+        error = juce::String::fromUTF8("El instalador de actualización ya no está disponible.");
         return false;
     }
 
@@ -309,7 +309,7 @@ bool UpdateService::launchInstallerAndRestart(const juce::File& installer, juce:
 
     if (!script.replaceWithText(body))
     {
-        error = L"No se pudo preparar el instalador automático.";
+        error = juce::String::fromUTF8("No se pudo preparar el instalador automático.");
         return false;
     }
     if (!script.startAsProcess())
@@ -320,7 +320,7 @@ bool UpdateService::launchInstallerAndRestart(const juce::File& installer, juce:
     return true;
 #else
     juce::ignoreUnused(installer);
-    error = L"Las actualizaciones automáticas están disponibles en Windows.";
+    error = juce::String::fromUTF8("Las actualizaciones automáticas están disponibles en Windows.");
     return false;
 #endif
 }
