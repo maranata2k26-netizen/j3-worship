@@ -151,7 +151,7 @@ private:
     void refreshPluginUi();
     void openNativeEqEditor();
     void loadSelectedPlugin();
-    void loadPluginDescriptionIntoSlot(const juce::PluginDescription&, int channel, int slot);
+    void loadPluginDescriptionIntoSlot(const juce::PluginDescription&, int channel, int slot, bool openEditorAfterLoad = false);
 
     int getNumRows() override;
     void paintListBoxItem(int rowNumber, juce::Graphics&, int width, int height, bool rowIsSelected) override;

@@ -16,6 +16,20 @@ struct AvailableUpdate
     juce::String notes;
 };
 
+enum class PreviousUpdateState
+{
+    None,
+    Applied,
+    Failed
+};
+
+struct PreviousUpdateResult
+{
+    PreviousUpdateState state { PreviousUpdateState::None };
+    juce::String message;
+    juce::String expectedVersion;
+};
+
 class UpdateService
 {
 public:
@@ -24,7 +38,7 @@ public:
     static bool launchInstallerAndRestart(const juce::File& installer,
                                           const juce::String& expectedVersion,
                                           juce::String& error);
-    static std::optional<juce::String> consumeLastUpdateError();
+    static PreviousUpdateResult verifyPreviousUpdate(const juce::String& currentVersion);
 
 private:
     static bool requestBytes(const juce::String& url, juce::MemoryBlock& bytes, juce::String& error);

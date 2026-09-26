@@ -53,6 +53,11 @@ juce::File updateFailureMarker()
     return updaterFolder().getChildFile("last-update-failed.txt");
 }
 
+juce::File pendingUpdateVersionMarker()
+{
+    return updaterFolder().getChildFile("pending-update-version.txt");
+}
+
 juce::String quoteForCmd(const juce::String& value)
 {
     const auto quote = juce::String::charToString('"');
@@ -361,8 +366,17 @@ bool UpdateService::launchInstallerAndRestart(const juce::File& installer,
         return false;
     }
 
+    const auto pendingMarker = pendingUpdateVersionMarker();
+    if (!pendingMarker.replaceWithText(expectedVersion))
+    {
+        error = juce::String::fromUTF8("No se pudo registrar la versión esperada antes de actualizar.");
+        return false;
+    }
+
+    failureMarker.deleteFile();
     if (!script.startAsProcess())
     {
+        pendingMarker.deleteFile();
         error = "Windows no pudo iniciar el actualizador.";
         return false;
     }
@@ -375,17 +389,55 @@ bool UpdateService::launchInstallerAndRestart(const juce::File& installer,
 #endif
 }
 
-std::optional<juce::String> UpdateService::consumeLastUpdateError()
+PreviousUpdateResult UpdateService::verifyPreviousUpdate(const juce::String& currentVersion)
 {
-    const auto marker = updateFailureMarker();
-    if (!marker.existsAsFile())
-        return std::nullopt;
+    const auto failureMarker = updateFailureMarker();
+    const auto pendingMarker = pendingUpdateVersionMarker();
 
-    auto message = marker.loadFileAsString().trim();
-    marker.deleteFile();
-    if (message.isEmpty())
-        message = juce::String::fromUTF8("La actualización anterior no pudo completarse.");
+    if (failureMarker.existsAsFile())
+    {
+        auto message = failureMarker.loadFileAsString().trim();
+        failureMarker.deleteFile();
+        pendingMarker.deleteFile();
+        if (message.isEmpty())
+            message = juce::String::fromUTF8("La actualización anterior no pudo completarse.");
+        return { PreviousUpdateState::Failed, message, {} };
+    }
 
-    return message;
+    if (!pendingMarker.existsAsFile())
+        return {};
+
+    const auto expectedText = pendingMarker.loadFileAsString().trim();
+    pendingMarker.deleteFile();
+
+    const auto expected = j3::Updater::parseVersion(expectedText.toStdString());
+    const auto current = j3::Updater::parseVersion(currentVersion.toStdString());
+    if (!expected.has_value() || !current.has_value())
+    {
+        return {
+            PreviousUpdateState::Failed,
+            juce::String::fromUTF8("J3 no pudo verificar qué versión quedó instalada. No volverá a ofrecer la misma actualización automáticamente hasta que la compruebes con REINTENTAR."),
+            expectedText
+        };
+    }
+
+    if (*current >= *expected)
+    {
+        return {
+            PreviousUpdateState::Applied,
+            juce::String::fromUTF8("Actualización instalada correctamente."),
+            expectedText
+        };
+    }
+
+    return {
+        PreviousUpdateState::Failed,
+        juce::String::fromUTF8("La actualización intentó instalar J3 Worship ")
+            + expectedText
+            + juce::String::fromUTF8(", pero Windows volvió a abrir la versión ")
+            + currentVersion
+            + juce::String::fromUTF8(". El ejecutable no fue reemplazado; por eso J3 detuvo el bucle automático. Tocá REINTENTAR para volver a instalarla."),
+        expectedText
+    };
 }
 }

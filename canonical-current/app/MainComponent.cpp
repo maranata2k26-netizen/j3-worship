@@ -1377,12 +1377,20 @@ MainComponent::MainComponent()
     for (int slot = 0; slot < kPluginSlots; ++slot)
     {
         auto button = std::make_unique<juce::TextButton>();
-        button->setTooltip("Seleccioná este slot. Elegí un plugin de la lista de la derecha y hacé doble click para cargarlo.");
+        button->setTooltip("FX slot estilo FL Studio: si hay un plugin cargado, un click abre su interfaz. Si está vacío, selecciona el slot para elegir un VST3.");
         button->setClickingTogglesState(false);
         button->onClick = [this, slot]
         {
+            const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
             pluginSlotBox_.setSelectedId(slot + 1, juce::dontSendNotification);
             refreshPluginUi();
+
+            if (channelPlugins_[ch][slot].load(std::memory_order_acquire) != nullptr)
+            {
+                openSelectedPluginEditor();
+                return;
+            }
+
             pluginCatalogList_.grabKeyboardFocus();
         };
         pluginsPage_.addAndMakeVisible(*button);
@@ -1490,6 +1498,7 @@ MainComponent::MainComponent()
     pluginsPage_.addAndMakeVisible(movePluginDownButton_);
     pluginsPage_.addAndMakeVisible(bypassPluginButton_);
     pluginsPage_.addAndMakeVisible(openPluginEditorButton_);
+    openPluginEditorButton_.setVisible(false); // Loaded slots open directly with one click.
 
     pluginStatusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd4dbe5));
     pluginStatusLabel_.setFont(juce::FontOptions(16.5f));
@@ -1918,22 +1927,32 @@ MainComponent::MainComponent()
             if (safe != nullptr) safe->showFirstRunSetup();
         });
 
-    if (const auto updateError = j3ui::UpdateService::consumeLastUpdateError(); updateError.has_value())
+    const auto currentVersion = juce::JUCEApplication::getInstance()->getApplicationVersion();
+    const auto previousUpdate = j3ui::UpdateService::verifyPreviousUpdate(currentVersion);
+    if (previousUpdate.state == j3ui::PreviousUpdateState::Failed)
     {
         updateButton_.setButtonText(juce::String::fromUTF8("REINTENTAR"));
-        updateButton_.setTooltip(*updateError);
+        updateButton_.setTooltip(previousUpdate.message);
         updateButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(warning).darker(0.45f));
         juce::MessageManager::callAsync(
-            [safe = juce::Component::SafePointer<MainComponent>(this), message = *updateError]
+            [safe = juce::Component::SafePointer<MainComponent>(this), message = previousUpdate.message]
             {
                 if (safe == nullptr)
                     return;
                 juce::AlertWindow::showMessageBoxAsync(
                     juce::MessageBoxIconType::WarningIcon,
                     juce::String::fromUTF8("La actualización no se instaló"),
-                    message + juce::String::fromUTF8(
-                        "\n\nJ3 no va a entrar en un bucle. Tocá REINTENTAR cuando quieras volver a probar."));
+                    message);
             });
+    }
+    else if (previousUpdate.state == j3ui::PreviousUpdateState::Applied)
+    {
+        updateButton_.setEnabled(true);
+        updateButton_.setVisible(true);
+        updateButton_.setButtonText(juce::String::fromUTF8("✓ ACTUALIZADO"));
+        updateButton_.setTooltip(juce::String::fromUTF8("J3 Worship ") + currentVersion
+            + juce::String::fromUTF8(" se instaló correctamente."));
+        updateButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(good).darker(0.45f));
     }
     else
     {
@@ -2993,11 +3012,10 @@ void MainComponent::resized()
     browser.removeFromTop(8);
 
     auto primaryActions = browser.removeFromTop(38);
-    loadPluginButton_.setBounds(primaryActions.removeFromLeft(std::min(150, primaryActions.getWidth())).reduced(1));
+    loadPluginButton_.setBounds(primaryActions.removeFromLeft(std::min(180, primaryActions.getWidth())).reduced(1));
     primaryActions.removeFromLeft(5);
-    openPluginEditorButton_.setBounds(primaryActions.removeFromLeft(std::min(135, primaryActions.getWidth())).reduced(1));
-    primaryActions.removeFromLeft(5);
-    favoritePluginButton_.setBounds(primaryActions.removeFromLeft(std::min(105, primaryActions.getWidth())).reduced(1));
+    openPluginEditorButton_.setBounds({});
+    favoritePluginButton_.setBounds(primaryActions.removeFromLeft(std::min(115, primaryActions.getWidth())).reduced(1));
     primaryActions.removeFromLeft(5);
     bypassPluginButton_.setBounds(primaryActions.reduced(1));
     browser.removeFromTop(5);
@@ -3949,8 +3967,8 @@ void MainComponent::refreshPluginUi()
         if (faults > 0)
             status << juce::String::fromUTF8("LIVE SAFE: auto-bypass por audio inválido/fallo (") << faults << ").\n";
         status << (plugin->hasEditor()
-            ? "OPEN PLUGIN abre la interfaz nativa del VST3."
-            : juce::String::fromUTF8("OPEN PLUGIN abre el editor genérico de parámetros."));
+            ? "Click en este slot = abrir la interfaz nativa del VST3."
+            : juce::String::fromUTF8("Click en este slot = abrir el editor genérico de parámetros."));
     }
     else if (pluginPaths_[ch][slot].isNotEmpty())
     {
@@ -4035,7 +4053,7 @@ void MainComponent::loadSelectedPlugin()
     saveAppState();
     const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
     const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
-    loadPluginDescriptionIntoSlot(description, ch, slot);
+    loadPluginDescriptionIntoSlot(description, ch, slot, true);
 }
 
 void MainComponent::loadPluginPathIntoSlot(const juce::String& savedKey, int channel, int slot)
@@ -4090,7 +4108,7 @@ void MainComponent::loadPluginPathIntoSlot(const juce::String& savedKey, int cha
 }
 
 void MainComponent::loadPluginDescriptionIntoSlot(const juce::PluginDescription& description,
-                                                   int channel, int slot)
+                                                   int channel, int slot, bool openEditorAfterLoad)
 {
     if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots
         || description.fileOrIdentifier.isEmpty())
@@ -4106,7 +4124,7 @@ void MainComponent::loadPluginDescriptionIntoSlot(const juce::PluginDescription&
     pluginFormatManager_.createPluginInstanceAsync(
         description, sr, bs,
         [safe = juce::Component::SafePointer<MainComponent>(this), channel, slot, key,
-         pluginName = description.name, savedBypass, savedState]
+         pluginName = description.name, savedBypass, savedState, openEditorAfterLoad]
         (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
         {
             if (safe == nullptr)
@@ -4148,8 +4166,13 @@ void MainComponent::loadPluginDescriptionIntoSlot(const juce::PluginDescription&
             safe->pluginBypass_[channel][slot].store(savedBypass, std::memory_order_release);
             safe->pluginFaults_[channel][slot].store(0, std::memory_order_release);
             safe->channelPlugins_[channel][slot].store(shared, std::memory_order_release);
+            safe->pluginChannelBox_.setSelectedId(channel + 1, juce::dontSendNotification);
+            safe->pluginSlotBox_.setSelectedId(slot + 1, juce::dontSendNotification);
             safe->refreshPluginUi();
             safe->saveAppState();
+
+            if (openEditorAfterLoad)
+                safe->openSelectedPluginEditor();
         });
 }
 
