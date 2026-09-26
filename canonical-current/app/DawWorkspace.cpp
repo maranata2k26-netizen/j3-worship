@@ -1162,10 +1162,17 @@ void DawWorkspace::paint(juce::Graphics& g)
         drawChip("R", tracks_[t].armed, juce::Colour(kDanger));
     }
 
+    // Keep arranger media strictly inside the timeline body. The fixed track-header
+    // column must never be painted over, even when horizontal zoom/scroll moves a
+    // clip's logical start to the left of the visible viewport.
+    const auto arrangerContent = tl.withTrimmedLeft(headerWidth_);
+    g.saveState();
+    g.reduceClipRegion(arrangerContent);
+
     for (const auto& clip : clips_)
     {
         auto cb = clipBounds(clip);
-        if (!cb.intersects(tl.toFloat())) continue;
+        if (!cb.intersects(arrangerContent.toFloat())) continue;
         const bool selected = clip.id == selectedClipId_;
         auto colour = clip.colour;
         if (clip.muted) colour = colour.withSaturation(0.15f).withBrightness(0.45f);
@@ -1278,7 +1285,7 @@ void DawWorkspace::paint(juce::Graphics& g)
         if (note.track < 0 || note.track >= trackCount_ || !tracks_[note.track].midi)
             continue;
         const auto nb = midiNoteBounds(note);
-        if (!nb.intersects(tl.toFloat()))
+        if (!nb.intersects(arrangerContent.toFloat()))
             continue;
 
         const bool selected = note.id == selectedMidiNoteId_;
@@ -1297,7 +1304,8 @@ void DawWorkspace::paint(juce::Graphics& g)
         }
     }
 
-    g.restoreState();
+    g.restoreState(); // arrangerContent
+    g.restoreState(); // timeline
 
     const double posBeat = (static_cast<double>(transportSamples_.load(std::memory_order_relaxed))
         / std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed))) * bpm() / 60.0;
@@ -1537,6 +1545,10 @@ juce::Rectangle<float> DawWorkspace::midiNoteBounds(const MidiNote& note) const
 
 DawWorkspace::MidiNote* DawWorkspace::midiNoteAt(juce::Point<int> point)
 {
+    const auto arrangerContent = timelineBounds().withTrimmedLeft(headerWidth_);
+    if (!arrangerContent.contains(point))
+        return nullptr;
+
     for (auto it = midiNotes_.rbegin(); it != midiNotes_.rend(); ++it)
         if (midiNoteBounds(*it).expanded(1.0f, 2.0f).contains(point.toFloat()))
             return &*it;
@@ -1545,6 +1557,10 @@ DawWorkspace::MidiNote* DawWorkspace::midiNoteAt(juce::Point<int> point)
 
 const DawWorkspace::MidiNote* DawWorkspace::midiNoteAt(juce::Point<int> point) const
 {
+    const auto arrangerContent = timelineBounds().withTrimmedLeft(headerWidth_);
+    if (!arrangerContent.contains(point))
+        return nullptr;
+
     for (auto it = midiNotes_.rbegin(); it != midiNotes_.rend(); ++it)
         if (midiNoteBounds(*it).expanded(1.0f, 2.0f).contains(point.toFloat()))
             return &*it;
@@ -1579,6 +1595,11 @@ DawWorkspace::Clip* DawWorkspace::clipAt(juce::Point<int> point)
         for (auto& c : clips_) if (c.id == selectedClipId_) return &c;
         return nullptr;
     }
+
+    const auto arrangerContent = timelineBounds().withTrimmedLeft(headerWidth_);
+    if (!arrangerContent.contains(point))
+        return nullptr;
+
     for (auto it = clips_.rbegin(); it != clips_.rend(); ++it)
         if (clipBounds(*it).contains(point.toFloat()))
             return &*it;
@@ -1592,6 +1613,11 @@ const DawWorkspace::Clip* DawWorkspace::clipAt(juce::Point<int> point) const
         for (const auto& c : clips_) if (c.id == selectedClipId_) return &c;
         return nullptr;
     }
+
+    const auto arrangerContent = timelineBounds().withTrimmedLeft(headerWidth_);
+    if (!arrangerContent.contains(point))
+        return nullptr;
+
     for (auto it = clips_.rbegin(); it != clips_.rend(); ++it)
         if (clipBounds(*it).contains(point.toFloat()))
             return &*it;
