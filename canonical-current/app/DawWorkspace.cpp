@@ -337,6 +337,107 @@ juce::Colour trackColour(int index)
     };
     return juce::Colour(colours[static_cast<std::size_t>(index) % colours.size()]);
 }
+
+class AudioClipRoutingEditor final : public juce::Component
+{
+public:
+    AudioClipRoutingEditor(const juce::String& clipName,
+                           int currentInsert,
+                           std::function<void(int)> onRoute,
+                           std::function<void(int)> onOpenMixer,
+                           std::function<void(int)> onOpenFx)
+        : onRoute_(std::move(onRoute)),
+          onOpenMixer_(std::move(onOpenMixer)),
+          onOpenFx_(std::move(onOpenFx))
+    {
+        title_.setText("AUDIO CLIP", juce::dontSendNotification);
+        title_.setFont(juce::FontOptions(22.0f, juce::Font::bold));
+        title_.setColour(juce::Label::textColourId, juce::Colour(kText));
+        addAndMakeVisible(title_);
+
+        name_.setText(clipName.isNotEmpty() ? clipName : "Audio", juce::dontSendNotification);
+        name_.setFont(juce::FontOptions(14.0f));
+        name_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
+        addAndMakeVisible(name_);
+
+        routeLabel_.setText("MIXER ROUTING", juce::dontSendNotification);
+        routeLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        routeLabel_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
+        addAndMakeVisible(routeLabel_);
+
+        for (int i = 0; i < 48; ++i)
+            insertBox_.addItem("MIXER INSERT " + juce::String(i + 1), i + 1);
+        insertBox_.setSelectedId(juce::jlimit(0, 47, currentInsert) + 1, juce::dontSendNotification);
+        insertBox_.onChange = [this]
+        {
+            const int insert = juce::jlimit(0, 47, insertBox_.getSelectedId() - 1);
+            if (onRoute_) onRoute_(insert);
+        };
+        addAndMakeVisible(insertBox_);
+
+        mixerButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173246));
+        fxButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff22527a));
+        mixerButton_.onClick = [this]
+        {
+            const int insert = juce::jlimit(0, 47, insertBox_.getSelectedId() - 1);
+            if (onOpenMixer_) onOpenMixer_(insert);
+        };
+        fxButton_.onClick = [this]
+        {
+            const int insert = juce::jlimit(0, 47, insertBox_.getSelectedId() - 1);
+            if (onOpenFx_) onOpenFx_(insert);
+        };
+        addAndMakeVisible(mixerButton_);
+        addAndMakeVisible(fxButton_);
+
+        hint_.setText(juce::String::fromUTF8("Este audio entra al Insert seleccionado. Fader, pan, bus/DCA y los 8 FX slots procesan su señal."),
+                      juce::dontSendNotification);
+        hint_.setFont(juce::FontOptions(12.0f));
+        hint_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
+        hint_.setJustificationType(juce::Justification::topLeft);
+        addAndMakeVisible(hint_);
+
+        setSize(470, 226);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff0b151e));
+        g.setColour(juce::Colour(kBorder));
+        g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 8.0f, 1.0f);
+        g.setColour(juce::Colour(kAccent));
+        g.fillRoundedRectangle(18.0f, 63.0f, static_cast<float>(getWidth() - 36), 2.0f, 1.0f);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(18);
+        title_.setBounds(r.removeFromTop(28));
+        name_.setBounds(r.removeFromTop(24));
+        r.removeFromTop(12);
+        routeLabel_.setBounds(r.removeFromTop(18));
+        insertBox_.setBounds(r.removeFromTop(32));
+        r.removeFromTop(10);
+        auto buttons = r.removeFromTop(34);
+        mixerButton_.setBounds(buttons.removeFromLeft(142));
+        buttons.removeFromLeft(8);
+        fxButton_.setBounds(buttons.removeFromLeft(142));
+        r.removeFromTop(10);
+        hint_.setBounds(r);
+    }
+
+private:
+    juce::Label title_;
+    juce::Label name_;
+    juce::Label routeLabel_;
+    juce::ComboBox insertBox_;
+    juce::TextButton mixerButton_ { "OPEN MIXER" };
+    juce::TextButton fxButton_ { "FX / PLUGINS" };
+    juce::Label hint_;
+    std::function<void(int)> onRoute_;
+    std::function<void(int)> onOpenMixer_;
+    std::function<void(int)> onOpenFx_;
+};
 }
 
 DawWorkspace::DawWorkspace()
@@ -350,6 +451,7 @@ DawWorkspace::DawWorkspace()
     {
         tracks_[i].name = "Pista " + juce::String(i + 1);
         tracks_[i].colour = trackColour(i);
+        tracks_[i].mixerInsert = i;
     }
     tracks_[0].name = "Voz";
     tracks_[1].name = juce::String::fromUTF8("Batería");
@@ -623,6 +725,59 @@ void DawWorkspace::configureControls()
             markRenderDirty(); projectDirty_ = true; repaint(); break;
         }
     };
+
+    for (int i = 0; i < kMaxTracks; ++i)
+        clipMixerBox_.addItem("MIXER INSERT " + juce::String(i + 1), i + 1);
+    clipMixerBox_.setSelectedId(1, juce::dontSendNotification);
+    clipMixerBox_.setTooltip(juce::String::fromUTF8("Asigna este audio o pista MIDI a un Insert del mixer, como el flujo Channel → Mixer de FL Studio."));
+    clipMixerBox_.onChange = [this]
+    {
+        const int insert = juce::jlimit(0, kMaxTracks - 1, clipMixerBox_.getSelectedId() - 1);
+        bool changed = false;
+        for (auto& c : clips_)
+        {
+            if (c.id != selectedClipId_) continue;
+            if (c.mixerInsert != insert)
+            {
+                checkpointUndo();
+                c.mixerInsert = insert;
+                changed = true;
+            }
+            break;
+        }
+        if (!changed && selectedClipId_ < 0 && selectedTrack_ >= 0 && selectedTrack_ < trackCount_
+            && tracks_[selectedTrack_].mixerInsert != insert)
+        {
+            checkpointUndo();
+            tracks_[selectedTrack_].mixerInsert = insert;
+            changed = true;
+        }
+        if (changed)
+        {
+            projectDirty_ = true;
+            markRenderDirty();
+            if (onMixerRoutingChanged) onMixerRoutingChanged();
+            repaint();
+        }
+    };
+    addAndMakeVisible(clipMixerBox_);
+
+    for (auto* b : { &openMixerInsertButton_, &openPluginsInsertButton_ })
+    {
+        addButton(*b);
+        b->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173246));
+    }
+    openMixerInsertButton_.onClick = [this]
+    {
+        const int insert = juce::jlimit(0, kMaxTracks - 1, clipMixerBox_.getSelectedId() - 1);
+        if (onOpenMixerInsert) onOpenMixerInsert(insert);
+    };
+    openPluginsInsertButton_.onClick = [this]
+    {
+        const int insert = juce::jlimit(0, kMaxTracks - 1, clipMixerBox_.getSelectedId() - 1);
+        if (onOpenPluginsForInsert) onOpenPluginsForInsert(insert);
+    };
+
     fadeInSlider_.onValueChange = [this]
     {
         for (auto& c : clips_) if (c.id == selectedClipId_)
@@ -1074,33 +1229,46 @@ void DawWorkspace::resized()
     browserSearch_.setBounds(browser.removeFromTop(30));
 
     auto inspector = inspectorBounds().reduced(10, 8);
-    inspector.removeFromTop(27);
-    trackNameEditor_.setBounds(inspector.removeFromTop(30));
-    inspector.removeFromTop(7);
+    const bool compactInspector = inspector.getHeight() < 390;
+    const int rowHeight = compactInspector ? 24 : 30;
+    const int buttonHeight = compactInspector ? 24 : 28;
+    const int gap = compactInspector ? 4 : 7;
+    const int statusHeight = compactInspector ? 40 : 54;
 
-    auto trackButtons = inspector.removeFromTop(28);
+    statusLabel_.setBounds(inspector.removeFromBottom(std::min(statusHeight, inspector.getHeight())));
+    inspector.removeFromTop(compactInspector ? 22 : 27);
+    trackNameEditor_.setBounds(inspector.removeFromTop(rowHeight));
+    inspector.removeFromTop(gap);
+
+    auto trackButtons = inspector.removeFromTop(buttonHeight);
     trackMuteButton_.setBounds(trackButtons.removeFromLeft(42));
     trackButtons.removeFromLeft(5);
     trackSoloButton_.setBounds(trackButtons.removeFromLeft(42));
     trackButtons.removeFromLeft(5);
     trackArmButton_.setBounds(trackButtons.removeFromLeft(54));
 
-    inspector.removeFromTop(8);
-    trackVolumeSlider_.setBounds(inspector.removeFromTop(30));
-    trackPanSlider_.setBounds(inspector.removeFromTop(30));
-    inspector.removeFromTop(8);
+    inspector.removeFromTop(gap);
+    trackVolumeSlider_.setBounds(inspector.removeFromTop(rowHeight));
+    trackPanSlider_.setBounds(inspector.removeFromTop(rowHeight));
+    inspector.removeFromTop(gap);
 
-    auto clipButtons = inspector.removeFromTop(28);
+    auto clipButtons = inspector.removeFromTop(buttonHeight);
     clipMuteButton_.setBounds(clipButtons.removeFromLeft(std::min(92, clipButtons.getWidth() / 2)));
     clipButtons.removeFromLeft(std::min(5, clipButtons.getWidth()));
     clipLoopButton_.setBounds(clipButtons);
 
-    inspector.removeFromTop(7);
-    clipGainSlider_.setBounds(inspector.removeFromTop(30));
-    fadeInSlider_.setBounds(inspector.removeFromTop(30));
-    fadeOutSlider_.setBounds(inspector.removeFromTop(30));
+    inspector.removeFromTop(gap);
+    clipGainSlider_.setBounds(inspector.removeFromTop(rowHeight));
+    fadeInSlider_.setBounds(inspector.removeFromTop(rowHeight));
+    fadeOutSlider_.setBounds(inspector.removeFromTop(rowHeight));
+    inspector.removeFromTop(gap);
+    clipMixerBox_.setBounds(inspector.removeFromTop(compactInspector ? 26 : 30));
+    inspector.removeFromTop(compactInspector ? 3 : 5);
+    auto insertButtons = inspector.removeFromTop(buttonHeight);
+    openMixerInsertButton_.setBounds(insertButtons.removeFromLeft(std::min(104, insertButtons.getWidth() / 2)));
+    insertButtons.removeFromLeft(std::min(5, insertButtons.getWidth()));
+    openPluginsInsertButton_.setBounds(insertButtons);
 
-    statusLabel_.setBounds(inspector.removeFromBottom(std::min(54, inspector.getHeight())));
     repaint();
 }
 
@@ -1179,7 +1347,8 @@ bool DawWorkspace::validateLayoutForTesting(juce::String& report) const
     if (!inspector.contains(trackNameEditor_.getBounds())
         || !inspector.contains(trackVolumeSlider_.getBounds())
         || !inspector.contains(trackPanSlider_.getBounds())
-        || !inspector.contains(clipGainSlider_.getBounds()))
+        || !inspector.contains(clipGainSlider_.getBounds())
+        || !inspector.contains(clipMixerBox_.getBounds()))
         return fail("inspector controls escaped the inspector panel");
 
     report = "OK";
@@ -1891,8 +2060,10 @@ void DawWorkspace::mouseDoubleClick(const juce::MouseEvent& e)
             {
                 selectedClipId_ = c->id;
                 selectedTrack_ = c->track;
+                syncInspector();
                 fitSelection();
-                refreshStatus(juce::String::fromUTF8("Editor de audio · waveform ampliada"));
+                openSelectedClipEditor();
+                refreshStatus(juce::String::fromUTF8("AUDIO EDITOR · Mixer Insert + FX"));
                 return;
             }
 
@@ -1979,6 +2150,73 @@ void DawWorkspace::filesDropped(const juce::StringArray& files, int x, int y)
     importFiles(files, track, snapBeat(beatAtX(static_cast<float>(x))));
 }
 
+void DawWorkspace::openSelectedClipEditor()
+{
+    Clip* selected = nullptr;
+    for (auto& clip : clips_)
+    {
+        if (clip.id == selectedClipId_)
+        {
+            selected = &clip;
+            break;
+        }
+    }
+    if (selected == nullptr || selected->audio == nullptr)
+        return;
+
+    const int clipId = selected->id;
+    const int insert = juce::jlimit(0, kMaxTracks - 1, selected->mixerInsert);
+    const auto clipName = juce::File(selected->audio->path).getFileName();
+    auto safe = juce::Component::SafePointer<DawWorkspace>(this);
+
+    auto editor = std::make_unique<AudioClipRoutingEditor>(
+        clipName,
+        insert,
+        [safe, clipId](int newInsert)
+        {
+            if (safe == nullptr)
+                return;
+            for (auto& clip : safe->clips_)
+            {
+                if (clip.id != clipId)
+                    continue;
+                newInsert = juce::jlimit(0, kMaxTracks - 1, newInsert);
+                if (clip.mixerInsert == newInsert)
+                    return;
+                safe->checkpointUndo();
+                clip.mixerInsert = newInsert;
+                safe->projectDirty_ = true;
+                safe->markRenderDirty();
+                safe->rebuildRenderState();
+                safe->syncInspector();
+                if (safe->onMixerRoutingChanged) safe->onMixerRoutingChanged();
+                safe->repaint();
+                safe->refreshStatus("Mixer Insert " + juce::String(newInsert + 1));
+                return;
+            }
+        },
+        [safe](int targetInsert)
+        {
+            if (safe != nullptr && safe->onOpenMixerInsert)
+                safe->onOpenMixerInsert(juce::jlimit(0, kMaxTracks - 1, targetInsert));
+        },
+        [safe](int targetInsert)
+        {
+            if (safe != nullptr && safe->onOpenPluginsForInsert)
+                safe->onOpenPluginsForInsert(juce::jlimit(0, kMaxTracks - 1, targetInsert));
+        });
+
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(editor.release());
+    options.dialogTitle = juce::String::fromUTF8("J3 Worship · Audio Clip");
+    options.dialogBackgroundColour = juce::Colour(0xff0b151e);
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = false;
+    options.componentToCentreAround = this;
+    options.launchAsync();
+}
+
 void DawWorkspace::addTrack()
 {
     if (trackCount_ >= kMaxTracks)
@@ -1990,6 +2228,7 @@ void DawWorkspace::addTrack()
     tracks_[i] = {};
     tracks_[i].name = "Pista " + juce::String(i + 1);
     tracks_[i].colour = trackColour(i);
+    tracks_[i].mixerInsert = i;
     selectedTrack_ = i;
     const int visible = std::max(1, timelineBounds().getHeight() / std::max(1, trackHeight_));
     firstVisibleTrack_ = std::max(0, i - visible + 1);
@@ -2011,6 +2250,7 @@ void DawWorkspace::addMidiTrack()
     tracks_[i].midi = true;
     tracks_[i].name = "MIDI " + juce::String(i + 1);
     tracks_[i].colour = trackColour(i);
+    tracks_[i].mixerInsert = i;
     selectedTrack_ = i;
     selectedClipId_ = -1;
     selectedMidiNoteId_ = -1;
@@ -2143,6 +2383,7 @@ void DawWorkspace::importFiles(const juce::StringArray& files, int targetTrack, 
         clip.track = track;
         clip.startBeat = cursor;
         clip.lengthBeats = std::max(0.25, data->durationSeconds * bpm() / 60.0);
+        clip.mixerInsert = tracks_[track].mixerInsert;
         clip.colour = tracks_[track].colour;
         clip.audio = data;
         clips_.push_back(clip);
@@ -2157,7 +2398,9 @@ void DawWorkspace::importFiles(const juce::StringArray& files, int targetTrack, 
     {
         projectDirty_ = true;
         markRenderDirty();
+        rebuildRenderState();
         syncInspector();
+        if (onMixerRoutingChanged) onMixerRoutingChanged();
         repaint();
         refreshStatus(juce::String(imported) + (imported == 1 ? " clip importado" : " clips importados"));
     }
@@ -2688,6 +2931,8 @@ void DawWorkspace::togglePlay()
     const bool next = !playing_.load(std::memory_order_acquire);
     if (next)
     {
+        if (renderDirty_.load(std::memory_order_acquire))
+            rebuildRenderState();
         const auto active = activeRenderState_.load(std::memory_order_acquire);
         const auto end = renderStates_[active].endSample;
         if (transportSamples_.load(std::memory_order_relaxed) >= end && end > 0)
@@ -2863,6 +3108,7 @@ void DawWorkspace::importRecordedTake()
         clip.track = track;
         clip.startBeat = std::max(0.0, recordStartBeat_);
         clip.lengthBeats = std::max(0.25, data->durationSeconds * bpm() / 60.0);
+        clip.mixerInsert = tracks_[track].mixerInsert;
         clip.colour = tracks_[track].colour;
         clip.audio = data;
         clips_.push_back(clip);
@@ -2913,6 +3159,9 @@ void DawWorkspace::syncInspector()
     clipLoopButton_.setEnabled(clipSelected);
     fadeInSlider_.setEnabled(clipSelected);
     fadeOutSlider_.setEnabled(clipSelected);
+    clipMixerBox_.setEnabled(clipSelected || t.midi);
+    openMixerInsertButton_.setEnabled(clipSelected || t.midi);
+    openPluginsInsertButton_.setEnabled(clipSelected || t.midi);
     splitButton_.setEnabled(clipSelected);
     const bool midiSelected = selectedMidiNoteId_ >= 0;
     duplicateButton_.setEnabled(clipSelected || midiSelected);
@@ -2926,7 +3175,36 @@ void DawWorkspace::syncInspector()
         clipLoopButton_.setToggleState(c->loop, juce::dontSendNotification);
         fadeInSlider_.setValue(c->fadeInBeats, juce::dontSendNotification);
         fadeOutSlider_.setValue(c->fadeOutBeats, juce::dontSendNotification);
+        clipMixerBox_.setSelectedId(juce::jlimit(0, kMaxTracks - 1, c->mixerInsert) + 1, juce::dontSendNotification);
     }
+    else
+    {
+        clipMixerBox_.setSelectedId(juce::jlimit(0, kMaxTracks - 1, t.mixerInsert) + 1, juce::dontSendNotification);
+    }
+}
+
+juce::String DawWorkspace::mixerInsertName(int insert) const
+{
+    insert = juce::jlimit(0, kMaxTracks - 1, insert);
+    juce::StringArray names;
+
+    for (const auto& clip : clips_)
+    {
+        if (clip.mixerInsert != insert || clip.track < 0 || clip.track >= trackCount_)
+            continue;
+        names.addIfNotAlreadyThere(tracks_[clip.track].name);
+    }
+    for (int track = 0; track < trackCount_; ++track)
+    {
+        if (tracks_[track].midi && tracks_[track].mixerInsert == insert)
+            names.addIfNotAlreadyThere(tracks_[track].name);
+    }
+
+    if (names.isEmpty())
+        return {};
+    if (names.size() == 1)
+        return names[0];
+    return names[0] + " +" + juce::String(names.size() - 1);
 }
 
 void DawWorkspace::refreshStatus(const juce::String& text)
@@ -3024,6 +3302,7 @@ void DawWorkspace::rebuildRenderState()
         rc.muted = c.muted;
         rc.loop = c.loop;
         rc.reversed = c.reversed;
+        rc.mixerInsert = juce::jlimit(0, kMaxTracks - 1, c.mixerInsert);
         rc.fadeInSamples = static_cast<std::int64_t>(std::llround(c.fadeInBeats * secondsPerBeat * state.sampleRate));
         rc.fadeOutSamples = static_cast<std::int64_t>(std::llround(c.fadeOutBeats * secondsPerBeat * state.sampleRate));
         state.endSample = std::max(state.endSample, rc.startSample + rc.lengthSamples);
@@ -3040,6 +3319,7 @@ void DawWorkspace::rebuildRenderState()
             std::llround(n.lengthBeats * secondsPerBeat * state.sampleRate)));
         rn.note = juce::jlimit(0, 127, n.note);
         rn.velocity = juce::jlimit(0.0f, 1.0f, n.velocity);
+        rn.mixerInsert = juce::jlimit(0, kMaxTracks - 1, tracks_[n.track].mixerInsert);
         state.endSample = std::max(state.endSample, rn.startSample + rn.lengthSamples);
     }
 
@@ -3049,8 +3329,30 @@ void DawWorkspace::rebuildRenderState()
 
 void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noexcept
 {
-    if (left == nullptr || right == nullptr || numSamples <= 0
-        || !playing_.load(std::memory_order_acquire))
+    renderBlock(left, right, nullptr, 0, numSamples);
+}
+
+void DawWorkspace::renderToMixer(juce::AudioBuffer<float>& mixerBuffer,
+                                 int numMixerChannels,
+                                 int numSamples) noexcept
+{
+    renderBlock(nullptr, nullptr, &mixerBuffer, numMixerChannels, numSamples);
+}
+
+void DawWorkspace::renderBlock(float* masterLeft,
+                               float* masterRight,
+                               juce::AudioBuffer<float>* mixerBuffer,
+                               int numMixerChannels,
+                               int numSamples) noexcept
+{
+    const bool mixerMode = mixerBuffer != nullptr;
+    if (numSamples <= 0 || !playing_.load(std::memory_order_acquire))
+        return;
+    if (!mixerMode && (masterLeft == nullptr || masterRight == nullptr))
+        return;
+    if (mixerMode && (numMixerChannels <= 0
+        || mixerBuffer->getNumChannels() < numMixerChannels * 2
+        || mixerBuffer->getNumSamples() < numSamples))
         return;
 
     const int index = activeRenderState_.load(std::memory_order_acquire);
@@ -3067,6 +3369,15 @@ void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noe
         const auto& track = state.tracks[clip.track];
         if (track.mute || (state.anySolo && !track.solo))
             continue;
+
+        float* left = masterLeft;
+        float* right = masterRight;
+        if (mixerMode)
+        {
+            const int insert = juce::jlimit(0, numMixerChannels - 1, clip.mixerInsert);
+            left = mixerBuffer->getWritePointer(insert * 2);
+            right = mixerBuffer->getWritePointer(insert * 2 + 1);
+        }
 
         const std::int64_t clipStart = clip.startSample;
         const std::int64_t clipEnd = clip.startSample + clip.lengthSamples;
@@ -3144,6 +3455,15 @@ void DawWorkspace::renderToMaster(float* left, float* right, int numSamples) noe
         if (note.track < 0 || note.track >= state.trackCount) continue;
         const auto& track = state.tracks[note.track];
         if (track.mute || (state.anySolo && !track.solo)) continue;
+
+        float* left = masterLeft;
+        float* right = masterRight;
+        if (mixerMode)
+        {
+            const int insert = juce::jlimit(0, numMixerChannels - 1, note.mixerInsert);
+            left = mixerBuffer->getWritePointer(insert * 2);
+            right = mixerBuffer->getWritePointer(insert * 2 + 1);
+        }
 
         const std::int64_t noteStart = note.startSample;
         const std::int64_t noteEnd = note.startSample + note.lengthSamples;
@@ -3270,7 +3590,7 @@ void DawWorkspace::redo()
 juce::String DawWorkspace::serializeProject() const
 {
     juce::XmlElement root("J3DAW");
-    root.setAttribute("version", 2);
+    root.setAttribute("version", 3);
     root.setAttribute("bpm", bpm());
     root.setAttribute("trackCount", trackCount_);
     root.setAttribute("viewStartBeat", viewStartBeat_);
@@ -3290,6 +3610,7 @@ juce::String DawWorkspace::serializeProject() const
         t->setAttribute("solo", tracks_[i].solo);
         t->setAttribute("armed", tracks_[i].armed);
         t->setAttribute("midi", tracks_[i].midi);
+        t->setAttribute("mixerInsert", tracks_[i].mixerInsert);
     }
 
     auto* midiXml = root.createNewChildElement("MidiNotes");
@@ -3321,6 +3642,7 @@ juce::String DawWorkspace::serializeProject() const
         x->setAttribute("reversed", c.reversed);
         x->setAttribute("fadeInBeats", c.fadeInBeats);
         x->setAttribute("fadeOutBeats", c.fadeOutBeats);
+        x->setAttribute("mixerInsert", c.mixerInsert);
         x->setAttribute("colour", static_cast<int>(c.colour.getARGB()));
     }
     return root.toString();
@@ -3339,6 +3661,8 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
     nextClipId_ = 1;
     nextMidiNoteId_ = 1;
     trackCount_ = juce::jlimit(1, kMaxTracks, xml->getIntAttribute("trackCount", 8));
+    for (int i = 0; i < trackCount_; ++i)
+        tracks_[i].mixerInsert = i;
     bpm_.store(juce::jlimit(40.0, 240.0, xml->getDoubleAttribute("bpm", 120.0)));
     bpmSlider_.setValue(bpm(), juce::dontSendNotification);
     viewStartBeat_ = std::max(0.0, xml->getDoubleAttribute("viewStartBeat", 0.0));
@@ -3361,6 +3685,7 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
             tracks_[i].solo = t->getBoolAttribute("solo", false);
             tracks_[i].armed = t->getBoolAttribute("armed", false);
             tracks_[i].midi = t->getBoolAttribute("midi", false);
+            tracks_[i].mixerInsert = juce::jlimit(0, kMaxTracks - 1, t->getIntAttribute("mixerInsert", i));
         }
     }
 
@@ -3406,6 +3731,8 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
             c.reversed = x->getBoolAttribute("reversed", false);
             c.fadeInBeats = std::max(0.0, x->getDoubleAttribute("fadeInBeats", 0.0));
             c.fadeOutBeats = std::max(0.0, x->getDoubleAttribute("fadeOutBeats", 0.0));
+            c.mixerInsert = juce::jlimit(0, kMaxTracks - 1,
+                x->getIntAttribute("mixerInsert", tracks_[c.track].mixerInsert));
             c.colour = juce::Colour(static_cast<juce::uint32>(x->getIntAttribute("colour", static_cast<int>(tracks_[c.track].colour.getARGB()))));
             c.audio = data;
             clips_.push_back(c);
@@ -3491,6 +3818,7 @@ void DawWorkspace::newProject()
         tracks_[i] = {};
         tracks_[i].name = "Pista " + juce::String(i + 1);
         tracks_[i].colour = trackColour(i);
+        tracks_[i].mixerInsert = i;
     }
     tracks_[0].name = "Voz";
     tracks_[1].name = juce::String::fromUTF8("Batería");

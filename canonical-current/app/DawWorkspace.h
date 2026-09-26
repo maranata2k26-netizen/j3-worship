@@ -35,6 +35,7 @@ public:
 
     void prepare(double sampleRate, int maximumBlockSize);
     void renderToMaster(float* left, float* right, int numSamples) noexcept;
+    void renderToMixer(juce::AudioBuffer<float>& mixerBuffer, int numMixerChannels, int numSamples) noexcept;
     void captureInputBlock(const float* const* inputChannelData, int numInputChannels, int numSamples) noexcept;
 
     bool isPlaying() const noexcept { return playing_.load(std::memory_order_acquire); }
@@ -52,7 +53,11 @@ public:
     std::function<void()> onOpenPads;
     std::function<void()> onOpenIem;
     std::function<void()> onOpenSetlist;
+    std::function<void(int)> onOpenMixerInsert;
+    std::function<void(int)> onOpenPluginsForInsert;
+    std::function<void()> onMixerRoutingChanged;
 
+    juce::String mixerInsertName(int insert) const;
     bool validateLayoutForTesting(juce::String& report) const;
 
 private:
@@ -81,6 +86,7 @@ private:
         bool solo { false };
         bool armed { false };
         bool midi { false };
+        int mixerInsert { 0 };
     };
 
     struct MidiNote
@@ -91,6 +97,7 @@ private:
         double lengthBeats { 1.0 };
         int note { 60 };
         float velocity { 0.8f };
+        int mixerInsert { 0 };
     };
 
     struct Clip
@@ -106,6 +113,7 @@ private:
         bool reversed { false };
         double fadeInBeats { 0.0 };
         double fadeOutBeats { 0.0 };
+        int mixerInsert { 0 };
         juce::Colour colour;
         ClipAudioData* audio { nullptr };
     };
@@ -125,6 +133,7 @@ private:
         std::int64_t lengthSamples { 0 };
         int note { 60 };
         float velocity { 0.8f };
+        int mixerInsert { 0 };
     };
 
     struct RenderClip
@@ -138,6 +147,7 @@ private:
         bool muted { false };
         bool loop { false };
         bool reversed { false };
+        int mixerInsert { 0 };
         std::int64_t fadeInSamples { 0 };
         std::int64_t fadeOutSamples { 0 };
     };
@@ -195,6 +205,7 @@ private:
     void saveWorkspaceState() const;
     juce::File workspaceStateFile() const;
     void showContextMenu(juce::Point<int> point);
+    void openSelectedClipEditor();
 
     void addTrack();
     void addMidiTrack();
@@ -237,6 +248,8 @@ private:
 
     void rebuildRenderState();
     void markRenderDirty();
+    void renderBlock(float* masterLeft, float* masterRight, juce::AudioBuffer<float>* mixerBuffer,
+                     int numMixerChannels, int numSamples) noexcept;
 
     juce::AudioFormatManager formatManager_;
     std::vector<std::unique_ptr<ClipAudioData>> audioPool_;
@@ -347,6 +360,9 @@ private:
     juce::Slider clipGainSlider_;
     juce::ToggleButton clipMuteButton_ { "CLIP MUTE" };
     juce::ToggleButton clipLoopButton_ { "CLIP LOOP" };
+    juce::ComboBox clipMixerBox_;
+    juce::TextButton openMixerInsertButton_ { "ABRIR MIXER" };
+    juce::TextButton openPluginsInsertButton_ { "FX / PLUGINS" };
     juce::Slider fadeInSlider_;
     juce::Slider fadeOutSlider_;
     juce::Label statusLabel_;

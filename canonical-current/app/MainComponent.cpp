@@ -239,9 +239,10 @@ private:
 MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
                                       std::atomic<float>& gain, std::atomic<float>& pan,
                                       std::atomic<bool>& muted, std::atomic<float>& meter,
-                                      std::atomic<int>& bus, std::atomic<int>& dca)
+                                      std::atomic<int>& bus, std::atomic<int>& dca,
+                                      std::function<void(int)> onOpenFx)
     : index_(index), gain_(gain), pan_(pan), muted_(muted), meter_(meter),
-      bus_(bus), dca_(dca), meterBar_(meterValue_)
+      bus_(bus), dca_(dca), meterBar_(meterValue_), onOpenFx_(std::move(onOpenFx))
 {
     setOpaque(false);
 
@@ -271,6 +272,12 @@ MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
     muteButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(mutedText));
     muteButton_.onClick = [this] { muted_.store(muteButton_.getToggleState(), std::memory_order_relaxed); };
     addAndMakeVisible(muteButton_);
+
+    fxButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173246));
+    fxButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(text));
+    fxButton_.setTooltip(juce::String::fromUTF8("Abrir los 8 slots de efectos de este Mixer Insert"));
+    fxButton_.onClick = [this] { if (onOpenFx_) onOpenFx_(index_); };
+    addAndMakeVisible(fxButton_);
 
     busBox_.addItem("MASTER", 1);
     for (int i = 0; i < kBuses; ++i) busBox_.addItem("BUS " + juce::String(i + 1), i + 2);
@@ -329,6 +336,8 @@ void MainComponent::MixerStrip::resized()
     dcaBox_.setBounds(r.removeFromBottom(28));
     r.removeFromBottom(3);
     busBox_.setBounds(r.removeFromBottom(28));
+    r.removeFromBottom(3);
+    fxButton_.setBounds(r.removeFromBottom(26));
     r.removeFromBottom(3);
     muteButton_.setBounds(r.removeFromBottom(28));
     panSlider_.setBounds(r.removeFromBottom(76));
@@ -948,13 +957,13 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
 
-    pluginsTitle_.setText(juce::String::fromUTF8("VST3 INSERTS · 8 SLOTS PER INPUT"), juce::dontSendNotification);
+    pluginsTitle_.setText(juce::String::fromUTF8("MIXER FX · 8 SLOTS PER INSERT"), juce::dontSendNotification);
     pluginsTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
     pluginsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
     pluginsPage_.addAndMakeVisible(pluginsTitle_);
 
     for (int i = 0; i < kMaxChannels; ++i)
-        pluginChannelBox_.addItem("IN " + juce::String(i + 1), i + 1);
+        pluginChannelBox_.addItem("MIXER INSERT " + juce::String(i + 1), i + 1);
     pluginChannelBox_.setSelectedId(1, juce::dontSendNotification);
     pluginChannelBox_.onChange = [this] { refreshPluginUi(); };
     pluginsPage_.addAndMakeVisible(pluginChannelBox_);
@@ -1287,6 +1296,31 @@ MainComponent::MainComponent()
         refreshDspUi();
     };
     dawWorkspace_.onOpenMixer = [this] { tabs_.setCurrentTabIndex(0); };
+    dawWorkspace_.onOpenMixerInsert = [this](int insert)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        setMixerBank((ch / kVisibleChannels) * kVisibleChannels);
+        pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        selectedDspChannel_ = ch;
+        tabs_.setCurrentTabIndex(0);
+        refreshPluginUi();
+        refreshDspUi();
+    };
+    dawWorkspace_.onOpenPluginsForInsert = [this](int insert)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        setMixerBank((ch / kVisibleChannels) * kVisibleChannels);
+        tabs_.setCurrentTabIndex(6);
+        refreshPluginUi();
+    };
+    dawWorkspace_.onMixerRoutingChanged = [this]
+    {
+        rebuildMixerBank();
+        refreshPluginUi();
+        resized();
+    };
     dawWorkspace_.onOpenDsp = [this]
     {
         tabs_.setCurrentTabIndex(3);
@@ -1310,7 +1344,7 @@ MainComponent::MainComponent()
     };
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(42);
-    tabs_.addTab("LIVE", juce::Colour(panel), &mixerPage_, false);
+    tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
     tabs_.addTab("ARRANGER", juce::Colour(panel), &dawWorkspace_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
@@ -1943,13 +1977,22 @@ void MainComponent::rebuildMixerBank()
     {
         strips_[i].reset();
         const int channel = mixerBankStart_ + i;
+        auto title = "INS " + juce::String(channel + 1);
+        const auto routedName = dawWorkspace_.mixerInsertName(channel);
+        if (routedName.isNotEmpty()) title << juce::String::fromUTF8(" · ") << routedName;
         strips_[i] = std::make_unique<MixerStrip>(
-            channel, inputChannelName(channel),
+            channel, title,
             channelGain_[channel], channelPan_[channel], channelMute_[channel], channelMeter_[channel],
-            channelBus_[channel], channelDca_[channel]);
+            channelBus_[channel], channelDca_[channel],
+            [this](int ch)
+            {
+                pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+                refreshPluginUi();
+                tabs_.setCurrentTabIndex(6);
+            });
         mixerPage_.addAndMakeVisible(*strips_[i]);
     }
-    mixerBankLabel_.setText("INPUTS " + juce::String(mixerBankStart_ + 1) + juce::String::fromUTF8("–")
+    mixerBankLabel_.setText("MIXER INSERTS " + juce::String(mixerBankStart_ + 1) + juce::String::fromUTF8("–")
         + juce::String(std::min(kMaxChannels, mixerBankStart_ + kVisibleChannels))
         + " / " + juce::String(kMaxChannels), juce::dontSendNotification);
     mixerPrevButton_.setEnabled(mixerBankStart_ > 0);
@@ -2822,7 +2865,10 @@ void MainComponent::refreshPluginUi()
     loadPluginButton_.setEnabled(pluginsScanned_ && pluginCatalogBox_.getSelectedId() > 0);
 
     juce::String status;
-    status << "Channel: " << inputChannelName(ch) << juce::String::fromUTF8(" · Insert ") << (slot + 1) << "\n";
+    status << "Mixer Insert " << (ch + 1);
+    const auto routedName = dawWorkspace_.mixerInsertName(ch);
+    if (routedName.isNotEmpty()) status << juce::String::fromUTF8(" · ") << routedName;
+    status << juce::String::fromUTF8(" · FX Slot ") << (slot + 1) << "\n";
     if (loaded)
     {
         status << "Loaded: " << (pluginNames_[ch][slot].isNotEmpty() ? pluginNames_[ch][slot] : plugin->getName()) << "\n";
@@ -3059,6 +3105,93 @@ const float* MainComponent::processPluginChain(int channel, const float* input, 
     }
 
     return pluginScratch_.getReadPointer(0);
+}
+
+void MainComponent::processPluginChainStereo(int channel, float* left, float* right, int numSamples) noexcept
+{
+    if (channel < 0 || channel >= kMaxChannels || left == nullptr || right == nullptr || numSamples <= 0
+        || pluginScratch_.getNumChannels() < 2 || pluginScratch_.getNumSamples() < numSamples
+        || pluginGuardScratch_.getNumChannels() < 2 || pluginGuardScratch_.getNumSamples() < numSamples)
+        return;
+
+    bool hasPlugin = false;
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+    {
+        if (!pluginBypass_[channel][slot].load(std::memory_order_relaxed)
+            && channelPlugins_[channel][slot].load(std::memory_order_acquire) != nullptr)
+        {
+            hasPlugin = true;
+            break;
+        }
+    }
+    if (!hasPlugin)
+        return;
+
+    pluginScratch_.copyFrom(0, 0, left, numSamples);
+    pluginScratch_.copyFrom(1, 0, right, numSamples);
+
+    for (int slot = 0; slot < kPluginSlots; ++slot)
+    {
+        if (pluginBypass_[channel][slot].load(std::memory_order_relaxed))
+            continue;
+
+        auto plugin = channelPlugins_[channel][slot].load(std::memory_order_acquire);
+        if (plugin == nullptr)
+            continue;
+
+        const int channels = juce::jlimit(1, 2,
+            std::max(plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels()));
+
+        if (channels == 1)
+        {
+            auto* mono = pluginScratch_.getWritePointer(0);
+            const auto* stereoRight = pluginScratch_.getReadPointer(1);
+            for (int i = 0; i < numSamples; ++i)
+                mono[i] = (mono[i] + stereoRight[i]) * 0.70710678f;
+        }
+
+        for (int ch = 0; ch < channels; ++ch)
+            pluginGuardScratch_.copyFrom(ch, 0, pluginScratch_, ch, 0, numSamples);
+
+        bool restoreAndBypass = false;
+        try
+        {
+            juce::AudioBuffer<float> view(pluginScratch_.getArrayOfWritePointers(), channels, numSamples);
+            pluginMidiScratch_.clear();
+            plugin->processBlock(view, pluginMidiScratch_);
+
+            for (int ch = 0; ch < channels && !restoreAndBypass; ++ch)
+            {
+                const auto* data = pluginScratch_.getReadPointer(ch);
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    if (!std::isfinite(data[i]) || std::abs(data[i]) > 64.0f)
+                    {
+                        restoreAndBypass = true;
+                        break;
+                    }
+                }
+            }
+        }
+        catch (...)
+        {
+            restoreAndBypass = true;
+        }
+
+        if (restoreAndBypass)
+        {
+            for (int ch = 0; ch < channels; ++ch)
+                pluginScratch_.copyFrom(ch, 0, pluginGuardScratch_, ch, 0, numSamples);
+            pluginBypass_[channel][slot].store(true, std::memory_order_release);
+            pluginFaults_[channel][slot].fetch_add(1, std::memory_order_relaxed);
+        }
+
+        if (channels == 1)
+            pluginScratch_.copyFrom(1, 0, pluginScratch_, 0, 0, numSamples);
+    }
+
+    juce::FloatVectorOperations::copy(left, pluginScratch_.getReadPointer(0), numSamples);
+    juce::FloatVectorOperations::copy(right, pluginScratch_.getReadPointer(1), numSamples);
 }
 
 void MainComponent::refreshPadUi()
@@ -3531,7 +3664,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     const int right = paRight_.load(std::memory_order_relaxed);
     const int click = clickOutput_.load(std::memory_order_relaxed);
     const bool safePa = left >= 0 && right >= 0 && left < numOutputChannels && right < numOutputChannels
-        && routeIsSafe(left, right, click) && outputChannelData[left] != nullptr && outputChannelData[right] != nullptr;
+        && outputChannelData[left] != nullptr && outputChannelData[right] != nullptr;
     const bool monitoring = liveMonitorEnabled_.load(std::memory_order_acquire);
     const bool busAvailable = busScratch_.getNumChannels() >= kBuses * 2 && busScratch_.getNumSamples() >= numSamples;
 
@@ -3650,17 +3783,109 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     if (padAudible)
         ambientPad_.process(outputChannelData[left], outputChannelData[right], numSamples);
 
-    const bool dawAudible = safePa && dawWorkspace_.isPlaying();
-    if (dawAudible)
-        dawWorkspace_.renderToMaster(outputChannelData[left], outputChannelData[right], numSamples);
+    const bool dawRunning = dawWorkspace_.isPlaying();
+    const bool dawScratchReady = dawMixerScratch_.getNumChannels() >= kMaxChannels * 2
+        && dawMixerScratch_.getNumSamples() >= numSamples;
+    const bool dawAudible = safePa && dawRunning && dawScratchReady;
+    if (dawRunning && dawScratchReady)
+    {
+        dawMixerScratch_.clear(0, numSamples);
+        dawWorkspace_.renderToMixer(dawMixerScratch_, kMaxChannels, numSamples);
+
+        if (dawAudible)
+        {
+            if (busAvailable)
+                busScratch_.clear(0, numSamples);
+
+            auto* outL = outputChannelData[left];
+            auto* outR = outputChannelData[right];
+            const bool monoPa = left == right;
+            const float master = masterGain_.load(std::memory_order_relaxed);
+
+            for (int ch = 0; ch < kMaxChannels; ++ch)
+            {
+                auto* insertL = dawMixerScratch_.getWritePointer(ch * 2);
+                auto* insertR = dawMixerScratch_.getWritePointer(ch * 2 + 1);
+                processPluginChainStereo(ch, insertL, insertR, numSamples);
+
+                const bool muted = channelMute_[ch].load(std::memory_order_relaxed);
+                const int dca = channelDca_[ch].load(std::memory_order_relaxed);
+                const bool dcaMuted = dca >= 0 && dca < kDcas && dcaMute_[dca].load(std::memory_order_relaxed);
+                const float dcaGain = dca >= 0 && dca < kDcas ? dcaGain_[dca].load(std::memory_order_relaxed) : 1.0f;
+                const float insertGain = channelGain_[ch].load(std::memory_order_relaxed) * dcaGain;
+                const float pan = juce::jlimit(-1.0f, 1.0f, channelPan_[ch].load(std::memory_order_relaxed));
+                const int bus = channelBus_[ch].load(std::memory_order_relaxed);
+                float peak = 0.0f;
+
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    float l = insertL[i];
+                    float r = insertR[i];
+                    peak = std::max(peak, std::max(std::abs(l), std::abs(r)));
+                    if (muted || dcaMuted)
+                        continue;
+
+                    if (pan < 0.0f) r *= 1.0f + pan;
+                    else if (pan > 0.0f) l *= 1.0f - pan;
+                    l *= insertGain;
+                    r *= insertGain;
+
+                    if (bus >= 0 && bus < kBuses && busAvailable)
+                    {
+                        busScratch_.getWritePointer(bus * 2)[i] += l;
+                        busScratch_.getWritePointer(bus * 2 + 1)[i] += r;
+                    }
+                    else if (monoPa)
+                    {
+                        outL[i] += (l + r) * 0.70710678f * master;
+                    }
+                    else
+                    {
+                        outL[i] += l * master;
+                        outR[i] += r * master;
+                    }
+                }
+
+                auto previous = channelMeter_[ch].load(std::memory_order_relaxed);
+                while (peak > previous
+                    && !channelMeter_[ch].compare_exchange_weak(previous, peak, std::memory_order_relaxed)) {}
+            }
+
+            if (busAvailable)
+            {
+                for (int bus = 0; bus < kBuses; ++bus)
+                {
+                    if (busMute_[bus].load(std::memory_order_relaxed))
+                        continue;
+                    const float gain = busGain_[bus].load(std::memory_order_relaxed) * master;
+                    const auto* busL = busScratch_.getReadPointer(bus * 2);
+                    const auto* busR = busScratch_.getReadPointer(bus * 2 + 1);
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        if (monoPa)
+                            outL[i] += (busL[i] + busR[i]) * 0.70710678f * gain;
+                        else
+                        {
+                            outL[i] += busL[i] * gain;
+                            outR[i] += busR[i] * gain;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Soft output protection is applied after live inputs, pads and DAW playback have been summed.
+    // Only exclude CLICK when it actually owns a dedicated safe output; a stale conflicting
+    // click route must never remove protection from a PA output.
+    const bool dedicatedClickOutput = click >= 0 && click < numOutputChannels
+        && routeIsSafe(left, right, click);
     if (monitoring || padAudible || dawAudible)
     {
         for (int o = 0; o < numOutputChannels; ++o)
         {
             auto* out = outputChannelData[o];
-            if (out == nullptr || o == click)
+            if (out == nullptr || (dedicatedClickOutput && o == click))
                 continue;
             for (int i = 0; i < numSamples; ++i)
             {
@@ -3732,6 +3957,8 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     pluginScratch_.clear();
     pluginGuardScratch_.setSize(2, preparedBlock, false, true, false);
     pluginGuardScratch_.clear();
+    dawMixerScratch_.setSize(kMaxChannels * 2, preparedBlock, false, true, false);
+    dawMixerScratch_.clear();
     outputSafetyEvents_.store(0, std::memory_order_release);
     for (int ch = 0; ch < kMaxChannels; ++ch)
     {

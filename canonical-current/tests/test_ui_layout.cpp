@@ -4,6 +4,49 @@
 #include <cmath>
 #include <iostream>
 
+namespace
+{
+bool writePlaybackFixture(const juce::File& file)
+{
+    constexpr int sampleRate = 48000;
+    constexpr int samples = 4800;
+    constexpr short channels = 1;
+    constexpr short bitsPerSample = 32;
+    constexpr short blockAlign = channels * static_cast<short>(sizeof(float));
+    constexpr int dataBytes = samples * channels * static_cast<int>(sizeof(float));
+
+    juce::FileOutputStream output(file);
+    if (!output.openedOk())
+        return false;
+    output.setPosition(0);
+    output.truncate();
+
+    output.write("RIFF", 4);
+    output.writeInt(36 + dataBytes);
+    output.write("WAVE", 4);
+    output.write("fmt ", 4);
+    output.writeInt(16);
+    output.writeShort(3); // IEEE float
+    output.writeShort(channels);
+    output.writeInt(sampleRate);
+    output.writeInt(sampleRate * blockAlign);
+    output.writeShort(blockAlign);
+    output.writeShort(bitsPerSample);
+    output.write("data", 4);
+    output.writeInt(dataBytes);
+
+    for (int i = 0; i < samples; ++i)
+    {
+        const float t = static_cast<float>(i) / static_cast<float>(sampleRate);
+        const float value = std::sin(juce::MathConstants<float>::twoPi * 440.0f * t) * 0.25f;
+        if (!output.write(&value, sizeof(value)))
+            return false;
+    }
+    output.flush();
+    return output.getStatus().wasOk();
+}
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
@@ -94,6 +137,42 @@ int main()
                   << " normal-window -> " << normalWidth << "x" << normalHeight
                   << " : " << report << std::endl;
         ok = ok && normalPass;
+    }
+
+    // Regression: a dropped audio file must produce real samples immediately after PLAY,
+    // and it must do so through the new mixer-insert render path.
+    auto fixture = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("j3-worship-playback-regression", ".wav", false);
+    const bool fixtureWritten = writePlaybackFixture(fixture);
+    ok = ok && fixtureWritten;
+    std::cout << (fixtureWritten ? "[PASS] " : "[FAIL] ") << "playback WAV fixture" << std::endl;
+
+    if (fixtureWritten)
+    {
+        workspace.setSize(1400, 800);
+        workspace.prepare(48000.0, 512);
+        juce::StringArray dropped { fixture.getFullPathName() };
+        workspace.filesDropped(dropped, 0, 0); // beat 0, selected track
+        const bool playAccepted = workspace.keyPressed(juce::KeyPress(juce::KeyPress::spaceKey));
+        juce::AudioBuffer<float> mixer(96, 512);
+        mixer.clear();
+        workspace.renderToMixer(mixer, 48, 512);
+
+        double energy = 0.0;
+        for (int ch = 0; ch < mixer.getNumChannels(); ++ch)
+        {
+            const auto* data = mixer.getReadPointer(ch);
+            for (int i = 0; i < mixer.getNumSamples(); ++i)
+                energy += std::abs(static_cast<double>(data[i]));
+        }
+
+        const bool playbackPass = playAccepted && energy > 0.01;
+        std::cout << (playbackPass ? "[PASS] " : "[FAIL] ")
+                  << "dropped WAV -> PLAY -> mixer insert audio"
+                  << " (energy=" << energy << ")" << std::endl;
+        ok = ok && playbackPass;
+        workspace.emergencyStop();
+        fixture.deleteFile();
     }
 
     return ok ? 0 : 1;
