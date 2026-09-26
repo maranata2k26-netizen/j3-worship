@@ -40,7 +40,7 @@ jobs:
       - name: Upload UI layout snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-UI-Layout-1.8.1
+          name: J3Worship-UI-Layout-1.9.0
           path: canonical-current/build-win/ui-snapshots/*.png
           if-no-files-found: error
 
@@ -93,14 +93,14 @@ jobs:
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.8.1
+          name: J3Worship-Windows-1.9.0
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Setup-1.8.1
+          name: J3Worship-Setup-1.9.0
           path: canonical-current/dist-installer/J3Worship-Setup.exe
           if-no-files-found: error
       - name: Publish official GitHub Release

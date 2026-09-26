@@ -966,7 +966,7 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
 
-    pluginsTitle_.setText(juce::String::fromUTF8("MIXER FX RACK · FL-STYLE WORKFLOW"), juce::dontSendNotification);
+    pluginsTitle_.setText("MIXER FX RACK | DIRECT SLOT WORKFLOW", juce::dontSendNotification);
     pluginsTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
     pluginsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
     pluginsPage_.addAndMakeVisible(pluginsTitle_);
@@ -996,17 +996,13 @@ MainComponent::MainComponent()
     for (int slot = 0; slot < kPluginSlots; ++slot)
     {
         auto button = std::make_unique<juce::TextButton>();
-        button->setTooltip("FX Slot " + juce::String(slot + 1) + ": click an empty slot to add an effect; click a loaded plugin to open it.");
+        button->setTooltip("FX slot: click to choose, open, replace or manage a plug-in.");
         button->setClickingTogglesState(false);
         button->onClick = [this, slot]
         {
             pluginSlotBox_.setSelectedId(slot + 1, juce::dontSendNotification);
             refreshPluginUi();
-            const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
-            if (channelPlugins_[ch][slot].load(std::memory_order_acquire) != nullptr)
-                openSelectedPluginEditor();
-            else
-                pluginSearch_.grabKeyboardFocus();
+            showPluginSlotMenu(slot);
         };
         pluginsPage_.addAndMakeVisible(*button);
         pluginSlotButtons_[slot] = std::move(button);
@@ -1062,9 +1058,9 @@ MainComponent::MainComponent()
     };
     pluginsPage_.addAndMakeVisible(favoritePluginButton_);
 
-    scanPluginsButton_.setButtonText("BUSCAR VST3");
-    pluginLocationsButton_.setButtonText("CARPETA VST3");
-    loadPluginButton_.setButtonText("AÑADIR AL SLOT");
+    scanPluginsButton_.setButtonText("RESCAN VST3");
+    pluginLocationsButton_.setButtonText("VST3 FOLDER");
+    loadPluginButton_.setButtonText("LOAD SELECTED");
     scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     pluginLocationsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     pluginLocationsButton_.setTooltip(juce::String::fromUTF8("Agregá una carpeta VST3 adicional. J3 ya busca automáticamente las ubicaciones estándar de Windows."));
@@ -2531,9 +2527,9 @@ void MainComponent::resized()
     pluginSlotBox_.setBounds({}); // selection model only; the visible rack buttons replace this combo
     pluginsArea.removeFromTop(8);
 
-    const int chainWidth = std::max(300, std::min(430, pluginsArea.getWidth() * 34 / 100));
+    const int chainWidth = std::max(420, std::min(620, pluginsArea.getWidth() * 46 / 100));
     auto chain = pluginsArea.removeFromLeft(chainWidth).reduced(6);
-    pluginsArea.removeFromLeft(10);
+    pluginsArea.removeFromLeft(14);
     auto browser = pluginsArea.reduced(6);
 
     pluginChainTitle_.setBounds(chain.removeFromTop(24));
@@ -3267,7 +3263,7 @@ void MainComponent::refreshPluginBrowser()
         pluginBrowserIndices_.push_back(i);
         juce::String label;
         if (favoritePluginPaths_.contains(path))
-            label << juce::String::fromUTF8("★ ");
+            label << "* ";
         label << juce::String(plugin.name);
         if (!plugin.manufacturer.empty() && !juce::String(plugin.manufacturer).equalsIgnoreCase("Unknown"))
             label << juce::String::fromUTF8(" · ") << juce::String(plugin.manufacturer);
@@ -3315,7 +3311,7 @@ void MainComponent::refreshPluginUi()
         if (occupied)
             label << (pluginNames_[ch][i].isNotEmpty() ? pluginNames_[ch][i] : juce::String("PLUGIN"));
         else
-            label << "+ ADD EFFECT";
+            label << "CLICK TO CHOOSE PLUGIN";
         if (pluginBypass_[ch][i].load(std::memory_order_relaxed))
             label << "   [BYPASS]";
         pluginSlotButtons_[i]->setButtonText(label);
@@ -3323,8 +3319,9 @@ void MainComponent::refreshPluginUi()
             i == slot ? juce::Colour(accentDeep) : juce::Colour(occupied ? 0xff173246 : panel3));
     }
 
-    nativeEqButton_.setButtonText("J3 PARAMETRIC EQ  ·  NATIVE  ·  PRE-FX");
-    pluginBrowserTitle_.setText("ADD EFFECT TO SLOT " + juce::String(slot + 1), juce::dontSendNotification);
+    nativeEqButton_.setButtonText("J3 PARAMETRIC EQ  |  NATIVE  |  PRE-FX");
+    pluginBrowserTitle_.setText("ADVANCED PLUGIN MANAGER | SLOT " + juce::String(slot + 1),
+        juce::dontSendNotification);
 
     auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
 
@@ -3385,6 +3382,213 @@ void MainComponent::refreshPluginUi()
                << " VST3 discovered.";
     }
     pluginStatusLabel_.setText(status, juce::dontSendNotification);
+}
+
+
+void MainComponent::showPluginSlotMenu(int slot)
+{
+    slot = juce::jlimit(0, kPluginSlots - 1, slot);
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    pluginSlotBox_.setSelectedId(slot + 1, juce::dontSendNotification);
+
+    if (!pluginsScanned_ && !pluginMutationLocked())
+        scanVst3Plugins();
+
+    auto loadedPlugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
+    const bool loaded = loadedPlugin != nullptr;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader("MIXER INSERT " + juce::String(ch + 1)
+        + "  |  FX SLOT " + juce::String(slot + 1));
+
+    if (loaded)
+    {
+        const auto name = pluginNames_[ch][slot].isNotEmpty()
+            ? pluginNames_[ch][slot] : loadedPlugin->getName();
+        menu.addItem(1, "OPEN  " + name);
+        menu.addItem(2,
+            pluginBypass_[ch][slot].load(std::memory_order_relaxed)
+                ? "ENABLE SLOT" : "BYPASS SLOT");
+        menu.addItem(3, "REMOVE PLUGIN");
+        menu.addSeparator();
+        menu.addSectionHeader("REPLACE PLUGIN");
+    }
+    else
+    {
+        menu.addSectionHeader("SELECT PLUGIN");
+    }
+
+    auto paths = std::make_shared<std::vector<juce::String>>();
+    int nextPluginId = 1000;
+
+    auto addRecord = [&](juce::PopupMenu& target, const j3::PluginRecord& record)
+    {
+        juce::String path(record.path.wstring().c_str());
+        juce::String label(record.name);
+        if (!record.manufacturer.empty()
+            && !juce::String(record.manufacturer).equalsIgnoreCase("Unknown"))
+            label << "  |  " << juce::String(record.manufacturer);
+        paths->push_back(path);
+        target.addItem(nextPluginId++, label);
+    };
+
+    auto addKnownPaths = [&](juce::PopupMenu& target, const juce::StringArray& wanted)
+    {
+        int count = 0;
+        for (const auto& wantedPath : wanted)
+        {
+            for (const auto& record : pluginCatalog_.plugins())
+            {
+                const juce::String path(record.path.wstring().c_str());
+                if (path == wantedPath)
+                {
+                    addRecord(target, record);
+                    ++count;
+                    break;
+                }
+            }
+        }
+        return count;
+    };
+
+    if (!pluginCatalog_.plugins().empty())
+    {
+        juce::PopupMenu favorites, recent, eq, dynamics, ambience, colour, utility;
+        const int favoriteCount = addKnownPaths(favorites, favoritePluginPaths_);
+        const int recentCount = addKnownPaths(recent, recentPluginPaths_);
+        int eqCount = 0, dynamicsCount = 0, ambienceCount = 0, colourCount = 0, utilityCount = 0;
+
+        for (const auto& record : pluginCatalog_.plugins())
+        {
+            const auto path = juce::String(record.path.wstring().c_str());
+            const auto haystack = (juce::String(record.name) + " "
+                + juce::String(record.manufacturer) + " " + path).toLowerCase();
+
+            const bool instrument = haystack.contains("instrument") || haystack.contains("synth")
+                || haystack.contains("piano") || haystack.contains("kontakt")
+                || haystack.contains("organ");
+            if (instrument)
+                continue;
+
+            if (haystack.contains("equalizer") || haystack.contains("pro-q")
+                || haystack.contains(" eq") || haystack.startsWith("eq"))
+            {
+                addRecord(eq, record); ++eqCount;
+            }
+            else if (haystack.contains("compress") || haystack.contains("limiter")
+                || haystack.contains("1176") || haystack.contains("2a")
+                || haystack.contains("dynamic") || haystack.contains("gate"))
+            {
+                addRecord(dynamics, record); ++dynamicsCount;
+            }
+            else if (haystack.contains("reverb") || haystack.contains("verb")
+                || haystack.contains("delay") || haystack.contains("echo")
+                || haystack.contains("room") || haystack.contains("hall"))
+            {
+                addRecord(ambience, record); ++ambienceCount;
+            }
+            else if (haystack.contains("satur") || haystack.contains("tape")
+                || haystack.contains("tube") || haystack.contains("distort")
+                || haystack.contains("drive") || haystack.contains("guitar")
+                || haystack.contains(" amp") || haystack.contains("cab"))
+            {
+                addRecord(colour, record); ++colourCount;
+            }
+            else
+            {
+                addRecord(utility, record); ++utilityCount;
+            }
+        }
+
+        if (favoriteCount > 0) menu.addSubMenu("FAVORITES", favorites);
+        if (recentCount > 0) menu.addSubMenu("RECENT", recent);
+        if (eqCount > 0) menu.addSubMenu("EQ", eq);
+        if (dynamicsCount > 0) menu.addSubMenu("DYNAMICS", dynamics);
+        if (ambienceCount > 0) menu.addSubMenu("REVERB / DELAY", ambience);
+        if (colourCount > 0) menu.addSubMenu("SATURATION / GUITAR", colour);
+        if (utilityCount > 0) menu.addSubMenu("OTHER / UTILITY", utility);
+    }
+    else
+    {
+        menu.addItem(20, "NO VST3 FOUND", false);
+    }
+
+    menu.addSeparator();
+    menu.addItem(10, "RESCAN VST3");
+    menu.addItem(11, "ADD VST3 FOLDER...");
+    menu.addItem(12, "FOCUS ADVANCED SEARCH");
+
+    juce::Component::SafePointer<MainComponent> safe(this);
+    menu.showMenuAsync(
+        juce::PopupMenu::Options().withTargetComponent(pluginSlotButtons_[slot].get()),
+        [safe, paths, ch, slot](int result)
+        {
+            if (safe == nullptr || result == 0)
+                return;
+
+            safe->pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+            safe->pluginSlotBox_.setSelectedId(slot + 1, juce::dontSendNotification);
+
+            if (result == 1)
+            {
+                safe->openSelectedPluginEditor();
+                return;
+            }
+            if (result == 2)
+            {
+                const bool bypass = safe->pluginBypass_[ch][slot].load(std::memory_order_relaxed);
+                safe->pluginBypass_[ch][slot].store(!bypass, std::memory_order_release);
+                safe->saveAppState();
+                safe->refreshPluginUi();
+                return;
+            }
+            if (result == 3)
+            {
+                safe->removeSelectedPlugin();
+                return;
+            }
+            if (result == 10)
+            {
+                safe->scanVst3Plugins();
+                return;
+            }
+            if (result == 11)
+            {
+                safe->chooseAdditionalVst3Folder();
+                return;
+            }
+            if (result == 12)
+            {
+                safe->pluginSearch_.grabKeyboardFocus();
+                return;
+            }
+
+            if (result >= 1000)
+            {
+                const int index = result - 1000;
+                if (index < 0 || index >= static_cast<int>(paths->size()))
+                    return;
+
+                if (safe->pluginMutationLocked())
+                {
+                    safe->showAudioError(juce::String::fromUTF8(
+                        "Por seguridad, no se cargan plugins nuevos durante LIVE, reproduccion o grabacion."));
+                    return;
+                }
+
+                const auto path = (*paths)[static_cast<std::size_t>(index)];
+                safe->recentPluginPaths_.removeString(path);
+                safe->recentPluginPaths_.insert(0, path);
+                while (safe->recentPluginPaths_.size() > 12)
+                    safe->recentPluginPaths_.remove(safe->recentPluginPaths_.size() - 1);
+
+                safe->pluginStateBase64_[ch][slot].clear();
+                safe->pluginBypass_[ch][slot].store(false, std::memory_order_release);
+                safe->pluginFaults_[ch][slot].store(0, std::memory_order_release);
+                safe->saveAppState();
+                safe->loadPluginPathIntoSlot(path, ch, slot);
+            }
+        });
 }
 
 void MainComponent::loadSelectedPlugin()

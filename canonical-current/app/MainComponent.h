@@ -147,6 +147,7 @@ private:
     void chooseAdditionalVst3Folder();
     void refreshPluginBrowser();
     void refreshPluginUi();
+    void showPluginSlotMenu(int slot);
     void loadSelectedPlugin();
     void loadPluginPathIntoSlot(const juce::String& path, int channel, int slot);
     void removeSelectedPlugin();
@@ -396,7 +397,7 @@ private:
     juce::TextEditor pluginSearch_;
     juce::ComboBox pluginCategoryBox_;
     juce::ComboBox pluginCatalogBox_;
-    juce::ToggleButton favoritePluginButton_ { "★ FAVORITE" };
+    juce::ToggleButton favoritePluginButton_ { "FAVORITE" };
     juce::TextButton scanPluginsButton_ { "SCAN VST3" };
     juce::TextButton pluginLocationsButton_ { "ADD VST3 FOLDER" };
     juce::TextButton loadPluginButton_ { "LOAD INSERT" };
