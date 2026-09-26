@@ -40,7 +40,7 @@ jobs:
       - name: Upload UI layout snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-UI-Layout-1.10.3
+          name: J3Worship-UI-Layout-1.10.4
           path: canonical-current/build-win/ui-snapshots/*.png
           if-no-files-found: error
 
@@ -63,17 +63,23 @@ jobs:
           & $iscc "canonical-current/installer/J3Worship.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
-      - name: Legacy 1.9 updater compatibility smoke test
+      - name: Legacy 1.9 running-executable migration smoke test
         shell: pwsh
         run: |
           $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Setup.exe").Path
           $sourceExe = (Resolve-Path "canonical-current/dist/J3Worship.exe").Path
-          $legacyDir = Join-Path $env:RUNNER_TEMP "J3WorshipLegacy19"
+          $legacyDir = Join-Path $env:RUNNER_TEMP "J3WorshipLegacy19Locked"
           $updaterDir = Join-Path $env:TEMP "J3WorshipUpdater"
           $legacyExe = Join-Path $legacyDir "J3Worship.exe"
           New-Item -ItemType Directory -Force -Path $legacyDir | Out-Null
           New-Item -ItemType Directory -Force -Path $updaterDir | Out-Null
-          Set-Content -Path $legacyExe -Value "legacy 1.9 executable placeholder" -Encoding ascii
+
+          # Use a real running Windows executable renamed as J3Worship.exe so the
+          # migration test exercises replacement while the old target is locked/running.
+          Copy-Item "$env:WINDIR\System32\timeout.exe" $legacyExe -Force
+          $legacyProcess = Start-Process -FilePath $legacyExe -ArgumentList "/T","60","/NOBREAK" -PassThru
+          Start-Sleep -Milliseconds 500
+          if ($legacyProcess.HasExited) { throw "Could not create running legacy J3Worship.exe test process" }
 
           $script = Join-Path $updaterDir "apply-update.cmd"
           @(
@@ -84,17 +90,27 @@ jobs:
             'del "%~f0"'
           ) | Set-Content -Path $script -Encoding ascii
 
-          $log = Join-Path $env:RUNNER_TEMP "j3-legacy19-update.log"
+          $log = Join-Path $env:RUNNER_TEMP "j3-legacy19-locked-update.log"
           $p = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Get-Content $log -ErrorAction SilentlyContinue; throw "Legacy 1.9 compatibility install failed: $($p.ExitCode)" }
+          if ($p.ExitCode -ne 0) {
+            Get-Content $log -ErrorAction SilentlyContinue
+            Get-Content (Join-Path $updaterDir "migration-result.txt") -ErrorAction SilentlyContinue
+            throw "Legacy 1.9 locked-executable migration failed: $($p.ExitCode)"
+          }
 
+          Start-Sleep -Milliseconds 500
           $expected = (Get-FileHash $sourceExe -Algorithm SHA256).Hash
           $actual = (Get-FileHash $legacyExe -Algorithm SHA256).Hash
           if ($actual -ne $expected) {
             Get-Content $script -ErrorAction SilentlyContinue
             Get-Content $log -ErrorAction SilentlyContinue
-            throw "Legacy 1.9 updater did not replace the exact executable it would reopen"
+            Get-Content (Join-Path $updaterDir "migration-result.txt") -ErrorAction SilentlyContinue
+            throw "Legacy 1.9 updater did not replace the running executable it would reopen"
           }
+
+          $migration = Get-Content (Join-Path $updaterDir "migration-result.txt") -Raw
+          if ($migration -notmatch '^OK') { throw "Legacy migration marker did not report success" }
+          if (!$legacyProcess.HasExited) { Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue }
           Remove-Item $script -Force -ErrorAction SilentlyContinue
 
       - name: In-place updater target smoke test
@@ -150,14 +166,14 @@ jobs:
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.10.3
+          name: J3Worship-Windows-1.10.4
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Setup-1.10.3
+          name: J3Worship-Setup-1.10.4
           path: canonical-current/dist-installer/J3Worship-Setup.exe
           if-no-files-found: error
       - name: Publish official GitHub Release
