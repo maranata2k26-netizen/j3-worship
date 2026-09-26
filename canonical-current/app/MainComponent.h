@@ -151,6 +151,7 @@ private:
     void showPluginSlotMenu(int slot);
     void openNativeEqEditor();
     void loadSelectedPlugin();
+    void loadPluginDescriptionIntoSlot(const juce::PluginDescription&, int channel, int slot);
 
     int getNumRows() override;
     void paintListBoxItem(int rowNumber, juce::Graphics&, int width, int height, bool rowIsSelected) override;
@@ -243,6 +244,7 @@ private:
     juce::AudioBuffer<float> busScratch_;
 
     j3::PluginCatalog pluginCatalog_;
+    std::vector<juce::PluginDescription> pluginDescriptions_;
     juce::AudioPluginFormatManager pluginFormatManager_;
     std::array<std::array<std::atomic<std::shared_ptr<juce::AudioPluginInstance>>, kPluginSlots>, kMaxChannels> channelPlugins_{};
     std::array<std::array<std::atomic<bool>, kPluginSlots>, kMaxChannels> pluginBypass_{};
