@@ -3709,6 +3709,29 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     const int click = clickOutput_.load(std::memory_order_relaxed);
     const bool safePa = left >= 0 && right >= 0 && left < numOutputChannels && right < numOutputChannels
         && outputChannelData[left] != nullptr && outputChannelData[right] != nullptr;
+
+    int playbackLeft = left;
+    int playbackRight = right;
+    bool playbackRouteReady = safePa;
+    if (!playbackRouteReady)
+    {
+        int first = -1;
+        int second = -1;
+        for (int o = 0; o < numOutputChannels; ++o)
+        {
+            if (outputChannelData[o] == nullptr || o == click)
+                continue;
+            if (first < 0) first = o;
+            else { second = o; break; }
+        }
+        if (first >= 0)
+        {
+            playbackLeft = first;
+            playbackRight = second >= 0 ? second : first;
+            playbackRouteReady = true;
+        }
+    }
+
     const bool monitoring = liveMonitorEnabled_.load(std::memory_order_acquire);
     const bool busAvailable = busScratch_.getNumChannels() >= kBuses * 2 && busScratch_.getNumSamples() >= numSamples;
 
@@ -3830,7 +3853,8 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     const bool dawRunning = dawWorkspace_.isPlaying();
     const bool dawScratchReady = dawMixerScratch_.getNumChannels() >= kMaxChannels * 2
         && dawMixerScratch_.getNumSamples() >= numSamples;
-    const bool dawAudible = safePa && dawRunning && dawScratchReady;
+    const bool dawAudible = playbackRouteReady && dawRunning && dawScratchReady;
+    dawOutputFallbackActive_.store(dawRunning && playbackRouteReady && !safePa, std::memory_order_relaxed);
     if (dawRunning && dawScratchReady)
     {
         dawMixerScratch_.clear(0, numSamples);
@@ -3841,9 +3865,9 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
             if (busAvailable)
                 busScratch_.clear(0, numSamples);
 
-            auto* outL = outputChannelData[left];
-            auto* outR = outputChannelData[right];
-            const bool monoPa = left == right;
+            auto* outL = outputChannelData[playbackLeft];
+            auto* outR = outputChannelData[playbackRight];
+            const bool monoPa = playbackLeft == playbackRight;
             const float master = masterGain_.load(std::memory_order_relaxed);
 
             for (int ch = 0; ch < kMaxChannels; ++ch)
@@ -3923,7 +3947,8 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     // Only exclude CLICK when it actually owns a dedicated safe output; a stale conflicting
     // click route must never remove protection from a PA output.
     const bool dedicatedClickOutput = click >= 0 && click < numOutputChannels
-        && routeIsSafe(left, right, click);
+        && outputChannelData[click] != nullptr
+        && routeIsSafe(dawRunning ? playbackLeft : left, dawRunning ? playbackRight : right, click);
     if (monitoring || padAudible || dawAudible)
     {
         for (int o = 0; o < numOutputChannels; ++o)
