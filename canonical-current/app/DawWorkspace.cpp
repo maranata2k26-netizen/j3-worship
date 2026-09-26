@@ -612,6 +612,14 @@ DawWorkspace::DawWorkspace()
     tracks_[6].name = "Pads";
     tracks_[7].name = "FX";
 
+    for (int i = 0; i < kMaxTracks; ++i)
+    {
+        liveActiveClipIds_[i].store(kLiveNoClip, std::memory_order_relaxed);
+        livePendingClipIds_[i].store(kLiveNoClip, std::memory_order_relaxed);
+        liveClipLaunchSamples_[i].store(0, std::memory_order_relaxed);
+        livePendingLaunchSamples_[i].store(0, std::memory_order_relaxed);
+    }
+
     configureControls();
     loadWorkspaceState();
     syncInspector();
@@ -3263,6 +3271,7 @@ void DawWorkspace::togglePlay()
 
 void DawWorkspace::stopTransport(bool returnToStart)
 {
+    clearLiveState(false);
     playing_.store(false, std::memory_order_release);
     playButton_.setButtonText("PLAY");
     if (returnToStart) transportSamples_.store(0, std::memory_order_relaxed);
@@ -3611,6 +3620,7 @@ void DawWorkspace::rebuildRenderState()
         if (c.audio == nullptr) continue;
         auto& rc = state.clips[state.clipCount++];
         rc.audio = c.audio;
+        rc.id = c.id;
         rc.track = c.track;
         rc.startSample = static_cast<std::int64_t>(std::llround(c.startBeat * secondsPerBeat * state.sampleRate));
         rc.lengthSamples = std::max<std::int64_t>(1, static_cast<std::int64_t>(
