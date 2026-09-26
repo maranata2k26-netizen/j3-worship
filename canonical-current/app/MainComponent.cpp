@@ -239,9 +239,10 @@ private:
 MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
                                       std::atomic<float>& gain, std::atomic<float>& pan,
                                       std::atomic<bool>& muted, std::atomic<float>& meter,
-                                      std::atomic<int>& bus, std::atomic<int>& dca)
+                                      std::atomic<int>& bus, std::atomic<int>& dca,
+                                      std::function<void(int)> onOpenFx)
     : index_(index), gain_(gain), pan_(pan), muted_(muted), meter_(meter),
-      bus_(bus), dca_(dca), meterBar_(meterValue_)
+      bus_(bus), dca_(dca), meterBar_(meterValue_), onOpenFx_(std::move(onOpenFx))
 {
     setOpaque(false);
 
@@ -271,6 +272,12 @@ MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
     muteButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(mutedText));
     muteButton_.onClick = [this] { muted_.store(muteButton_.getToggleState(), std::memory_order_relaxed); };
     addAndMakeVisible(muteButton_);
+
+    fxButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173246));
+    fxButton_.setColour(juce::TextButton::textColourOffId, juce::Colour(text));
+    fxButton_.setTooltip(juce::String::fromUTF8("Abrir los 8 slots de efectos de este Mixer Insert"));
+    fxButton_.onClick = [this] { if (onOpenFx_) onOpenFx_(index_); };
+    addAndMakeVisible(fxButton_);
 
     busBox_.addItem("MASTER", 1);
     for (int i = 0; i < kBuses; ++i) busBox_.addItem("BUS " + juce::String(i + 1), i + 2);
@@ -329,6 +336,8 @@ void MainComponent::MixerStrip::resized()
     dcaBox_.setBounds(r.removeFromBottom(28));
     r.removeFromBottom(3);
     busBox_.setBounds(r.removeFromBottom(28));
+    r.removeFromBottom(3);
+    fxButton_.setBounds(r.removeFromBottom(26));
     r.removeFromBottom(3);
     muteButton_.setBounds(r.removeFromBottom(28));
     panSlider_.setBounds(r.removeFromBottom(76));
@@ -948,13 +957,13 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
 
-    pluginsTitle_.setText(juce::String::fromUTF8("VST3 INSERTS · 8 SLOTS PER INPUT"), juce::dontSendNotification);
+    pluginsTitle_.setText(juce::String::fromUTF8("MIXER FX · 8 SLOTS PER INSERT"), juce::dontSendNotification);
     pluginsTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
     pluginsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
     pluginsPage_.addAndMakeVisible(pluginsTitle_);
 
     for (int i = 0; i < kMaxChannels; ++i)
-        pluginChannelBox_.addItem("IN " + juce::String(i + 1), i + 1);
+        pluginChannelBox_.addItem("MIXER INSERT " + juce::String(i + 1), i + 1);
     pluginChannelBox_.setSelectedId(1, juce::dontSendNotification);
     pluginChannelBox_.onChange = [this] { refreshPluginUi(); };
     pluginsPage_.addAndMakeVisible(pluginChannelBox_);
@@ -1287,6 +1296,31 @@ MainComponent::MainComponent()
         refreshDspUi();
     };
     dawWorkspace_.onOpenMixer = [this] { tabs_.setCurrentTabIndex(0); };
+    dawWorkspace_.onOpenMixerInsert = [this](int insert)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        setMixerBank((ch / kVisibleChannels) * kVisibleChannels);
+        pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        selectedDspChannel_ = ch;
+        tabs_.setCurrentTabIndex(0);
+        refreshPluginUi();
+        refreshDspUi();
+    };
+    dawWorkspace_.onOpenPluginsForInsert = [this](int insert)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+        setMixerBank((ch / kVisibleChannels) * kVisibleChannels);
+        tabs_.setCurrentTabIndex(6);
+        refreshPluginUi();
+    };
+    dawWorkspace_.onMixerRoutingChanged = [this]
+    {
+        rebuildMixerBank();
+        refreshPluginUi();
+        resized();
+    };
     dawWorkspace_.onOpenDsp = [this]
     {
         tabs_.setCurrentTabIndex(3);
@@ -1310,7 +1344,7 @@ MainComponent::MainComponent()
     };
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(42);
-    tabs_.addTab("LIVE", juce::Colour(panel), &mixerPage_, false);
+    tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
     tabs_.addTab("ARRANGER", juce::Colour(panel), &dawWorkspace_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
@@ -1943,13 +1977,22 @@ void MainComponent::rebuildMixerBank()
     {
         strips_[i].reset();
         const int channel = mixerBankStart_ + i;
+        auto title = "INS " + juce::String(channel + 1);
+        const auto routedName = dawWorkspace_.mixerInsertName(channel);
+        if (routedName.isNotEmpty()) title << juce::String::fromUTF8(" · ") << routedName;
         strips_[i] = std::make_unique<MixerStrip>(
-            channel, inputChannelName(channel),
+            channel, title,
             channelGain_[channel], channelPan_[channel], channelMute_[channel], channelMeter_[channel],
-            channelBus_[channel], channelDca_[channel]);
+            channelBus_[channel], channelDca_[channel],
+            [this](int ch)
+            {
+                pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
+                refreshPluginUi();
+                tabs_.setCurrentTabIndex(6);
+            });
         mixerPage_.addAndMakeVisible(*strips_[i]);
     }
-    mixerBankLabel_.setText("INPUTS " + juce::String(mixerBankStart_ + 1) + juce::String::fromUTF8("–")
+    mixerBankLabel_.setText("MIXER INSERTS " + juce::String(mixerBankStart_ + 1) + juce::String::fromUTF8("–")
         + juce::String(std::min(kMaxChannels, mixerBankStart_ + kVisibleChannels))
         + " / " + juce::String(kMaxChannels), juce::dontSendNotification);
     mixerPrevButton_.setEnabled(mixerBankStart_ > 0);
@@ -2822,7 +2865,10 @@ void MainComponent::refreshPluginUi()
     loadPluginButton_.setEnabled(pluginsScanned_ && pluginCatalogBox_.getSelectedId() > 0);
 
     juce::String status;
-    status << "Channel: " << inputChannelName(ch) << juce::String::fromUTF8(" · Insert ") << (slot + 1) << "\n";
+    status << "Mixer Insert " << (ch + 1);
+    const auto routedName = dawWorkspace_.mixerInsertName(ch);
+    if (routedName.isNotEmpty()) status << juce::String::fromUTF8(" · ") << routedName;
+    status << juce::String::fromUTF8(" · FX Slot ") << (slot + 1) << "\n";
     if (loaded)
     {
         status << "Loaded: " << (pluginNames_[ch][slot].isNotEmpty() ? pluginNames_[ch][slot] : plugin->getName()) << "\n";
