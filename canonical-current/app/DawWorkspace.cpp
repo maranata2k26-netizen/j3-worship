@@ -337,6 +337,107 @@ juce::Colour trackColour(int index)
     };
     return juce::Colour(colours[static_cast<std::size_t>(index) % colours.size()]);
 }
+
+class AudioClipRoutingEditor final : public juce::Component
+{
+public:
+    AudioClipRoutingEditor(const juce::String& clipName,
+                           int currentInsert,
+                           std::function<void(int)> onRoute,
+                           std::function<void(int)> onOpenMixer,
+                           std::function<void(int)> onOpenFx)
+        : onRoute_(std::move(onRoute)),
+          onOpenMixer_(std::move(onOpenMixer)),
+          onOpenFx_(std::move(onOpenFx))
+    {
+        title_.setText("AUDIO CLIP", juce::dontSendNotification);
+        title_.setFont(juce::FontOptions(22.0f, juce::Font::bold));
+        title_.setColour(juce::Label::textColourId, juce::Colour(kText));
+        addAndMakeVisible(title_);
+
+        name_.setText(clipName.isNotEmpty() ? clipName : "Audio", juce::dontSendNotification);
+        name_.setFont(juce::FontOptions(14.0f));
+        name_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
+        addAndMakeVisible(name_);
+
+        routeLabel_.setText("MIXER ROUTING", juce::dontSendNotification);
+        routeLabel_.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        routeLabel_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
+        addAndMakeVisible(routeLabel_);
+
+        for (int i = 0; i < 48; ++i)
+            insertBox_.addItem("MIXER INSERT " + juce::String(i + 1), i + 1);
+        insertBox_.setSelectedId(juce::jlimit(0, 47, currentInsert) + 1, juce::dontSendNotification);
+        insertBox_.onChange = [this]
+        {
+            const int insert = juce::jlimit(0, 47, insertBox_.getSelectedId() - 1);
+            if (onRoute_) onRoute_(insert);
+        };
+        addAndMakeVisible(insertBox_);
+
+        mixerButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173246));
+        fxButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff22527a));
+        mixerButton_.onClick = [this]
+        {
+            const int insert = juce::jlimit(0, 47, insertBox_.getSelectedId() - 1);
+            if (onOpenMixer_) onOpenMixer_(insert);
+        };
+        fxButton_.onClick = [this]
+        {
+            const int insert = juce::jlimit(0, 47, insertBox_.getSelectedId() - 1);
+            if (onOpenFx_) onOpenFx_(insert);
+        };
+        addAndMakeVisible(mixerButton_);
+        addAndMakeVisible(fxButton_);
+
+        hint_.setText(juce::String::fromUTF8("Este audio entra al Insert seleccionado. Fader, pan, bus/DCA y los 8 FX slots procesan su señal."),
+                      juce::dontSendNotification);
+        hint_.setFont(juce::FontOptions(12.0f));
+        hint_.setColour(juce::Label::textColourId, juce::Colour(kMuted));
+        hint_.setJustificationType(juce::Justification::topLeft);
+        addAndMakeVisible(hint_);
+
+        setSize(470, 226);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff0b151e));
+        g.setColour(juce::Colour(kBorder));
+        g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.0f), 8.0f, 1.0f);
+        g.setColour(juce::Colour(kAccent));
+        g.fillRoundedRectangle(18.0f, 63.0f, static_cast<float>(getWidth() - 36), 2.0f, 1.0f);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(18);
+        title_.setBounds(r.removeFromTop(28));
+        name_.setBounds(r.removeFromTop(24));
+        r.removeFromTop(12);
+        routeLabel_.setBounds(r.removeFromTop(18));
+        insertBox_.setBounds(r.removeFromTop(32));
+        r.removeFromTop(10);
+        auto buttons = r.removeFromTop(34);
+        mixerButton_.setBounds(buttons.removeFromLeft(142));
+        buttons.removeFromLeft(8);
+        fxButton_.setBounds(buttons.removeFromLeft(142));
+        r.removeFromTop(10);
+        hint_.setBounds(r);
+    }
+
+private:
+    juce::Label title_;
+    juce::Label name_;
+    juce::Label routeLabel_;
+    juce::ComboBox insertBox_;
+    juce::TextButton mixerButton_ { "OPEN MIXER" };
+    juce::TextButton fxButton_ { "FX / PLUGINS" };
+    juce::Label hint_;
+    std::function<void(int)> onRoute_;
+    std::function<void(int)> onOpenMixer_;
+    std::function<void(int)> onOpenFx_;
+};
 }
 
 DawWorkspace::DawWorkspace()
