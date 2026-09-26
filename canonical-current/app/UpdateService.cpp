@@ -55,7 +55,8 @@ juce::File updateFailureMarker()
 
 juce::String quoteForCmd(const juce::String& value)
 {
-    return juce::String(""") + value.replace(""", """") + """;
+    const auto quote = juce::String::charToString('"');
+    return quote + value.replace(quote, quote + quote) + quote;
 }
 }
 
