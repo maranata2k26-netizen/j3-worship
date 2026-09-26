@@ -6,6 +6,18 @@
 
 namespace j3 {
 struct Route { std::size_t from{}; std::size_t to{}; double gainDb{0.0}; bool enabled{true}; };
+
+struct StereoOutputSelection {
+    int left{-1};
+    int right{-1};
+    bool usedFallback{false};
+    bool valid() const noexcept { return left >= 0 && right >= 0; }
+};
+
+StereoOutputSelection chooseActiveStereoOutputs(const std::vector<bool>& active,
+                                                int preferredLeft,
+                                                int preferredRight) noexcept;
+
 class RoutingGraph {
 public:
     std::size_t addNode(std::string name, ChannelRole role);
