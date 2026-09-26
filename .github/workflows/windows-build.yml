@@ -40,7 +40,7 @@ jobs:
       - name: Upload UI layout snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-UI-Layout-1.10.4
+          name: J3Worship-UI-Layout-1.10.5
           path: canonical-current/build-win/ui-snapshots/*.png
           if-no-files-found: error
 
@@ -76,8 +76,8 @@ jobs:
 
           # Use a real running Windows executable renamed as J3Worship.exe so the
           # migration test exercises replacement while the old target is locked/running.
-          Copy-Item "$env:WINDIR\System32\timeout.exe" $legacyExe -Force
-          $legacyProcess = Start-Process -FilePath $legacyExe -ArgumentList "/T","60","/NOBREAK" -PassThru
+          Copy-Item "$env:WINDIR\System32\ping.exe" $legacyExe -Force
+          $legacyProcess = Start-Process -FilePath $legacyExe -ArgumentList "127.0.0.1","-t" -PassThru
           Start-Sleep -Milliseconds 500
           if ($legacyProcess.HasExited) { throw "Could not create running legacy J3Worship.exe test process" }
 
@@ -110,6 +110,10 @@ jobs:
 
           $migration = Get-Content (Join-Path $updaterDir "migration-result.txt") -Raw
           if ($migration -notmatch '^OK') { throw "Legacy migration marker did not report success" }
+          $sourceLine = ($migration -split "`r?`n" | Where-Object { $_ -like 'source=*' } | Select-Object -First 1)
+          $targetLine = ($migration -split "`r?`n" | Where-Object { $_ -like 'target=*' } | Select-Object -First 1)
+          if (!$sourceLine -or !$targetLine) { throw "Legacy migration marker is incomplete" }
+          if ($sourceLine.Substring(7) -eq $targetLine.Substring(7)) { throw "Legacy migration did not use a separate staging executable" }
           if (!$legacyProcess.HasExited) { Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue }
           Remove-Item $script -Force -ErrorAction SilentlyContinue
 
@@ -166,14 +170,14 @@ jobs:
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.10.4
+          name: J3Worship-Windows-1.10.5
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Setup-1.10.4
+          name: J3Worship-Setup-1.10.5
           path: canonical-current/dist-installer/J3Worship-Setup.exe
           if-no-files-found: error
       - name: Publish official GitHub Release

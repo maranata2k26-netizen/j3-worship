@@ -1,5 +1,5 @@
 #define MyAppName "J3 Worship"
-#define MyAppVersion "1.10.4"
+#define MyAppVersion "1.10.5"
 #define MyAppPublisher "J3 Worship"
 #define MyAppExeName "J3Worship.exe"
 
@@ -8,7 +8,7 @@ AppId={{C3B653D6-AB0E-4F8D-90C2-6F48C93D1A77}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\J3 Worship
+DefaultDirName={code:GetInstallDir}
 DefaultGroupName=J3 Worship
 OutputDir=..\dist-installer
 OutputBaseFilename=J3Worship-Setup
@@ -17,12 +17,12 @@ SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
-UsePreviousAppDir=yes
+UsePreviousAppDir=no
 CloseApplications=yes
 RestartApplications=no
 SetupIconFile=..\resources\J3Worship.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
-VersionInfoVersion=1.10.4.0
+VersionInfoVersion=1.10.5.0
 VersionInfoCompany=J3 Worship
 VersionInfoDescription=J3 Worship Installer
 VersionInfoProductName=J3 Worship
@@ -82,6 +82,14 @@ begin
       end;
     end;
   end;
+end;
+
+function GetInstallDir(Param: string): string;
+begin
+  if LegacyExePath <> '' then
+    Result := ExpandConstant('{localappdata}\\J3 Worship\\UpdaterStage\\{#MyAppVersion}')
+  else
+    Result := ExpandConstant('{autopf}\\J3 Worship');
 end;
 
 function InitializeSetup(): Boolean;
