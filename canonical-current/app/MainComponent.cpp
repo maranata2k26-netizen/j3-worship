@@ -1018,12 +1018,16 @@ MainComponent::MainComponent()
     scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     loadPluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
     removePluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    movePluginUpButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
+    movePluginDownButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     openPluginEditorButton_.setButtonText("OPEN PLUGIN");
     openPluginEditorButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff315f46));
     bypassPluginButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
     scanPluginsButton_.onClick = [this] { scanVst3Plugins(); };
     loadPluginButton_.onClick = [this] { loadSelectedPlugin(); };
     removePluginButton_.onClick = [this] { removeSelectedPlugin(); };
+    movePluginUpButton_.onClick = [this] { moveSelectedPlugin(-1); };
+    movePluginDownButton_.onClick = [this] { moveSelectedPlugin(1); };
     openPluginEditorButton_.onClick = [this] { openSelectedPluginEditor(); };
     bypassPluginButton_.onClick = [this]
     {
@@ -1036,6 +1040,8 @@ MainComponent::MainComponent()
     pluginsPage_.addAndMakeVisible(scanPluginsButton_);
     pluginsPage_.addAndMakeVisible(loadPluginButton_);
     pluginsPage_.addAndMakeVisible(removePluginButton_);
+    pluginsPage_.addAndMakeVisible(movePluginUpButton_);
+    pluginsPage_.addAndMakeVisible(movePluginDownButton_);
     pluginsPage_.addAndMakeVisible(bypassPluginButton_);
     pluginsPage_.addAndMakeVisible(openPluginEditorButton_);
 
@@ -2386,13 +2392,17 @@ void MainComponent::resized()
     scanPluginsButton_.setBounds(pluginSelectRow.removeFromLeft(std::min(145, pluginSelectRow.getWidth())).reduced(2));
     pluginsArea.removeFromTop(14);
     auto pluginActionRow = pluginsArea.removeFromTop(44);
-    loadPluginButton_.setBounds(pluginActionRow.removeFromLeft(160));
-    pluginActionRow.removeFromLeft(10);
-    removePluginButton_.setBounds(pluginActionRow.removeFromLeft(130));
-    pluginActionRow.removeFromLeft(10);
-    bypassPluginButton_.setBounds(pluginActionRow.removeFromLeft(130));
-    pluginActionRow.removeFromLeft(10);
-    openPluginEditorButton_.setBounds(pluginActionRow.removeFromLeft(210));
+    loadPluginButton_.setBounds(pluginActionRow.removeFromLeft(135));
+    pluginActionRow.removeFromLeft(6);
+    removePluginButton_.setBounds(pluginActionRow.removeFromLeft(105));
+    pluginActionRow.removeFromLeft(6);
+    movePluginUpButton_.setBounds(pluginActionRow.removeFromLeft(100));
+    pluginActionRow.removeFromLeft(6);
+    movePluginDownButton_.setBounds(pluginActionRow.removeFromLeft(112));
+    pluginActionRow.removeFromLeft(6);
+    bypassPluginButton_.setBounds(pluginActionRow.removeFromLeft(100));
+    pluginActionRow.removeFromLeft(6);
+    openPluginEditorButton_.setBounds(pluginActionRow.removeFromLeft(std::min(175, pluginActionRow.getWidth())));
     pluginsArea.removeFromTop(22);
     pluginStatusLabel_.setBounds(pluginsArea.removeFromTop(190));
 
@@ -3045,6 +3055,18 @@ void MainComponent::refreshPluginUi()
 {
     const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
     const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+
+    pluginSlotBox_.clear(juce::dontSendNotification);
+    for (int i = 0; i < kPluginSlots; ++i)
+    {
+        juce::String slotName = juce::String(i + 1) + juce::String::fromUTF8(" · ");
+        slotName << (pluginNames_[ch][i].isNotEmpty() ? pluginNames_[ch][i] : juce::String("Empty"));
+        if (pluginBypass_[ch][i].load(std::memory_order_relaxed))
+            slotName << "  [BYPASS]";
+        pluginSlotBox_.addItem(slotName, i + 1);
+    }
+    pluginSlotBox_.setSelectedId(slot + 1, juce::dontSendNotification);
+
     auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
 
     const int browserRow = pluginCatalogBox_.getSelectedId() - 1;
@@ -3057,7 +3079,10 @@ void MainComponent::refreshPluginUi()
     const bool loaded = plugin != nullptr;
     bypassPluginButton_.setToggleState(pluginBypass_[ch][slot].load(std::memory_order_relaxed), juce::dontSendNotification);
     bypassPluginButton_.setEnabled(loaded);
-    removePluginButton_.setEnabled(loaded || pluginPaths_[ch][slot].isNotEmpty());
+    const bool slotOccupied = loaded || pluginPaths_[ch][slot].isNotEmpty();
+    removePluginButton_.setEnabled(slotOccupied);
+    movePluginUpButton_.setEnabled(slotOccupied && slot > 0);
+    movePluginDownButton_.setEnabled(slotOccupied && slot < kPluginSlots - 1);
     openPluginEditorButton_.setEnabled(loaded);
     loadPluginButton_.setEnabled(pluginsScanned_ && browserSelectionValid);
     favoritePluginButton_.setEnabled(browserSelectionValid);
@@ -3223,6 +3248,48 @@ void MainComponent::removeSelectedPlugin()
     pluginFaults_[ch][slot].store(0, std::memory_order_release);
     refreshPluginUi();
     saveAppState();
+}
+
+void MainComponent::moveSelectedPlugin(int delta)
+{
+    if (pluginMutationLocked())
+    {
+        showAudioError(juce::String::fromUTF8("Por seguridad, el orden de FX no se cambia durante LIVE, reproducción o grabación."));
+        return;
+    }
+
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const int from = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    const int to = from + delta;
+    if (to < 0 || to >= kPluginSlots || to == from)
+        return;
+    if (pluginPaths_[ch][from].isEmpty() && channelPlugins_[ch][from].load(std::memory_order_acquire) == nullptr)
+        return;
+
+    saveAppState(true);
+
+    auto fromPlugin = channelPlugins_[ch][from].load(std::memory_order_acquire);
+    auto toPlugin = channelPlugins_[ch][to].load(std::memory_order_acquire);
+    channelPlugins_[ch][from].store(toPlugin, std::memory_order_release);
+    channelPlugins_[ch][to].store(fromPlugin, std::memory_order_release);
+
+    std::swap(pluginPaths_[ch][from], pluginPaths_[ch][to]);
+    std::swap(pluginNames_[ch][from], pluginNames_[ch][to]);
+    std::swap(pluginStateBase64_[ch][from], pluginStateBase64_[ch][to]);
+
+    const bool fromBypass = pluginBypass_[ch][from].load(std::memory_order_relaxed);
+    const bool toBypass = pluginBypass_[ch][to].load(std::memory_order_relaxed);
+    pluginBypass_[ch][from].store(toBypass, std::memory_order_release);
+    pluginBypass_[ch][to].store(fromBypass, std::memory_order_release);
+
+    const int fromFaults = pluginFaults_[ch][from].load(std::memory_order_relaxed);
+    const int toFaults = pluginFaults_[ch][to].load(std::memory_order_relaxed);
+    pluginFaults_[ch][from].store(toFaults, std::memory_order_release);
+    pluginFaults_[ch][to].store(fromFaults, std::memory_order_release);
+
+    pluginSlotBox_.setSelectedId(to + 1, juce::dontSendNotification);
+    saveAppState(false);
+    refreshPluginUi();
 }
 
 void MainComponent::openSelectedPluginEditor()
