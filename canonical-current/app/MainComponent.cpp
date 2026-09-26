@@ -55,6 +55,18 @@ juce::String outputName(juce::AudioIODevice& device, int index)
     return "OUT " + juce::String(index + 1);
 }
 
+juce::String pluginDescriptionKey(const juce::PluginDescription& description)
+{
+    return description.fileOrIdentifier + "||" + juce::String(description.uniqueId)
+        + "||" + description.name;
+}
+
+bool savedPluginKeyMatches(const juce::String& saved, const juce::PluginDescription& description)
+{
+    return saved == pluginDescriptionKey(description)
+        || saved == description.fileOrIdentifier;
+}
+
 class GenericPluginEditorHolder final : public juce::Component
 {
 public:
@@ -1420,15 +1432,22 @@ MainComponent::MainComponent()
         const int row = pluginCatalogBox_.getSelectedId() - 1;
         if (row < 0 || row >= static_cast<int>(pluginBrowserIndices_.size()))
             return;
-        const auto& plugins = pluginCatalog_.plugins();
         const int actual = pluginBrowserIndices_[static_cast<std::size_t>(row)];
-        if (actual < 0 || actual >= static_cast<int>(plugins.size()))
+        if (actual < 0 || actual >= static_cast<int>(pluginDescriptions_.size()))
             return;
-        const auto path = juce::String(plugins[static_cast<std::size_t>(actual)].path.wstring().c_str());
+
+        const auto& description = pluginDescriptions_[static_cast<std::size_t>(actual)];
+        const auto key = pluginDescriptionKey(description);
         if (favoritePluginButton_.getToggleState())
-            favoritePluginPaths_.addIfNotAlreadyThere(path);
+        {
+            favoritePluginPaths_.removeString(description.fileOrIdentifier);
+            favoritePluginPaths_.addIfNotAlreadyThere(key);
+        }
         else
-            favoritePluginPaths_.removeString(path);
+        {
+            favoritePluginPaths_.removeString(key);
+            favoritePluginPaths_.removeString(description.fileOrIdentifier);
+        }
         saveAppState();
         refreshPluginBrowser();
     };
@@ -3533,31 +3552,66 @@ void MainComponent::scanVst3Plugins()
     }
 
     pluginStatusLabel_.setText(
-        "Escaneando VST3 en segundo plano... podés seguir usando el audio.",
+        "Escaneando VST3 reales en segundo plano... podés seguir usando el audio.",
         juce::dontSendNotification);
 
     auto safe = juce::Component::SafePointer<MainComponent>(this);
     std::thread([safe, roots = std::move(roots)]() mutable
     {
-        j3::PluginCatalog scanned;
-        scanned.scan(roots);
+        j3::PluginCatalog scannedBundles;
+        scannedBundles.scan(roots);
 
-        juce::MessageManager::callAsync([safe, scanned = std::move(scanned)]() mutable
+        std::vector<juce::PluginDescription> descriptions;
+        juce::VST3PluginFormat scannerFormat;
+
+        for (const auto& record : scannedBundles.plugins())
         {
-            if (safe == nullptr)
-                return;
+            const juce::String bundlePath(record.path.wstring().c_str());
+            juce::OwnedArray<juce::PluginDescription> types;
+            scannerFormat.findAllTypesForFile(types, bundlePath);
+            for (auto* type : types)
+                if (type != nullptr)
+                    descriptions.push_back(*type);
+        }
 
-            safe->pluginCatalog_ = std::move(scanned);
-            safe->pluginScanBusy_.store(false, std::memory_order_release);
-            safe->pluginsScanned_ = true;
-            safe->refreshPluginBrowser();
-            safe->restoreSavedPluginsAfterScan();
-            safe->refreshPluginUi();
-            safe->pluginStatusLabel_.setText(
-                juce::String(safe->pluginCatalog_.plugins().size())
-                    + " VST3 encontrados. Elegí uno de la lista o hacé doble click para cargarlo.",
-                juce::dontSendNotification);
-        });
+        std::sort(descriptions.begin(), descriptions.end(),
+            [](const juce::PluginDescription& a, const juce::PluginDescription& b)
+            {
+                const int byName = a.name.compareIgnoreCase(b.name);
+                if (byName != 0)
+                    return byName < 0;
+                const int byMaker = a.manufacturerName.compareIgnoreCase(b.manufacturerName);
+                if (byMaker != 0)
+                    return byMaker < 0;
+                return pluginDescriptionKey(a) < pluginDescriptionKey(b);
+            });
+
+        descriptions.erase(std::unique(descriptions.begin(), descriptions.end(),
+            [](const juce::PluginDescription& a, const juce::PluginDescription& b)
+            {
+                return pluginDescriptionKey(a) == pluginDescriptionKey(b);
+            }), descriptions.end());
+
+        juce::MessageManager::callAsync(
+            [safe, scannedBundles = std::move(scannedBundles), descriptions = std::move(descriptions)]() mutable
+            {
+                if (safe == nullptr)
+                    return;
+
+                safe->pluginCatalog_ = std::move(scannedBundles);
+                safe->pluginDescriptions_ = std::move(descriptions);
+                safe->pluginScanBusy_.store(false, std::memory_order_release);
+                safe->pluginsScanned_ = true;
+                safe->refreshPluginBrowser();
+                safe->restoreSavedPluginsAfterScan();
+                safe->refreshPluginUi();
+
+                safe->pluginStatusLabel_.setText(
+                    juce::String(safe->pluginDescriptions_.size()) + " plugins VST3 encontrados en "
+                        + juce::String(safe->pluginCatalog_.plugins().size())
+                        + " bundles. Waves shells incluidos como plugins individuales.",
+                    juce::dontSendNotification);
+            });
     }).detach();
 }
 
@@ -3599,14 +3653,14 @@ void MainComponent::restoreSavedPluginsAfterScan()
 
 void MainComponent::refreshPluginBrowser()
 {
-    const auto& plugins = pluginCatalog_.plugins();
-    juce::String previousPath;
+    const auto& plugins = pluginDescriptions_;
+    juce::String previousKey;
     const int previousRow = pluginCatalogBox_.getSelectedId() - 1;
     if (previousRow >= 0 && previousRow < static_cast<int>(pluginBrowserIndices_.size()))
     {
         const int previousActual = pluginBrowserIndices_[static_cast<std::size_t>(previousRow)];
         if (previousActual >= 0 && previousActual < static_cast<int>(plugins.size()))
-            previousPath = juce::String(plugins[static_cast<std::size_t>(previousActual)].path.wstring().c_str());
+            previousKey = pluginDescriptionKey(plugins[static_cast<std::size_t>(previousActual)]);
     }
 
     pluginBrowserIndices_.clear();
@@ -3615,28 +3669,36 @@ void MainComponent::refreshPluginBrowser()
     const auto query = pluginSearch_.getText().trim().toLowerCase();
     const int category = std::max(1, pluginCategoryBox_.getSelectedId());
 
-    auto matchesCategory = [this, category](const j3::PluginRecord& plugin)
+    auto matchesCategory = [this, category](const juce::PluginDescription& plugin)
     {
-        const auto path = juce::String(plugin.path.wstring().c_str());
-        const auto haystack = (juce::String(plugin.name) + " " + juce::String(plugin.manufacturer) + " " + path).toLowerCase();
+        const auto key = pluginDescriptionKey(plugin);
+        const auto haystack = (plugin.name + " " + plugin.manufacturerName + " "
+            + plugin.fileOrIdentifier).toLowerCase();
+
         if (category == 1) return true;
-        if (category == 10) return favoritePluginPaths_.contains(path);
-        if (category == 11) return recentPluginPaths_.contains(path);
-        if (category == 12) return haystack.contains("j3");
+        if (category == 10)
+            return favoritePluginPaths_.contains(key) || favoritePluginPaths_.contains(plugin.fileOrIdentifier);
+        if (category == 11)
+            return recentPluginPaths_.contains(key) || recentPluginPaths_.contains(plugin.fileOrIdentifier);
+        if (category == 12)
+            return haystack.contains("j3");
+
         switch (category)
         {
-            case 2: return haystack.contains(" eq") || haystack.startsWith("eq") || haystack.contains("equalizer") || haystack.contains("pro-q");
+            case 2: return haystack.contains(" eq") || haystack.startsWith("eq") || haystack.contains("equalizer")
+                        || haystack.contains("pro-q");
             case 3: return haystack.contains("compress") || haystack.contains("limiter") || haystack.contains("1176")
-                        || haystack.contains("2a") || haystack.contains("cla-") || haystack.contains("dynamic");
+                        || haystack.contains("2a") || haystack.contains("cla-") || haystack.contains("dynamic")
+                        || haystack.contains("gate");
             case 4: return haystack.contains("reverb") || haystack.contains("verb") || haystack.contains("room")
                         || haystack.contains("hall") || haystack.contains("valhalla");
             case 5: return haystack.contains("delay") || haystack.contains("echo");
             case 6: return haystack.contains("satur") || haystack.contains("tape") || haystack.contains("tube")
                         || haystack.contains("distort") || haystack.contains("drive");
             case 7: return haystack.contains("guitar") || haystack.contains(" amp") || haystack.contains("cab");
-            case 8: return haystack.contains("instrument") || haystack.contains("synth") || haystack.contains("piano")
-                        || haystack.contains("kontakt") || haystack.contains("keys") || haystack.contains("organ")
-                        || haystack.contains("drum");
+            case 8: return plugin.isInstrument || haystack.contains("instrument") || haystack.contains("synth")
+                        || haystack.contains("piano") || haystack.contains("kontakt") || haystack.contains("keys")
+                        || haystack.contains("organ") || haystack.contains("drum");
             case 9: return haystack.contains("utility") || haystack.contains("meter") || haystack.contains("analy")
                         || haystack.contains("gain") || haystack.contains("stereo");
             default: return true;
@@ -3648,28 +3710,29 @@ void MainComponent::refreshPluginBrowser()
     for (int i = 0; i < static_cast<int>(plugins.size()); ++i)
     {
         const auto& plugin = plugins[static_cast<std::size_t>(i)];
-        const auto path = juce::String(plugin.path.wstring().c_str());
-        const auto searchText = (juce::String(plugin.name) + " " + juce::String(plugin.manufacturer)).toLowerCase();
+        const auto searchText = (plugin.name + " " + plugin.manufacturerName).toLowerCase();
         if (query.isNotEmpty() && !searchText.contains(query))
             continue;
         if (!matchesCategory(plugin))
             continue;
 
         pluginBrowserIndices_.push_back(i);
+        const auto key = pluginDescriptionKey(plugin);
         juce::String label;
-        if (favoritePluginPaths_.contains(path))
+        if (favoritePluginPaths_.contains(key) || favoritePluginPaths_.contains(plugin.fileOrIdentifier))
             label << "* ";
-        label << juce::String(plugin.name);
-        if (!plugin.manufacturer.empty() && !juce::String(plugin.manufacturer).equalsIgnoreCase("Unknown"))
-            label << juce::String::fromUTF8(" · ") << juce::String(plugin.manufacturer);
+        label << plugin.name;
+        if (plugin.manufacturerName.isNotEmpty())
+            label << juce::String::fromUTF8(" · ") << plugin.manufacturerName;
         pluginCatalogBox_.addItem(label, id);
-        if (path == previousPath)
+        if (key == previousKey)
             selectedId = id;
         ++id;
     }
 
     if (selectedId == 0 && !pluginBrowserIndices_.empty())
         selectedId = 1;
+
     pluginCatalogBox_.setSelectedId(selectedId, juce::dontSendNotification);
     pluginCatalogList_.updateContent();
     if (selectedId > 0)
@@ -3692,12 +3755,11 @@ void MainComponent::paintListBoxItem(int rowNumber, juce::Graphics& g,
     if (rowNumber < 0 || rowNumber >= static_cast<int>(pluginBrowserIndices_.size()))
         return;
 
-    const auto& plugins = pluginCatalog_.plugins();
     const int actual = pluginBrowserIndices_[static_cast<std::size_t>(rowNumber)];
-    if (actual < 0 || actual >= static_cast<int>(plugins.size()))
+    if (actual < 0 || actual >= static_cast<int>(pluginDescriptions_.size()))
         return;
 
-    const auto& plugin = plugins[static_cast<std::size_t>(actual)];
+    const auto& plugin = pluginDescriptions_[static_cast<std::size_t>(actual)];
     const auto row = juce::Rectangle<int>(0, 0, width, height).reduced(2);
 
     if (rowIsSelected)
@@ -3711,10 +3773,11 @@ void MainComponent::paintListBoxItem(int rowNumber, juce::Graphics& g,
         g.fillRoundedRectangle(row.toFloat(), 4.0f);
     }
 
-    const juce::String path(plugin.path.wstring().c_str());
-    const bool favorite = favoritePluginPaths_.contains(path);
+    const auto key = pluginDescriptionKey(plugin);
+    const bool favorite = favoritePluginPaths_.contains(key)
+        || favoritePluginPaths_.contains(plugin.fileOrIdentifier);
     juce::String name = favorite ? "*  " : "";
-    name << juce::String(plugin.name);
+    name << plugin.name;
 
     auto textArea = row.reduced(10, 3);
     auto nameArea = textArea.removeFromTop(20);
@@ -3722,10 +3785,11 @@ void MainComponent::paintListBoxItem(int rowNumber, juce::Graphics& g,
     g.setFont(juce::FontOptions(14.0f, juce::Font::bold));
     g.drawText(name, nameArea, juce::Justification::centredLeft, true);
 
-    juce::String detail(plugin.manufacturer);
-    if (detail.isEmpty())
-        detail = "VST3";
-    detail << "  |  " << juce::File(path).getParentDirectory().getFileName();
+    juce::String detail = plugin.manufacturerName.isNotEmpty() ? plugin.manufacturerName : "VST3";
+    const juce::File pluginFile(plugin.fileOrIdentifier);
+    const auto bundleName = pluginFile.getFileName();
+    if (bundleName.isNotEmpty())
+        detail << "  |  " << bundleName;
     g.setColour(juce::Colour(mutedText));
     g.setFont(juce::FontOptions(10.8f));
     g.drawText(detail, textArea, juce::Justification::centredLeft, true);
@@ -3748,6 +3812,7 @@ void MainComponent::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
 {
     if (row < 0 || row >= static_cast<int>(pluginBrowserIndices_.size()))
         return;
+
     pluginCatalogList_.selectRow(row, false, true);
     pluginCatalogBox_.setSelectedId(row + 1, juce::dontSendNotification);
     refreshPluginUi();
@@ -3801,7 +3866,7 @@ void MainComponent::refreshPluginUi()
     auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
 
     const int browserRow = pluginCatalogBox_.getSelectedId() - 1;
-    const auto& catalog = pluginCatalog_.plugins();
+    const auto& catalog = pluginDescriptions_;
     const bool browserSelectionValid = browserRow >= 0
         && browserRow < static_cast<int>(pluginBrowserIndices_.size())
         && pluginBrowserIndices_[static_cast<std::size_t>(browserRow)] >= 0
@@ -3820,8 +3885,12 @@ void MainComponent::refreshPluginUi()
     if (browserSelectionValid)
     {
         const auto actual = pluginBrowserIndices_[static_cast<std::size_t>(browserRow)];
-        const auto selectedPath = juce::String(catalog[static_cast<std::size_t>(actual)].path.wstring().c_str());
-        favoritePluginButton_.setToggleState(favoritePluginPaths_.contains(selectedPath), juce::dontSendNotification);
+        const auto& selectedPlugin = catalog[static_cast<std::size_t>(actual)];
+        const auto selectedKey = pluginDescriptionKey(selectedPlugin);
+        favoritePluginButton_.setToggleState(
+            favoritePluginPaths_.contains(selectedKey)
+                || favoritePluginPaths_.contains(selectedPlugin.fileOrIdentifier),
+            juce::dontSendNotification);
     }
     else
     {
@@ -3857,8 +3926,8 @@ void MainComponent::refreshPluginUi()
         else if (!pluginsScanned_)
             status << "Usá ESCANEAR CARPETA... y elegí dónde están tus plugins.";
         else
-            status << pluginBrowserIndices_.size() << " visibles / " << pluginCatalog_.plugins().size()
-                   << " VST3 encontrados.";
+            status << pluginBrowserIndices_.size() << " visibles / " << pluginDescriptions_.size()
+                   << " plugins VST3 encontrados.";
     }
     pluginStatusLabel_.setText(status, juce::dontSendNotification);
 }
@@ -3897,31 +3966,28 @@ void MainComponent::showPluginSlotMenu(int slot)
         menu.addSectionHeader("SELECT PLUGIN");
     }
 
-    auto paths = std::make_shared<std::vector<juce::String>>();
+    auto descriptions = std::make_shared<std::vector<juce::PluginDescription>>();
     int nextPluginId = 1000;
 
-    auto addRecord = [&](juce::PopupMenu& target, const j3::PluginRecord& record)
+    auto addDescription = [&](juce::PopupMenu& target, const juce::PluginDescription& description)
     {
-        juce::String path(record.path.wstring().c_str());
-        juce::String label(record.name);
-        if (!record.manufacturer.empty()
-            && !juce::String(record.manufacturer).equalsIgnoreCase("Unknown"))
-            label << "  |  " << juce::String(record.manufacturer);
-        paths->push_back(path);
+        juce::String label = description.name;
+        if (description.manufacturerName.isNotEmpty())
+            label << "  |  " << description.manufacturerName;
+        descriptions->push_back(description);
         target.addItem(nextPluginId++, label);
     };
 
-    auto addKnownPaths = [&](juce::PopupMenu& target, const juce::StringArray& wanted)
+    auto addKnown = [&](juce::PopupMenu& target, const juce::StringArray& wanted)
     {
         int count = 0;
-        for (const auto& wantedPath : wanted)
+        for (const auto& wantedKey : wanted)
         {
-            for (const auto& record : pluginCatalog_.plugins())
+            for (const auto& description : pluginDescriptions_)
             {
-                const juce::String path(record.path.wstring().c_str());
-                if (path == wantedPath)
+                if (savedPluginKeyMatches(wantedKey, description))
                 {
-                    addRecord(target, record);
+                    addDescription(target, description);
                     ++count;
                     break;
                 }
@@ -3930,52 +3996,49 @@ void MainComponent::showPluginSlotMenu(int slot)
         return count;
     };
 
-    if (!pluginCatalog_.plugins().empty())
+    if (!pluginDescriptions_.empty())
     {
         juce::PopupMenu favorites, recent, eq, dynamics, ambience, colour, utility;
-        const int favoriteCount = addKnownPaths(favorites, favoritePluginPaths_);
-        const int recentCount = addKnownPaths(recent, recentPluginPaths_);
+        const int favoriteCount = addKnown(favorites, favoritePluginPaths_);
+        const int recentCount = addKnown(recent, recentPluginPaths_);
         int eqCount = 0, dynamicsCount = 0, ambienceCount = 0, colourCount = 0, utilityCount = 0;
 
-        for (const auto& record : pluginCatalog_.plugins())
+        for (const auto& description : pluginDescriptions_)
         {
-            const auto path = juce::String(record.path.wstring().c_str());
-            const auto haystack = (juce::String(record.name) + " "
-                + juce::String(record.manufacturer) + " " + path).toLowerCase();
-
-            const bool instrument = haystack.contains("instrument") || haystack.contains("synth")
-                || haystack.contains("piano") || haystack.contains("kontakt")
-                || haystack.contains("organ");
-            if (instrument)
+            if (description.isInstrument)
                 continue;
+
+            const auto haystack = (description.name + " " + description.manufacturerName
+                + " " + description.fileOrIdentifier).toLowerCase();
 
             if (haystack.contains("equalizer") || haystack.contains("pro-q")
                 || haystack.contains(" eq") || haystack.startsWith("eq"))
             {
-                addRecord(eq, record); ++eqCount;
+                addDescription(eq, description); ++eqCount;
             }
             else if (haystack.contains("compress") || haystack.contains("limiter")
                 || haystack.contains("1176") || haystack.contains("2a")
-                || haystack.contains("dynamic") || haystack.contains("gate"))
+                || haystack.contains("dynamic") || haystack.contains("gate")
+                || haystack.contains("cla-"))
             {
-                addRecord(dynamics, record); ++dynamicsCount;
+                addDescription(dynamics, description); ++dynamicsCount;
             }
             else if (haystack.contains("reverb") || haystack.contains("verb")
                 || haystack.contains("delay") || haystack.contains("echo")
                 || haystack.contains("room") || haystack.contains("hall"))
             {
-                addRecord(ambience, record); ++ambienceCount;
+                addDescription(ambience, description); ++ambienceCount;
             }
             else if (haystack.contains("satur") || haystack.contains("tape")
                 || haystack.contains("tube") || haystack.contains("distort")
                 || haystack.contains("drive") || haystack.contains("guitar")
                 || haystack.contains(" amp") || haystack.contains("cab"))
             {
-                addRecord(colour, record); ++colourCount;
+                addDescription(colour, description); ++colourCount;
             }
             else
             {
-                addRecord(utility, record); ++utilityCount;
+                addDescription(utility, description); ++utilityCount;
             }
         }
 
@@ -3995,14 +4058,14 @@ void MainComponent::showPluginSlotMenu(int slot)
     }
 
     menu.addSeparator();
-    menu.addItem(10, "RESCAN VST3");
-    menu.addItem(11, "ADD VST3 FOLDER...");
-    menu.addItem(12, "FOCUS ADVANCED SEARCH");
+    menu.addItem(10, "ESCANEAR TODO");
+    menu.addItem(11, "ESCANEAR CARPETA...");
+    menu.addItem(12, "FOCUS SEARCH");
 
     juce::Component::SafePointer<MainComponent> safe(this);
     menu.showMenuAsync(
         juce::PopupMenu::Options().withTargetComponent(pluginSlotButtons_[slot].get()),
-        [safe, paths, ch, slot](int result)
+        [safe, descriptions, ch, slot](int result)
         {
             if (safe == nullptr || result == 0)
                 return;
@@ -4047,7 +4110,7 @@ void MainComponent::showPluginSlotMenu(int slot)
             if (result >= 1000)
             {
                 const int index = result - 1000;
-                if (index < 0 || index >= static_cast<int>(paths->size()))
+                if (index < 0 || index >= static_cast<int>(descriptions->size()))
                     return;
 
                 if (safe->pluginMutationLocked())
@@ -4057,9 +4120,11 @@ void MainComponent::showPluginSlotMenu(int slot)
                     return;
                 }
 
-                const auto path = (*paths)[static_cast<std::size_t>(index)];
-                safe->recentPluginPaths_.removeString(path);
-                safe->recentPluginPaths_.insert(0, path);
+                const auto description = (*descriptions)[static_cast<std::size_t>(index)];
+                const auto key = pluginDescriptionKey(description);
+                safe->recentPluginPaths_.removeString(key);
+                safe->recentPluginPaths_.removeString(description.fileOrIdentifier);
+                safe->recentPluginPaths_.insert(0, key);
                 while (safe->recentPluginPaths_.size() > 12)
                     safe->recentPluginPaths_.remove(safe->recentPluginPaths_.size() - 1);
 
@@ -4067,7 +4132,7 @@ void MainComponent::showPluginSlotMenu(int slot)
                 safe->pluginBypass_[ch][slot].store(false, std::memory_order_release);
                 safe->pluginFaults_[ch][slot].store(0, std::memory_order_release);
                 safe->saveAppState();
-                safe->loadPluginPathIntoSlot(path, ch, slot);
+                safe->loadPluginDescriptionIntoSlot(description, ch, slot);
             }
         });
 }
@@ -4115,53 +4180,99 @@ void MainComponent::loadSelectedPlugin()
     }
 
     const int row = pluginCatalogBox_.getSelectedId() - 1;
-    const auto& plugins = pluginCatalog_.plugins();
     if (row < 0 || row >= static_cast<int>(pluginBrowserIndices_.size()))
     {
         showAudioError(juce::String::fromUTF8("Seleccioná un VST3 del navegador."));
         return;
     }
+
     const int selected = pluginBrowserIndices_[static_cast<std::size_t>(row)];
-    if (selected < 0 || selected >= static_cast<int>(plugins.size()))
+    if (selected < 0 || selected >= static_cast<int>(pluginDescriptions_.size()))
         return;
-    const auto path = juce::String(plugins[static_cast<std::size_t>(selected)].path.wstring().c_str());
-    recentPluginPaths_.removeString(path);
-    recentPluginPaths_.insert(0, path);
+
+    const auto description = pluginDescriptions_[static_cast<std::size_t>(selected)];
+    const auto key = pluginDescriptionKey(description);
+    recentPluginPaths_.removeString(key);
+    recentPluginPaths_.removeString(description.fileOrIdentifier);
+    recentPluginPaths_.insert(0, key);
     while (recentPluginPaths_.size() > 12)
         recentPluginPaths_.remove(recentPluginPaths_.size() - 1);
+
     saveAppState();
     const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
     const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
-    loadPluginPathIntoSlot(path, ch, slot);
+    loadPluginDescriptionIntoSlot(description, ch, slot);
 }
 
-void MainComponent::loadPluginPathIntoSlot(const juce::String& path, int channel, int slot)
+void MainComponent::loadPluginPathIntoSlot(const juce::String& savedKey, int channel, int slot)
 {
-    if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots || path.isEmpty())
+    if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots || savedKey.isEmpty())
         return;
+
+    for (const auto& description : pluginDescriptions_)
+    {
+        const bool legacyNameMatches = savedKey == description.fileOrIdentifier
+            && (pluginNames_[channel][slot].isEmpty()
+                || pluginNames_[channel][slot].equalsIgnoreCase(description.name));
+        if (savedPluginKeyMatches(savedKey, description) && (savedKey != description.fileOrIdentifier || legacyNameMatches))
+        {
+            loadPluginDescriptionIntoSlot(description, channel, slot);
+            return;
+        }
+    }
 
     auto* format = pluginFormatManager_.getFormat(0);
     if (format == nullptr)
         return;
 
+    juce::String fileOrIdentifier = savedKey;
+    const int separator = savedKey.indexOf("||");
+    if (separator > 0)
+        fileOrIdentifier = savedKey.substring(0, separator);
+
     juce::OwnedArray<juce::PluginDescription> types;
-    format->findAllTypesForFile(types, path);
+    format->findAllTypesForFile(types, fileOrIdentifier);
     if (types.isEmpty())
     {
-        pluginStatusLabel_.setText("Could not identify VST3: " + path, juce::dontSendNotification);
+        pluginStatusLabel_.setText("Could not identify VST3: " + fileOrIdentifier, juce::dontSendNotification);
         return;
     }
 
-    const auto description = *types[0];
+    juce::PluginDescription description = *types[0];
+    for (auto* candidate : types)
+    {
+        if (candidate == nullptr)
+            continue;
+        if (pluginDescriptionKey(*candidate) == savedKey
+            || (pluginNames_[channel][slot].isNotEmpty()
+                && pluginNames_[channel][slot].equalsIgnoreCase(candidate->name)))
+        {
+            description = *candidate;
+            break;
+        }
+    }
+
+    loadPluginDescriptionIntoSlot(description, channel, slot);
+}
+
+void MainComponent::loadPluginDescriptionIntoSlot(const juce::PluginDescription& description,
+                                                   int channel, int slot)
+{
+    if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots
+        || description.fileOrIdentifier.isEmpty())
+        return;
+
     const double sr = std::max(8000.0, sampleRate_.load(std::memory_order_acquire));
     const int bs = std::max(64, bufferSize_.load(std::memory_order_acquire));
     const bool savedBypass = pluginBypass_[channel][slot].load(std::memory_order_relaxed);
     const auto savedState = pluginStateBase64_[channel][slot];
+    const auto key = pluginDescriptionKey(description);
 
     pluginStatusLabel_.setText("Loading " + description.name + "...", juce::dontSendNotification);
     pluginFormatManager_.createPluginInstanceAsync(
         description, sr, bs,
-        [safe = juce::Component::SafePointer<MainComponent>(this), channel, slot, path, savedBypass, savedState]
+        [safe = juce::Component::SafePointer<MainComponent>(this), channel, slot, key,
+         pluginName = description.name, savedBypass, savedState]
         (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
         {
             if (safe == nullptr)
@@ -4178,7 +4289,7 @@ void MainComponent::loadPluginPathIntoSlot(const juce::String& path, int channel
             if (inChannels > 2 || outChannels > 2 || inChannels < 1 || outChannels < 1)
             {
                 safe->pluginStatusLabel_.setText(
-                    "Insert rejected: this version supports mono/stereo audio-effect VST3 plug-ins only.",
+                    "Insert rejected: mixer FX slots accept mono/stereo audio-effect VST3 plug-ins.",
                     juce::dontSendNotification);
                 return;
             }
@@ -4198,8 +4309,8 @@ void MainComponent::loadPluginPathIntoSlot(const juce::String& path, int channel
             }
 
             auto shared = std::shared_ptr<juce::AudioPluginInstance>(std::move(instance));
-            safe->pluginPaths_[channel][slot] = path;
-            safe->pluginNames_[channel][slot] = shared->getName();
+            safe->pluginPaths_[channel][slot] = key;
+            safe->pluginNames_[channel][slot] = pluginName.isNotEmpty() ? pluginName : shared->getName();
             safe->pluginBypass_[channel][slot].store(savedBypass, std::memory_order_release);
             safe->pluginFaults_[channel][slot].store(0, std::memory_order_release);
             safe->channelPlugins_[channel][slot].store(shared, std::memory_order_release);
@@ -4863,8 +4974,8 @@ void MainComponent::updateDiagnostics()
         report << (diskLow ? juce::String::fromUTF8("⚠") : juce::String::fromUTF8("✓")) << " RECORDING DISK\n    "
                << juce::String(static_cast<double>(std::max<std::int64_t>(0, freeDiskBytes)) / (1024.0 * 1024.0 * 1024.0), 1)
                << " GB libres\n\n";
-        report << juce::String::fromUTF8("✓ VST3\n    ") << pluginCatalog_.plugins().size()
-               << juce::String::fromUTF8(" plugin(s) en catálogo · escaneo de carpetas en segundo plano\n\n");
+        report << juce::String::fromUTF8("✓ VST3\n    ") << pluginDescriptions_.size()
+               << juce::String::fromUTF8(" plugin(s) reales en catálogo · escaneo de carpetas en segundo plano\n\n");
         report << (pluginProtectionActive ? juce::String::fromUTF8("⚠") : juce::String::fromUTF8("✓")) << " PLUGIN PROTECTION\n    "
                << (pluginProtectionActive ? juce::String::fromUTF8("Uno o más VST3 fueron auto-bypasseados para proteger el audio.")
                                           : "Sin fallos de plugins detectados.")
