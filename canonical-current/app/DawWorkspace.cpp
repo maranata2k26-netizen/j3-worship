@@ -345,6 +345,7 @@ public:
                            const juce::String& filePath,
                            int currentInsert,
                            float gainDb,
+                           float pan,
                            double startBeat,
                            double lengthBeats,
                            double durationSeconds,
@@ -353,6 +354,7 @@ public:
                            bool reversed,
                            std::function<void(int)> onRoute,
                            std::function<void(float)> onGain,
+                           std::function<void(float)> onPan,
                            std::function<void(double)> onFadeIn,
                            std::function<void(double)> onFadeOut,
                            std::function<void(bool)> onReverse,
@@ -363,6 +365,7 @@ public:
                            std::function<void(int)> onOpenFx)
         : onRoute_(std::move(onRoute)),
           onGain_(std::move(onGain)),
+          onPan_(std::move(onPan)),
           onFadeIn_(std::move(onFadeIn)),
           onFadeOut_(std::move(onFadeOut)),
           onReverse_(std::move(onReverse)),
@@ -416,6 +419,11 @@ public:
         gain_.onValueChange = [this] { if (onGain_) onGain_(static_cast<float>(gain_.getValue())); };
         addAndMakeVisible(gain_);
 
+        configureSlider(pan_, -1.0, 1.0, 0.01, pan, "");
+        pan_.setTooltip("Pan del clip antes del mixer. -1 izquierda, 0 centro, +1 derecha.");
+        pan_.onValueChange = [this] { if (onPan_) onPan_(static_cast<float>(pan_.getValue())); };
+        addAndMakeVisible(pan_);
+
         configureSlider(fadeIn_, 0.0, std::max(0.25, lengthBeats), 0.01,
                         juce::jlimit(0.0, std::max(0.25, lengthBeats), fadeInBeats), " beats");
         fadeIn_.setTooltip("Fade In del clip.");
@@ -429,9 +437,10 @@ public:
         addAndMakeVisible(fadeOut_);
 
         gainLabel_.setText("VOLUME", juce::dontSendNotification);
+        panLabel_.setText("PAN", juce::dontSendNotification);
         fadeInLabel_.setText("FADE IN", juce::dontSendNotification);
         fadeOutLabel_.setText("FADE OUT", juce::dontSendNotification);
-        for (auto* label : { &gainLabel_, &fadeInLabel_, &fadeOutLabel_ })
+        for (auto* label : { &gainLabel_, &panLabel_, &fadeInLabel_, &fadeOutLabel_ })
         {
             label->setFont(juce::FontOptions(10.5f, juce::Font::bold));
             label->setColour(juce::Label::textColourId, juce::Colour(kMuted));
@@ -499,18 +508,23 @@ public:
         r.removeFromTop(10);
 
         auto labels = r.removeFromTop(18);
-        gainLabel_.setBounds(labels.removeFromLeft(190));
-        labels.removeFromLeft(12);
-        fadeInLabel_.setBounds(labels.removeFromLeft(190));
-        labels.removeFromLeft(12);
-        fadeOutLabel_.setBounds(labels.removeFromLeft(190));
+        const int columnWidth = std::max(120, (labels.getWidth() - 24) / 4);
+        gainLabel_.setBounds(labels.removeFromLeft(columnWidth));
+        labels.removeFromLeft(8);
+        panLabel_.setBounds(labels.removeFromLeft(columnWidth));
+        labels.removeFromLeft(8);
+        fadeInLabel_.setBounds(labels.removeFromLeft(columnWidth));
+        labels.removeFromLeft(8);
+        fadeOutLabel_.setBounds(labels.removeFromLeft(columnWidth));
 
         auto sliders = r.removeFromTop(42);
-        gain_.setBounds(sliders.removeFromLeft(190));
-        sliders.removeFromLeft(12);
-        fadeIn_.setBounds(sliders.removeFromLeft(190));
-        sliders.removeFromLeft(12);
-        fadeOut_.setBounds(sliders.removeFromLeft(190));
+        gain_.setBounds(sliders.removeFromLeft(columnWidth));
+        sliders.removeFromLeft(8);
+        pan_.setBounds(sliders.removeFromLeft(columnWidth));
+        sliders.removeFromLeft(8);
+        fadeIn_.setBounds(sliders.removeFromLeft(columnWidth));
+        sliders.removeFromLeft(8);
+        fadeOut_.setBounds(sliders.removeFromLeft(columnWidth));
         r.removeFromTop(10);
 
         auto tools = r.removeFromTop(34);
@@ -548,10 +562,12 @@ private:
     juce::Label info_;
     juce::Label routeLabel_;
     juce::Label gainLabel_;
+    juce::Label panLabel_;
     juce::Label fadeInLabel_;
     juce::Label fadeOutLabel_;
     juce::ComboBox insertBox_;
     juce::Slider gain_;
+    juce::Slider pan_;
     juce::Slider fadeIn_;
     juce::Slider fadeOut_;
     juce::ToggleButton reverse_;
@@ -563,6 +579,7 @@ private:
     juce::Label hint_;
     std::function<void(int)> onRoute_;
     std::function<void(float)> onGain_;
+    std::function<void(float)> onPan_;
     std::function<void(double)> onFadeIn_;
     std::function<void(double)> onFadeOut_;
     std::function<void(bool)> onReverse_;
@@ -2307,6 +2324,7 @@ void DawWorkspace::openSelectedClipEditor()
         selected->audio->path,
         insert,
         gainToDb(selected->gain),
+        selected->pan,
         selected->startBeat,
         selected->lengthBeats,
         selected->audio->durationSeconds,
@@ -2344,6 +2362,21 @@ void DawWorkspace::openSelectedClipEditor()
                 {
                     safe->checkpointUndo();
                     clip.gain = dbToGain(db);
+                    safe->projectDirty_ = true;
+                    safe->markRenderDirty();
+                    safe->rebuildRenderState();
+                    safe->syncInspector();
+                    safe->repaint();
+                    return;
+                }
+        },
+        [safe, clipId](float pan)
+        {
+            if (safe == nullptr) return;
+            for (auto& clip : safe->clips_)
+                if (clip.id == clipId)
+                {
+                    clip.pan = juce::jlimit(-1.0f, 1.0f, pan);
                     safe->projectDirty_ = true;
                     safe->markRenderDirty();
                     safe->rebuildRenderState();
@@ -3557,6 +3590,7 @@ void DawWorkspace::rebuildRenderState()
             std::llround(c.lengthBeats * secondsPerBeat * state.sampleRate)));
         rc.sourceOffsetSeconds = c.sourceOffsetSeconds;
         rc.gain = c.gain;
+        rc.pan = c.pan;
         rc.muted = c.muted;
         rc.loop = c.loop;
         rc.reversed = c.reversed;
@@ -3650,7 +3684,7 @@ void DawWorkspace::renderBlock(float* masterLeft,
 
         const double ratio = clip.audio->sampleRate / std::max(1.0, state.sampleRate);
         const double sourceOffset = clip.sourceOffsetSeconds * clip.audio->sampleRate;
-        const float pan = juce::jlimit(-1.0f, 1.0f, track.pan);
+        const float pan = juce::jlimit(-1.0f, 1.0f, track.pan + clip.pan);
         const float angle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
         const float panL = std::cos(angle);
         const float panR = std::sin(angle);
@@ -3895,6 +3929,7 @@ juce::String DawWorkspace::serializeProject() const
         x->setAttribute("lengthBeats", c.lengthBeats);
         x->setAttribute("sourceOffsetSeconds", c.sourceOffsetSeconds);
         x->setAttribute("gain", c.gain);
+        x->setAttribute("pan", c.pan);
         x->setAttribute("muted", c.muted);
         x->setAttribute("loop", c.loop);
         x->setAttribute("reversed", c.reversed);
@@ -3984,6 +4019,7 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
             c.lengthBeats = std::max(0.05, x->getDoubleAttribute("lengthBeats", 4.0));
             c.sourceOffsetSeconds = std::max(0.0, x->getDoubleAttribute("sourceOffsetSeconds", 0.0));
             c.gain = static_cast<float>(x->getDoubleAttribute("gain", 1.0));
+            c.pan = juce::jlimit(-1.0f, 1.0f, static_cast<float>(x->getDoubleAttribute("pan", 0.0)));
             c.muted = x->getBoolAttribute("muted", false);
             c.loop = x->getBoolAttribute("loop", false);
             c.reversed = x->getBoolAttribute("reversed", false);
