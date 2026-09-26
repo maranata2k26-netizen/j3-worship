@@ -1229,40 +1229,46 @@ void DawWorkspace::resized()
     browserSearch_.setBounds(browser.removeFromTop(30));
 
     auto inspector = inspectorBounds().reduced(10, 8);
-    inspector.removeFromTop(27);
-    trackNameEditor_.setBounds(inspector.removeFromTop(30));
-    inspector.removeFromTop(7);
+    const bool compactInspector = inspector.getHeight() < 390;
+    const int rowHeight = compactInspector ? 24 : 30;
+    const int buttonHeight = compactInspector ? 24 : 28;
+    const int gap = compactInspector ? 4 : 7;
+    const int statusHeight = compactInspector ? 40 : 54;
 
-    auto trackButtons = inspector.removeFromTop(28);
+    statusLabel_.setBounds(inspector.removeFromBottom(std::min(statusHeight, inspector.getHeight())));
+    inspector.removeFromTop(compactInspector ? 22 : 27);
+    trackNameEditor_.setBounds(inspector.removeFromTop(rowHeight));
+    inspector.removeFromTop(gap);
+
+    auto trackButtons = inspector.removeFromTop(buttonHeight);
     trackMuteButton_.setBounds(trackButtons.removeFromLeft(42));
     trackButtons.removeFromLeft(5);
     trackSoloButton_.setBounds(trackButtons.removeFromLeft(42));
     trackButtons.removeFromLeft(5);
     trackArmButton_.setBounds(trackButtons.removeFromLeft(54));
 
-    inspector.removeFromTop(8);
-    trackVolumeSlider_.setBounds(inspector.removeFromTop(30));
-    trackPanSlider_.setBounds(inspector.removeFromTop(30));
-    inspector.removeFromTop(8);
+    inspector.removeFromTop(gap);
+    trackVolumeSlider_.setBounds(inspector.removeFromTop(rowHeight));
+    trackPanSlider_.setBounds(inspector.removeFromTop(rowHeight));
+    inspector.removeFromTop(gap);
 
-    auto clipButtons = inspector.removeFromTop(28);
+    auto clipButtons = inspector.removeFromTop(buttonHeight);
     clipMuteButton_.setBounds(clipButtons.removeFromLeft(std::min(92, clipButtons.getWidth() / 2)));
     clipButtons.removeFromLeft(std::min(5, clipButtons.getWidth()));
     clipLoopButton_.setBounds(clipButtons);
 
-    inspector.removeFromTop(7);
-    clipGainSlider_.setBounds(inspector.removeFromTop(30));
-    fadeInSlider_.setBounds(inspector.removeFromTop(30));
-    fadeOutSlider_.setBounds(inspector.removeFromTop(30));
-    inspector.removeFromTop(7);
-    clipMixerBox_.setBounds(inspector.removeFromTop(30));
-    inspector.removeFromTop(5);
-    auto insertButtons = inspector.removeFromTop(28);
+    inspector.removeFromTop(gap);
+    clipGainSlider_.setBounds(inspector.removeFromTop(rowHeight));
+    fadeInSlider_.setBounds(inspector.removeFromTop(rowHeight));
+    fadeOutSlider_.setBounds(inspector.removeFromTop(rowHeight));
+    inspector.removeFromTop(gap);
+    clipMixerBox_.setBounds(inspector.removeFromTop(compactInspector ? 26 : 30));
+    inspector.removeFromTop(compactInspector ? 3 : 5);
+    auto insertButtons = inspector.removeFromTop(buttonHeight);
     openMixerInsertButton_.setBounds(insertButtons.removeFromLeft(std::min(104, insertButtons.getWidth() / 2)));
     insertButtons.removeFromLeft(std::min(5, insertButtons.getWidth()));
     openPluginsInsertButton_.setBounds(insertButtons);
 
-    statusLabel_.setBounds(inspector.removeFromBottom(std::min(54, inspector.getHeight())));
     repaint();
 }
 
