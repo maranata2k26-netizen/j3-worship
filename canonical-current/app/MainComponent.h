@@ -20,6 +20,7 @@
 #include <utility>
 #include <optional>
 #include <vector>
+#include <thread>
 
 class MainComponent final : public juce::Component,
                             private juce::AudioIODeviceCallback,
@@ -257,6 +258,7 @@ private:
     juce::MidiBuffer pluginMidiScratch_;
     bool pluginsScanned_ { false };
     std::atomic<bool> pluginScanBusy_ { false };
+    std::jthread pluginScanThread_;
     std::vector<int> pluginBrowserIndices_;
     juce::StringArray favoritePluginPaths_;
     juce::StringArray recentPluginPaths_;
