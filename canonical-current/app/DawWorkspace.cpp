@@ -2035,9 +2035,16 @@ void DawWorkspace::crossfadeSelectedClip()
 
         Clip* earlier = selected->startBeat <= candidate.startBeat ? selected : &candidate;
         Clip* later = earlier == selected ? &candidate : selected;
-        const double overlap = std::min(earlier->startBeat + earlier->lengthBeats,
-                                        later->startBeat + later->lengthBeats)
-                             - later->startBeat;
+        const double earlierEnd = earlier->startBeat + earlier->lengthBeats;
+        const double laterEnd = later->startBeat + later->lengthBeats;
+
+        // A conventional crossfade is the overlap at the hand-off from the earlier
+        // clip to the later clip. Ignore a clip fully nested inside another because
+        // its fade-out would occur before the earlier clip actually ends.
+        if (later->startBeat >= earlierEnd || laterEnd + 1.0e-6 < earlierEnd)
+            continue;
+
+        const double overlap = earlierEnd - later->startBeat;
         if (overlap > bestOverlap + 1.0e-6)
         {
             bestOverlap = overlap;
@@ -2079,12 +2086,14 @@ void DawWorkspace::bounceSelectedClip()
     const int channels = juce::jlimit(1, 2, source.getNumChannels());
     const double sourceRate = std::max(1.0, clip->audio->sampleRate);
     const double durationSeconds = clip->lengthBeats * 60.0 / std::max(1.0, bpm());
-    const int outputSamples = std::max(1, static_cast<int>(std::llround(durationSeconds * sourceRate)));
-    if (sourceSamples <= 0 || outputSamples <= 0)
+    const auto outputSamples64 = static_cast<std::int64_t>(std::llround(durationSeconds * sourceRate));
+    if (sourceSamples <= 0 || outputSamples64 <= 0
+        || outputSamples64 > static_cast<std::int64_t>(std::numeric_limits<int>::max()))
     {
-        refreshStatus("Bounce: el clip no contiene audio válido.");
+        refreshStatus("Bounce: duración de clip inválida o demasiado grande.");
         return;
     }
+    const int outputSamples = static_cast<int>(outputSamples64);
 
     juce::AudioBuffer<float> rendered(channels, outputSamples);
     rendered.clear();
