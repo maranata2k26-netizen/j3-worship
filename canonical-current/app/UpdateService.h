@@ -21,7 +21,10 @@ class UpdateService
 public:
     static std::optional<AvailableUpdate> checkLatest(j3::SemVer current, juce::String& error);
     static bool downloadAndVerify(const AvailableUpdate&, juce::File& installer, juce::String& error);
-    static bool launchInstallerAndRestart(const juce::File& installer, juce::String& error);
+    static bool launchInstallerAndRestart(const juce::File& installer,
+                                          const juce::String& expectedVersion,
+                                          juce::String& error);
+    static std::optional<juce::String> consumeLastUpdateError();
 
 private:
     static bool requestBytes(const juce::String& url, juce::MemoryBlock& bytes, juce::String& error);

@@ -41,6 +41,23 @@ juce::String shaFromReleaseBody(const juce::String& body)
         return juce::String(match[1].str()).toLowerCase();
     return {};
 }
+
+juce::File updaterFolder()
+{
+    return juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile("J3WorshipUpdater");
+}
+
+juce::File updateFailureMarker()
+{
+    return updaterFolder().getChildFile("last-update-failed.txt");
+}
+
+juce::String quoteForCmd(const juce::String& value)
+{
+    const auto quote = juce::String::charToString('"');
+    return quote + value.replace(quote, quote + quote) + quote;
+}
 }
 
 namespace j3ui
@@ -283,7 +300,9 @@ bool UpdateService::downloadAndVerify(const AvailableUpdate& update, juce::File&
     return true;
 }
 
-bool UpdateService::launchInstallerAndRestart(const juce::File& installer, juce::String& error)
+bool UpdateService::launchInstallerAndRestart(const juce::File& installer,
+                                                    const juce::String& expectedVersion,
+                                                    juce::String& error)
 {
 #if JUCE_WINDOWS
     if (!installer.existsAsFile())
@@ -293,20 +312,46 @@ bool UpdateService::launchInstallerAndRestart(const juce::File& installer, juce:
     }
 
     const auto currentExe = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
-    auto script = juce::File::getSpecialLocation(juce::File::tempDirectory)
-        .getChildFile("J3WorshipUpdater")
-        .getChildFile("apply-update.cmd");
-
-    auto quoteForCmd = [](const juce::String& s)
+    if (!currentExe.existsAsFile())
     {
-        return juce::String("\"") + s + "\"";
-    };
+        error = juce::String::fromUTF8("J3 no pudo identificar el ejecutable que está usando ahora.");
+        return false;
+    }
+
+    const auto installDir = currentExe.getParentDirectory();
+    auto folder = updaterFolder();
+    if (!folder.createDirectory())
+    {
+        error = juce::String::fromUTF8("No se pudo preparar la carpeta temporal del actualizador.");
+        return false;
+    }
+
+    const auto script = folder.getChildFile("apply-update.cmd");
+    const auto logFile = folder.getChildFile("update-install.log");
+    const auto failureMarker = updateFailureMarker();
 
     juce::String body;
     body << "@echo off\r\n";
+    body << "setlocal\r\n";
     body << "timeout /t 2 /nobreak >nul\r\n";
     body << "start /wait \"\" " << quoteForCmd(installer.getFullPathName())
-         << " /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS\r\n";
+         << " /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS"
+         << " /DIR=" << quoteForCmd(installDir.getFullPathName())
+         << " /LOG=" << quoteForCmd(logFile.getFullPathName()) << "\r\n";
+    body << "set \"J3_UPDATE_EXIT=%ERRORLEVEL%\"\r\n";
+    body << "if not \"%J3_UPDATE_EXIT%\"==\"0\" (\r\n";
+    body << "  >" << quoteForCmd(failureMarker.getFullPathName())
+         << " echo J3 Worship " << expectedVersion
+         << " no pudo instalarse. Codigo del instalador: %J3_UPDATE_EXIT%.\r\n";
+    body << "  >>" << quoteForCmd(failureMarker.getFullPathName())
+         << " echo Carpeta objetivo: " << installDir.getFullPathName() << "\r\n";
+    body << "  >>" << quoteForCmd(failureMarker.getFullPathName())
+         << " echo Log: " << logFile.getFullPathName() << "\r\n";
+    body << "  start \"\" " << quoteForCmd(currentExe.getFullPathName()) << "\r\n";
+    body << "  del \"%~f0\"\r\n";
+    body << "  exit /b %J3_UPDATE_EXIT%\r\n";
+    body << ")\r\n";
+    body << "del " << quoteForCmd(failureMarker.getFullPathName()) << " 2>nul\r\n";
     body << "start \"\" " << quoteForCmd(currentExe.getFullPathName()) << "\r\n";
     body << "del \"%~f0\"\r\n";
 
@@ -315,16 +360,32 @@ bool UpdateService::launchInstallerAndRestart(const juce::File& installer, juce:
         error = juce::String::fromUTF8("No se pudo preparar el instalador automático.");
         return false;
     }
+
     if (!script.startAsProcess())
     {
         error = "Windows no pudo iniciar el actualizador.";
         return false;
     }
+
     return true;
 #else
-    juce::ignoreUnused(installer);
+    juce::ignoreUnused(installer, expectedVersion);
     error = juce::String::fromUTF8("Las actualizaciones automáticas están disponibles en Windows.");
     return false;
 #endif
+}
+
+std::optional<juce::String> UpdateService::consumeLastUpdateError()
+{
+    const auto marker = updateFailureMarker();
+    if (!marker.existsAsFile())
+        return std::nullopt;
+
+    auto message = marker.loadFileAsString().trim();
+    marker.deleteFile();
+    if (message.isEmpty())
+        message = juce::String::fromUTF8("La actualización anterior no pudo completarse.");
+
+    return message;
 }
 }
