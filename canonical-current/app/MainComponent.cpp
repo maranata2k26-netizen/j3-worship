@@ -958,10 +958,23 @@ MainComponent::MainComponent()
     iemPage_.addAndMakeVisible(iemBankLabel_);
     rebuildIemBank();
 
-    pluginsTitle_.setText(juce::String::fromUTF8("MIXER FX · 8 SLOTS PER INSERT"), juce::dontSendNotification);
+    pluginsTitle_.setText(juce::String::fromUTF8("PLUGIN BROWSER · MIXER FX · 8 SLOTS"), juce::dontSendNotification);
     pluginsTitle_.setFont(juce::FontOptions(25.0f, juce::Font::bold));
     pluginsTitle_.setColour(juce::Label::textColourId, juce::Colour(text));
     pluginsPage_.addAndMakeVisible(pluginsTitle_);
+
+    pluginSearch_.setTextToShowWhenEmpty("SEARCH PLUGINS...", juce::Colour(mutedText));
+    pluginSearch_.setTooltip(juce::String::fromUTF8("Buscá por nombre o fabricante. El resultado se filtra mientras escribís."));
+    pluginSearch_.onTextChange = [this] { refreshPluginBrowser(); };
+    pluginsPage_.addAndMakeVisible(pluginSearch_);
+
+    for (const auto& category : { "ALL", "EQ", "COMPRESSOR", "REVERB", "DELAY", "SATURATION",
+                                  "GUITAR", "INSTRUMENTS", "UTILITY", "FAVORITES",
+                                  "RECENTLY USED", "J3 PLUGINS" })
+        pluginCategoryBox_.addItem(category, pluginCategoryBox_.getNumItems() + 1);
+    pluginCategoryBox_.setSelectedId(1, juce::dontSendNotification);
+    pluginCategoryBox_.onChange = [this] { refreshPluginBrowser(); };
+    pluginsPage_.addAndMakeVisible(pluginCategoryBox_);
 
     for (int i = 0; i < kMaxChannels; ++i)
         pluginChannelBox_.addItem("MIXER INSERT " + juce::String(i + 1), i + 1);
@@ -970,12 +983,38 @@ MainComponent::MainComponent()
     pluginsPage_.addAndMakeVisible(pluginChannelBox_);
 
     for (int i = 0; i < kPluginSlots; ++i)
-        pluginSlotBox_.addItem("INSERT " + juce::String(i + 1), i + 1);
+        pluginSlotBox_.addItem("FX SLOT " + juce::String(i + 1), i + 1);
     pluginSlotBox_.setSelectedId(1, juce::dontSendNotification);
     pluginSlotBox_.onChange = [this] { refreshPluginUi(); };
     pluginsPage_.addAndMakeVisible(pluginSlotBox_);
 
+    pluginCatalogBox_.setTooltip(juce::String::fromUTF8("Elegí un plugin del resultado filtrado."));
+    pluginCatalogBox_.onChange = [this] { refreshPluginUi(); };
     pluginsPage_.addAndMakeVisible(pluginCatalogBox_);
+
+    favoritePluginButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(text));
+    favoritePluginButton_.setTooltip(juce::String::fromUTF8("Marcá este plugin para encontrarlo rápido en FAVORITES."));
+    favoritePluginButton_.onClick = [this]
+    {
+        const int row = pluginCatalogBox_.getSelectedId() - 1;
+        if (row < 0 || row >= static_cast<int>(pluginBrowserIndices_.size()))
+            return;
+        const auto& plugins = pluginCatalog_.plugins();
+        const int actual = pluginBrowserIndices_[static_cast<std::size_t>(row)];
+        if (actual < 0 || actual >= static_cast<int>(plugins.size()))
+            return;
+        const auto path = juce::String(plugins[static_cast<std::size_t>(actual)].path.wstring().c_str());
+        if (favoritePluginButton_.getToggleState())
+            favoritePluginPaths_.addIfNotAlreadyThere(path);
+        else
+            favoritePluginPaths_.removeString(path);
+        saveAppState();
+        refreshPluginBrowser();
+    };
+    pluginsPage_.addAndMakeVisible(favoritePluginButton_);
+
+    scanPluginsButton_.setButtonText("SCAN PLUGINS");
+    loadPluginButton_.setButtonText("ADD FX");
     scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
     loadPluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
     removePluginButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
@@ -1626,7 +1665,7 @@ void MainComponent::checkForUpdatesAsync()
         return;
 
     auto current = j3::Updater::parseVersion(
-        juce::JUCEApplication::getInstance()->getApplicationVersion().toStdString()).value_or(j3::SemVer { 1, 1, 0 });
+        juce::JUCEApplication::getInstance()->getApplicationVersion().toStdString()).value_or(j3::SemVer { 1, 7, 0 });
     auto safe = juce::Component::SafePointer<MainComponent>(this);
     std::thread([safe, current]
     {
@@ -2327,16 +2366,25 @@ void MainComponent::resized()
 
     auto pluginsArea = pluginsPage_.getLocalBounds().reduced(30);
     pluginsTitle_.setBounds(pluginsArea.removeFromTop(48));
-    pluginsArea.removeFromTop(12);
+    pluginsArea.removeFromTop(8);
+    auto pluginBrowserRow = pluginsArea.removeFromTop(42);
+    const int searchWidth = std::max(180, std::min(430, pluginBrowserRow.getWidth() * 40 / 100));
+    pluginSearch_.setBounds(pluginBrowserRow.removeFromLeft(searchWidth).reduced(3));
+    pluginBrowserRow.removeFromLeft(8);
+    pluginCategoryBox_.setBounds(pluginBrowserRow.removeFromLeft(std::min(210, pluginBrowserRow.getWidth())).reduced(3));
+    pluginBrowserRow.removeFromLeft(8);
+    favoritePluginButton_.setBounds(pluginBrowserRow.removeFromLeft(std::min(150, pluginBrowserRow.getWidth())));
+    pluginsArea.removeFromTop(8);
     auto pluginSelectRow = pluginsArea.removeFromTop(44);
-    pluginChannelBox_.setBounds(pluginSelectRow.removeFromLeft(170).reduced(3));
-    pluginSelectRow.removeFromLeft(10);
+    pluginChannelBox_.setBounds(pluginSelectRow.removeFromLeft(180).reduced(3));
+    pluginSelectRow.removeFromLeft(8);
     pluginSlotBox_.setBounds(pluginSelectRow.removeFromLeft(150).reduced(3));
-    pluginSelectRow.removeFromLeft(10);
-    pluginCatalogBox_.setBounds(pluginSelectRow.removeFromLeft(std::min(520, pluginSelectRow.getWidth() - 150)).reduced(3));
-    pluginSelectRow.removeFromLeft(10);
-    scanPluginsButton_.setBounds(pluginSelectRow.removeFromLeft(140).reduced(2));
-    pluginsArea.removeFromTop(18);
+    pluginSelectRow.removeFromLeft(8);
+    const int catalogWidth = std::max(160, std::min(500, pluginSelectRow.getWidth() - 150));
+    pluginCatalogBox_.setBounds(pluginSelectRow.removeFromLeft(catalogWidth).reduced(3));
+    pluginSelectRow.removeFromLeft(8);
+    scanPluginsButton_.setBounds(pluginSelectRow.removeFromLeft(std::min(145, pluginSelectRow.getWidth())).reduced(2));
+    pluginsArea.removeFromTop(14);
     auto pluginActionRow = pluginsArea.removeFromTop(44);
     loadPluginButton_.setBounds(pluginActionRow.removeFromLeft(160));
     pluginActionRow.removeFromLeft(10);
@@ -2513,6 +2561,19 @@ void MainComponent::loadAppState()
         setlist_.select(static_cast<std::size_t>(juce::jlimit(0, static_cast<int>(setlist_.size()) - 1,
             xml->getIntAttribute("setlistIndex", 0))));
 
+    favoritePluginPaths_.clear();
+    recentPluginPaths_.clear();
+    forEachXmlChildElementWithTagName(*xml, fav, "PluginFavorite")
+    {
+        const auto path = fav->getStringAttribute("path").trim();
+        if (path.isNotEmpty()) favoritePluginPaths_.addIfNotAlreadyThere(path);
+    }
+    forEachXmlChildElementWithTagName(*xml, recent, "PluginRecent")
+    {
+        const auto path = recent->getStringAttribute("path").trim();
+        if (path.isNotEmpty()) recentPluginPaths_.addIfNotAlreadyThere(path);
+    }
+
     forEachXmlChildElementWithTagName(*xml, vst, "Vst3")
     {
         const int channel = vst->getIntAttribute("channel", -1);
@@ -2639,6 +2700,17 @@ void MainComponent::saveAppState(bool capturePluginState)
         songXml->setAttribute("bpm", song->bpm);
         songXml->setAttribute("numerator", song->numerator);
         songXml->setAttribute("denominator", song->denominator);
+    }
+
+    for (const auto& path : favoritePluginPaths_)
+    {
+        auto* fav = xml.createNewChildElement("PluginFavorite");
+        fav->setAttribute("path", path);
+    }
+    for (const auto& path : recentPluginPaths_)
+    {
+        auto* recent = xml.createNewChildElement("PluginRecent");
+        recent->setAttribute("path", path);
     }
 
     for (int ch = 0; ch < kMaxChannels; ++ch)
@@ -2877,14 +2949,8 @@ void MainComponent::scanVst3Plugins()
     pluginStatusLabel_.setText("Scanning VST3 folders without loading plug-ins...", juce::dontSendNotification);
     pluginCatalog_.scan(roots);
 
-    pluginCatalogBox_.clear(juce::dontSendNotification);
-    const auto& plugins = pluginCatalog_.plugins();
-    for (std::size_t i = 0; i < plugins.size(); ++i)
-        pluginCatalogBox_.addItem(juce::String(plugins[i].name), static_cast<int>(i + 1));
-    if (!plugins.empty())
-        pluginCatalogBox_.setSelectedId(1, juce::dontSendNotification);
-
     pluginsScanned_ = true;
+    refreshPluginBrowser();
     restoreSavedPluginsAfterScan();
     refreshPluginUi();
 }
@@ -2898,18 +2964,113 @@ void MainComponent::restoreSavedPluginsAfterScan()
                 loadPluginPathIntoSlot(pluginPaths_[ch][slot], ch, slot);
 }
 
+void MainComponent::refreshPluginBrowser()
+{
+    const auto& plugins = pluginCatalog_.plugins();
+    juce::String previousPath;
+    const int previousRow = pluginCatalogBox_.getSelectedId() - 1;
+    if (previousRow >= 0 && previousRow < static_cast<int>(pluginBrowserIndices_.size()))
+    {
+        const int previousActual = pluginBrowserIndices_[static_cast<std::size_t>(previousRow)];
+        if (previousActual >= 0 && previousActual < static_cast<int>(plugins.size()))
+            previousPath = juce::String(plugins[static_cast<std::size_t>(previousActual)].path.wstring().c_str());
+    }
+
+    pluginBrowserIndices_.clear();
+    pluginCatalogBox_.clear(juce::dontSendNotification);
+
+    const auto query = pluginSearch_.getText().trim().toLowerCase();
+    const int category = std::max(1, pluginCategoryBox_.getSelectedId());
+
+    auto matchesCategory = [this, category](const j3::PluginRecord& plugin)
+    {
+        const auto path = juce::String(plugin.path.wstring().c_str());
+        const auto haystack = (juce::String(plugin.name) + " " + juce::String(plugin.manufacturer) + " " + path).toLowerCase();
+        if (category == 1) return true;
+        if (category == 10) return favoritePluginPaths_.contains(path);
+        if (category == 11) return recentPluginPaths_.contains(path);
+        if (category == 12) return haystack.contains("j3");
+        switch (category)
+        {
+            case 2: return haystack.contains(" eq") || haystack.startsWith("eq") || haystack.contains("equalizer") || haystack.contains("pro-q");
+            case 3: return haystack.contains("compress") || haystack.contains("limiter") || haystack.contains("1176")
+                        || haystack.contains("2a") || haystack.contains("cla-") || haystack.contains("dynamic");
+            case 4: return haystack.contains("reverb") || haystack.contains("verb") || haystack.contains("room")
+                        || haystack.contains("hall") || haystack.contains("valhalla");
+            case 5: return haystack.contains("delay") || haystack.contains("echo");
+            case 6: return haystack.contains("satur") || haystack.contains("tape") || haystack.contains("tube")
+                        || haystack.contains("distort") || haystack.contains("drive");
+            case 7: return haystack.contains("guitar") || haystack.contains(" amp") || haystack.contains("cab");
+            case 8: return haystack.contains("instrument") || haystack.contains("synth") || haystack.contains("piano")
+                        || haystack.contains("kontakt") || haystack.contains("keys") || haystack.contains("organ")
+                        || haystack.contains("drum");
+            case 9: return haystack.contains("utility") || haystack.contains("meter") || haystack.contains("analy")
+                        || haystack.contains("gain") || haystack.contains("stereo");
+            default: return true;
+        }
+    };
+
+    int id = 1;
+    int selectedId = 0;
+    for (int i = 0; i < static_cast<int>(plugins.size()); ++i)
+    {
+        const auto& plugin = plugins[static_cast<std::size_t>(i)];
+        const auto path = juce::String(plugin.path.wstring().c_str());
+        const auto searchText = (juce::String(plugin.name) + " " + juce::String(plugin.manufacturer)).toLowerCase();
+        if (query.isNotEmpty() && !searchText.contains(query))
+            continue;
+        if (!matchesCategory(plugin))
+            continue;
+
+        pluginBrowserIndices_.push_back(i);
+        juce::String label;
+        if (favoritePluginPaths_.contains(path))
+            label << juce::String::fromUTF8("★ ");
+        label << juce::String(plugin.name);
+        if (!plugin.manufacturer.empty() && !juce::String(plugin.manufacturer).equalsIgnoreCase("Unknown"))
+            label << juce::String::fromUTF8(" · ") << juce::String(plugin.manufacturer);
+        pluginCatalogBox_.addItem(label, id);
+        if (path == previousPath)
+            selectedId = id;
+        ++id;
+    }
+
+    if (selectedId == 0 && !pluginBrowserIndices_.empty())
+        selectedId = 1;
+    pluginCatalogBox_.setSelectedId(selectedId, juce::dontSendNotification);
+    refreshPluginUi();
+}
+
 void MainComponent::refreshPluginUi()
 {
     const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
     const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
     auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
 
+    const int browserRow = pluginCatalogBox_.getSelectedId() - 1;
+    const auto& catalog = pluginCatalog_.plugins();
+    const bool browserSelectionValid = browserRow >= 0
+        && browserRow < static_cast<int>(pluginBrowserIndices_.size())
+        && pluginBrowserIndices_[static_cast<std::size_t>(browserRow)] >= 0
+        && pluginBrowserIndices_[static_cast<std::size_t>(browserRow)] < static_cast<int>(catalog.size());
+
     const bool loaded = plugin != nullptr;
     bypassPluginButton_.setToggleState(pluginBypass_[ch][slot].load(std::memory_order_relaxed), juce::dontSendNotification);
     bypassPluginButton_.setEnabled(loaded);
     removePluginButton_.setEnabled(loaded || pluginPaths_[ch][slot].isNotEmpty());
     openPluginEditorButton_.setEnabled(loaded);
-    loadPluginButton_.setEnabled(pluginsScanned_ && pluginCatalogBox_.getSelectedId() > 0);
+    loadPluginButton_.setEnabled(pluginsScanned_ && browserSelectionValid);
+    favoritePluginButton_.setEnabled(browserSelectionValid);
+    if (browserSelectionValid)
+    {
+        const auto actual = pluginBrowserIndices_[static_cast<std::size_t>(browserRow)];
+        const auto selectedPath = juce::String(catalog[static_cast<std::size_t>(actual)].path.wstring().c_str());
+        favoritePluginButton_.setToggleState(favoritePluginPaths_.contains(selectedPath), juce::dontSendNotification);
+    }
+    else
+    {
+        favoritePluginButton_.setToggleState(false, juce::dontSendNotification);
+    }
 
     juce::String status;
     status << "Mixer Insert " << (ch + 1);
@@ -2936,7 +3097,8 @@ void MainComponent::refreshPluginUi()
     else
     {
         status << "Empty insert.\n";
-        status << pluginCatalog_.plugins().size() << " VST3 module(s) discovered.";
+        status << pluginBrowserIndices_.size() << " shown / " << pluginCatalog_.plugins().size()
+               << " VST3 discovered. Search, choose a category, then ADD FX.";
     }
     pluginStatusLabel_.setText(status, juce::dontSendNotification);
 }
@@ -2949,16 +3111,25 @@ void MainComponent::loadSelectedPlugin()
         return;
     }
 
-    const int selected = pluginCatalogBox_.getSelectedId() - 1;
+    const int row = pluginCatalogBox_.getSelectedId() - 1;
     const auto& plugins = pluginCatalog_.plugins();
-    if (selected < 0 || selected >= static_cast<int>(plugins.size()))
+    if (row < 0 || row >= static_cast<int>(pluginBrowserIndices_.size()))
     {
-        showAudioError(juce::String::fromUTF8("Seleccioná un VST3 del catálogo."));
+        showAudioError(juce::String::fromUTF8("Seleccioná un VST3 del navegador."));
         return;
     }
+    const int selected = pluginBrowserIndices_[static_cast<std::size_t>(row)];
+    if (selected < 0 || selected >= static_cast<int>(plugins.size()))
+        return;
+    const auto path = juce::String(plugins[static_cast<std::size_t>(selected)].path.wstring().c_str());
+    recentPluginPaths_.removeString(path);
+    recentPluginPaths_.insert(0, path);
+    while (recentPluginPaths_.size() > 12)
+        recentPluginPaths_.remove(recentPluginPaths_.size() - 1);
+    saveAppState();
     const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
     const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
-    loadPluginPathIntoSlot(juce::String(plugins[static_cast<std::size_t>(selected)].path.wstring().c_str()), ch, slot);
+    loadPluginPathIntoSlot(path, ch, slot);
 }
 
 void MainComponent::loadPluginPathIntoSlot(const juce::String& path, int channel, int slot)
@@ -3617,14 +3788,46 @@ void MainComponent::updateDiagnostics()
         report << (routeIsSafe(paLeft_.load(), paRight_.load(), clickOutput_.load()) ? juce::String::fromUTF8("✓") : juce::String::fromUTF8("✕"))
                << " SAFE ROUTING\n    PA L " << (paLeft_.load() + 1) << juce::String::fromUTF8("  ·  PA R ") << (paRight_.load() + 1)
                << juce::String::fromUTF8("  ·  CLICK ") << (clickOutput_.load() < 0 ? juce::String("OFF") : juce::String(clickOutput_.load() + 1)) << "\n\n";
+
+        if (dawWorkspace_.isPlaying())
+        {
+            if (dawOutputUnavailable_.load(std::memory_order_relaxed))
+                report << juce::String::fromUTF8("✕ DAW PLAYBACK\n    NO HAY SALIDA DE AUDIO ACTIVA. Abrí AUDIO / MIDI y activá al menos una salida.\n\n");
+            else if (dawOutputFallbackActive_.load(std::memory_order_relaxed))
+                report << juce::String::fromUTF8("⚠ DAW PLAYBACK\n    La salida PA guardada no está activa. J3 está usando automáticamente una salida activa de respaldo.\n\n");
+            else
+                report << juce::String::fromUTF8("✓ DAW PLAYBACK\n    Mixer → PA L/R activo.\n\n");
+        }
+        else
+        {
+            report << juce::String::fromUTF8("✓ DAW PLAYBACK\n    Listo para reproducir.\n\n");
+        }
         report << (liveMonitorEnabled_.load() ? juce::String::fromUTF8("⚠ LIVE INPUT MONITORING: ON") : juce::String::fromUTF8("✓ LIVE INPUT MONITORING: OFF (safe default)")) << "\n\n";
         if (lastAudioError_.isNotEmpty())
             report << juce::String::fromUTF8("⚠ LAST AUDIO ERROR\n    ") << lastAudioError_ << "\n\n";
         report << "AVAILABLE AUDIO DRIVERS\n" << buildDeviceInventoryText();
 
-        statusLabel_.setText("Audio: " + d->getName() + juce::String::fromUTF8(" · ") + deviceManager_.getCurrentAudioDeviceType()
-            + juce::String::fromUTF8(" · ") + juce::String(sr / 1000.0, 1) + juce::String::fromUTF8(" kHz · ") + juce::String(bs) + " smp", juce::dontSendNotification);
-        statusLabel_.setColour(juce::Label::textColourId, xruns == 0 ? juce::Colour(good) : juce::Colour(warning));
+        if (dawWorkspace_.isPlaying() && dawOutputUnavailable_.load(std::memory_order_relaxed))
+        {
+            statusLabel_.setText(juce::String::fromUTF8("NO HAY SALIDA DE AUDIO ACTIVA · PLAY no puede producir sonido"), juce::dontSendNotification);
+            statusLabel_.setColour(juce::Label::textColourId, juce::Colour(danger));
+        }
+        else if (dawWorkspace_.isPlaying() && dawOutputFallbackActive_.load(std::memory_order_relaxed))
+        {
+            statusLabel_.setText(juce::String::fromUTF8("PLAYBACK · salida guardada no disponible · usando salida activa de respaldo"), juce::dontSendNotification);
+            statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
+        }
+        else if (dawWorkspace_.isPlaying())
+        {
+            statusLabel_.setText(juce::String::fromUTF8("PLAYBACK · Mixer → PA L/R · ") + d->getName(), juce::dontSendNotification);
+            statusLabel_.setColour(juce::Label::textColourId, juce::Colour(good));
+        }
+        else
+        {
+            statusLabel_.setText("Audio: " + d->getName() + juce::String::fromUTF8(" · ") + deviceManager_.getCurrentAudioDeviceType()
+                + juce::String::fromUTF8(" · ") + juce::String(sr / 1000.0, 1) + juce::String::fromUTF8(" kHz · ") + juce::String(bs) + " smp", juce::dontSendNotification);
+            statusLabel_.setColour(juce::Label::textColourId, xruns == 0 ? juce::Colour(good) : juce::Colour(warning));
+        }
     }
     else
     {
@@ -3874,6 +4077,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
         && dawMixerScratch_.getNumSamples() >= numSamples;
     const bool dawAudible = playbackRouteReady && dawRunning && dawScratchReady;
     dawOutputFallbackActive_.store(dawRunning && playbackRouteReady && !safePa, std::memory_order_relaxed);
+    dawOutputUnavailable_.store(dawRunning && (!playbackRouteReady || !dawScratchReady), std::memory_order_relaxed);
     if (dawRunning && dawScratchReady)
     {
         dawMixerScratch_.clear(0, numSamples);
