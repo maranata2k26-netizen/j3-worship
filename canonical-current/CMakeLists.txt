@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 if(POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
-project(J3Worship VERSION 1.3.0 LANGUAGES C CXX)
+project(J3Worship VERSION 1.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,7 +71,7 @@ if(J3_BUILD_DESKTOP_APP)
     PRODUCT_NAME "J3 Worship"
     COMPANY_NAME "J3 Worship"
     BUNDLE_ID "com.j3worship.desktop"
-    VERSION "1.3.0"
+    VERSION "1.4.0"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/J3WorshipLogo.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/resources/J3WorshipLogo.png"
     NEEDS_CURL FALSE
