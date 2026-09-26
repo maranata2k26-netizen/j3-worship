@@ -253,6 +253,7 @@ private:
     std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginPaths_{};
     std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginNames_{};
     std::array<std::array<juce::String, kPluginSlots>, kMaxChannels> pluginStateBase64_{};
+    std::array<std::array<juce::Component::SafePointer<juce::DialogWindow>, kPluginSlots>, kMaxChannels> pluginEditorWindows_{};
     juce::AudioBuffer<float> pluginScratch_;
     juce::AudioBuffer<float> pluginGuardScratch_;
     juce::AudioBuffer<float> dawMixerScratch_;

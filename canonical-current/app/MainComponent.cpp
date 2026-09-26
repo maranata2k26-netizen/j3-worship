@@ -67,7 +67,8 @@ bool savedPluginKeyMatches(const juce::String& saved, const juce::PluginDescript
         || saved == description.fileOrIdentifier;
 }
 
-class GenericPluginEditorHolder final : public juce::Component
+class GenericPluginEditorHolder final : public juce::Component,
+                                            private juce::ComponentListener
 {
 public:
     explicit GenericPluginEditorHolder(std::shared_ptr<juce::AudioPluginInstance> plugin)
@@ -78,40 +79,75 @@ public:
         if (editor_ == nullptr && plugin_ != nullptr)
             editor_ = std::make_unique<juce::GenericAudioProcessorEditor>(*plugin_);
 
-        int maxWidth = 1180;
-        int maxHeight = 820;
-        if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
-        {
-            const auto work = display->userBounds;
-            const int workWidth = static_cast<int>(std::lround(work.getWidth()));
-            const int workHeight = static_cast<int>(std::lround(work.getHeight()));
-            maxWidth = std::max(420, std::min(1180, workWidth - 80));
-            maxHeight = std::max(320, std::min(820, workHeight - 100));
-        }
-
         if (editor_ != nullptr)
         {
             addAndMakeVisible(*editor_);
-            const int minWidth = std::min(520, maxWidth);
-            const int minHeight = std::min(420, maxHeight);
-            setSize(juce::jlimit(minWidth, maxWidth, editor_->getWidth()),
-                    juce::jlimit(minHeight, maxHeight, editor_->getHeight()));
+            editor_->addComponentListener(this);
+
+            // Respect the exact native VST3 editor size. Do not impose a large
+            // minimum and do not stretch fixed-size editors: both behaviours
+            // create the black/empty area seen with UADx and other plug-ins.
+            const int naturalWidth = std::max(1, editor_->getWidth());
+            const int naturalHeight = std::max(1, editor_->getHeight());
+            setSize(naturalWidth, naturalHeight);
+            editor_->setTopLeftPosition(0, 0);
         }
         else
         {
-            setSize(std::min(640, maxWidth), std::min(480, maxHeight));
+            setSize(640, 480);
         }
+    }
+
+    ~GenericPluginEditorHolder() override
+    {
+        if (editor_ != nullptr)
+            editor_->removeComponentListener(this);
+    }
+
+    bool editorAllowsHostResize() const noexcept
+    {
+        return editor_ != nullptr && editor_->isResizable();
     }
 
     void resized() override
     {
-        if (editor_ != nullptr)
+        if (editor_ == nullptr || syncingSize_)
+            return;
+
+        if (editor_->isResizable())
+        {
+            const juce::ScopedValueSetter<bool> guard(syncingSize_, true);
             editor_->setBounds(getLocalBounds());
+        }
+        else
+        {
+            // Fixed-size plug-ins keep their own native dimensions exactly.
+            editor_->setTopLeftPosition(0, 0);
+        }
     }
 
 private:
+    void componentMovedOrResized(juce::Component& component,
+                                 bool /*wasMoved*/,
+                                 bool wasResized) override
+    {
+        if (!wasResized || &component != editor_.get() || syncingSize_)
+            return;
+
+        const int width = std::max(1, editor_->getWidth());
+        const int height = std::max(1, editor_->getHeight());
+        if (getWidth() == width && getHeight() == height)
+            return;
+
+        const juce::ScopedValueSetter<bool> guard(syncingSize_, true);
+        setSize(width, height);
+        if (auto* window = findParentComponentOfClass<juce::DialogWindow>())
+            window->centreAroundComponent(nullptr, window->getWidth(), window->getHeight());
+    }
+
     std::shared_ptr<juce::AudioPluginInstance> plugin_;
     std::unique_ptr<juce::AudioProcessorEditor> editor_;
+    bool syncingSize_ { false };
 };
 
 class NativeEqEditor final : public juce::Component
@@ -4200,6 +4236,9 @@ void MainComponent::removeSelectedPlugin()
 
     const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
     const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    if (auto* editorWindow = pluginEditorWindows_[ch][slot].getComponent())
+        editorWindow->exitModalState(0);
+    pluginEditorWindows_[ch][slot] = nullptr;
     channelPlugins_[ch][slot].store({}, std::memory_order_release);
     pluginPaths_[ch][slot].clear();
     pluginNames_[ch][slot].clear();
@@ -4227,6 +4266,13 @@ void MainComponent::moveSelectedPlugin(int delta)
         return;
 
     saveAppState(true);
+
+    if (auto* window = pluginEditorWindows_[ch][from].getComponent())
+        window->exitModalState(0);
+    if (auto* window = pluginEditorWindows_[ch][to].getComponent())
+        window->exitModalState(0);
+    pluginEditorWindows_[ch][from] = nullptr;
+    pluginEditorWindows_[ch][to] = nullptr;
 
     auto fromPlugin = channelPlugins_[ch][from].load(std::memory_order_acquire);
     auto toPlugin = channelPlugins_[ch][to].load(std::memory_order_acquire);
@@ -4257,6 +4303,16 @@ void MainComponent::openPluginEditorForSlot(int channel, int slot)
     if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots)
         return;
 
+    // FL-style behaviour: one window per FX slot. Re-clicking an already-open
+    // plug-in is instant and simply brings the existing native editor forward.
+    if (auto* existing = pluginEditorWindows_[channel][slot].getComponent())
+    {
+        existing->setVisible(true);
+        existing->toFront(true);
+        existing->grabKeyboardFocus();
+        return;
+    }
+
     auto plugin = channelPlugins_[channel][slot].load(std::memory_order_acquire);
     if (plugin == nullptr)
     {
@@ -4267,18 +4323,23 @@ void MainComponent::openPluginEditorForSlot(int channel, int slot)
     }
 
     auto holder = std::make_unique<GenericPluginEditorHolder>(plugin);
+    const bool editorResizable = holder->editorAllowsHostResize();
+
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(holder.release());
     options.dialogTitle = juce::String::fromUTF8("J3 Worship · ") + plugin->getName();
     options.dialogBackgroundColour = juce::Colour(panel);
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
-    options.resizable = true;
+    options.resizable = editorResizable;
     options.componentToCentreAround = this;
 
     if (auto* window = options.launchAsync())
     {
+        pluginEditorWindows_[channel][slot] = window;
         window->setAlwaysOnTop(true);
+        window->setResizeLimits(220, 120, 4096, 4096);
+        window->centreAroundComponent(this, window->getWidth(), window->getHeight());
         window->setVisible(true);
         window->toFront(true);
         window->grabKeyboardFocus();
