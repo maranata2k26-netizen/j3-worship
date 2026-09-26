@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
+#include <optional>
 
 namespace
 {
@@ -37,6 +39,240 @@ float equalPowerFade(double normalized) noexcept
 {
     const auto t = juce::jlimit(0.0, 1.0, normalized);
     return static_cast<float>(std::sin(t * juce::MathConstants<double>::halfPi));
+}
+
+std::vector<int> detectTransientSamples(const juce::AudioBuffer<float>& audio, double sampleRate)
+{
+    std::vector<int> result;
+    const int samples = audio.getNumSamples();
+    const int channels = audio.getNumChannels();
+    if (samples < 128 || channels <= 0 || sampleRate <= 0.0)
+        return result;
+
+    const int block = juce::jlimit(64, 1024, static_cast<int>(std::llround(sampleRate * 0.006)));
+    const int blockCount = (samples + block - 1) / block;
+    if (blockCount < 3)
+        return result;
+
+    std::vector<float> energy(static_cast<std::size_t>(blockCount), 0.0f);
+    std::vector<float> flux(static_cast<std::size_t>(blockCount), 0.0f);
+
+    for (int b = 0; b < blockCount; ++b)
+    {
+        const int start = b * block;
+        const int end = std::min(samples, start + block);
+        double sum = 0.0;
+        std::int64_t count = 0;
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            const auto* src = audio.getReadPointer(ch);
+            for (int i = start; i < end; ++i)
+            {
+                const double v = src[i];
+                sum += v * v;
+                ++count;
+            }
+        }
+        energy[static_cast<std::size_t>(b)] = count > 0
+            ? static_cast<float>(std::sqrt(sum / static_cast<double>(count))) : 0.0f;
+    }
+
+    double fluxSum = 0.0;
+    for (int b = 1; b < blockCount; ++b)
+    {
+        const float current = energy[static_cast<std::size_t>(b)];
+        const float previous = energy[static_cast<std::size_t>(b - 1)];
+        const float value = std::max(0.0f, current - previous * 0.82f);
+        flux[static_cast<std::size_t>(b)] = value;
+        fluxSum += value;
+    }
+
+    const float meanFlux = static_cast<float>(fluxSum / std::max(1, blockCount - 1));
+    const float threshold = std::max(1.0e-5f, meanFlux * 2.35f);
+    const int minGap = std::max(block, static_cast<int>(std::llround(sampleRate * 0.055)));
+    int last = -minGap;
+
+    for (int b = 1; b + 1 < blockCount; ++b)
+    {
+        const float value = flux[static_cast<std::size_t>(b)];
+        if (value < threshold
+            || value < flux[static_cast<std::size_t>(b - 1)]
+            || value < flux[static_cast<std::size_t>(b + 1)])
+            continue;
+
+        const int sample = b * block;
+        if (sample - last < minGap)
+        {
+            if (!result.empty())
+            {
+                const int oldBlock = result.back() / block;
+                if (value > flux[static_cast<std::size_t>(juce::jlimit(0, blockCount - 1, oldBlock))])
+                {
+                    result.back() = sample;
+                    last = sample;
+                }
+            }
+            continue;
+        }
+
+        result.push_back(sample);
+        last = sample;
+    }
+
+    return result;
+}
+
+std::optional<double> estimateTempoFromTransients(const std::vector<int>& transientSamples, double sampleRate)
+{
+    if (transientSamples.size() < 3 || sampleRate <= 0.0)
+        return std::nullopt;
+
+    std::vector<double> bpms;
+    bpms.reserve(transientSamples.size() - 1);
+    for (std::size_t i = 1; i < transientSamples.size(); ++i)
+    {
+        const double seconds = static_cast<double>(transientSamples[i] - transientSamples[i - 1]) / sampleRate;
+        if (seconds < 0.12 || seconds > 2.5)
+            continue;
+
+        double candidate = 60.0 / seconds;
+        while (candidate < 70.0) candidate *= 2.0;
+        while (candidate > 180.0) candidate *= 0.5;
+        if (candidate >= 70.0 && candidate <= 180.0)
+            bpms.push_back(candidate);
+    }
+
+    if (bpms.size() < 2)
+        return std::nullopt;
+
+    std::sort(bpms.begin(), bpms.end());
+    const auto mid = bpms.size() / 2;
+    return bpms.size() % 2 == 0 ? (bpms[mid - 1] + bpms[mid]) * 0.5 : bpms[mid];
+}
+
+std::optional<juce::AudioBuffer<float>> stretchWsola(const juce::AudioBuffer<float>& input,
+                                                      double factor,
+                                                      double sampleRate)
+{
+    const int channels = input.getNumChannels();
+    const int inputSamples = input.getNumSamples();
+    if (channels <= 0 || inputSamples < 128 || sampleRate <= 0.0
+        || factor < 0.5 || factor > 2.0)
+        return std::nullopt;
+
+    const auto outputSamples64 = static_cast<std::int64_t>(std::llround(inputSamples * factor));
+    if (outputSamples64 <= 0 || outputSamples64 > std::numeric_limits<int>::max())
+        return std::nullopt;
+    const int outputSamples = static_cast<int>(outputSamples64);
+
+    if (std::abs(factor - 1.0) < 1.0e-4)
+    {
+        juce::AudioBuffer<float> copy(channels, inputSamples);
+        for (int ch = 0; ch < channels; ++ch)
+            copy.copyFrom(ch, 0, input, ch, 0, inputSamples);
+        return copy;
+    }
+
+    int window = juce::jlimit(256, 4096, static_cast<int>(std::llround(sampleRate * 0.040)));
+    window = std::min(window, inputSamples);
+    if ((window & 1) != 0) --window;
+    if (window < 128)
+        return std::nullopt;
+
+    const int synthesisHop = std::max(32, window / 2);
+    const int overlap = window - synthesisHop;
+    const int searchRadius = std::max(16, window / 4);
+    const double analysisHop = static_cast<double>(synthesisHop) / factor;
+    const int maxInputStart = std::max(0, inputSamples - window);
+
+    juce::AudioBuffer<float> output(channels, outputSamples);
+    output.clear();
+    const int initialCopy = std::min(window, outputSamples);
+    for (int ch = 0; ch < channels; ++ch)
+        output.copyFrom(ch, 0, input, ch, 0, initialCopy);
+
+    auto monoAt = [&](int sample)
+    {
+        sample = juce::jlimit(0, inputSamples - 1, sample);
+        double sum = 0.0;
+        for (int ch = 0; ch < channels; ++ch)
+            sum += input.getSample(ch, sample);
+        return static_cast<float>(sum / channels);
+    };
+
+    int previousAnalysis = 0;
+    for (int outputStart = synthesisHop; outputStart < outputSamples; outputStart += synthesisHop)
+    {
+        const int expected = juce::jlimit(0, maxInputStart,
+            static_cast<int>(std::llround(previousAnalysis + analysisHop)));
+        const int minCandidate = juce::jlimit(0, maxInputStart, expected - searchRadius);
+        const int maxCandidate = juce::jlimit(0, maxInputStart, expected + searchRadius);
+
+        auto correlation = [&](int candidate)
+        {
+            double dot = 0.0, aa = 0.0, bb = 0.0;
+            const int previousTail = std::min(inputSamples - overlap, previousAnalysis + synthesisHop);
+            const int stride = overlap > 1024 ? 4 : (overlap > 512 ? 2 : 1);
+            for (int n = 0; n < overlap; n += stride)
+            {
+                const double a = monoAt(previousTail + n);
+                const double b = monoAt(candidate + n);
+                dot += a * b;
+                aa += a * a;
+                bb += b * b;
+            }
+            const double denom = std::sqrt(aa * bb);
+            return denom > 1.0e-10 ? dot / denom : -1.0;
+        };
+
+        int best = expected;
+        double bestScore = -2.0;
+        const int searchStep = std::max(1, searchRadius / 64);
+        for (int candidate = minCandidate; candidate <= maxCandidate; candidate += searchStep)
+        {
+            const double score = correlation(candidate);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+
+        const int refineStart = std::max(minCandidate, best - searchStep);
+        const int refineEnd = std::min(maxCandidate, best + searchStep);
+        for (int candidate = refineStart; candidate <= refineEnd; ++candidate)
+        {
+            const double score = correlation(candidate);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+
+        const int availableInput = std::min(window, inputSamples - best);
+        const int availableOutput = std::min(window, outputSamples - outputStart);
+        const int frameSamples = std::min(availableInput, availableOutput);
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            auto* dst = output.getWritePointer(ch);
+            const auto* src = input.getReadPointer(ch);
+            const int blendSamples = std::min(overlap, frameSamples);
+            for (int n = 0; n < blendSamples; ++n)
+            {
+                const float w = blendSamples > 1
+                    ? static_cast<float>(n) / static_cast<float>(blendSamples - 1) : 1.0f;
+                dst[outputStart + n] = dst[outputStart + n] * (1.0f - w) + src[best + n] * w;
+            }
+            if (frameSamples > blendSamples)
+                std::copy(src + best + blendSamples, src + best + frameSamples,
+                          dst + outputStart + blendSamples);
+        }
+
+        previousAnalysis = best;
+    }
+
+    return output;
 }
 
 bool writeFloatWav(const juce::File& file, const juce::AudioBuffer<float>& audio, double sampleRate)
@@ -682,6 +918,25 @@ void DawWorkspace::paint(juce::Graphics& g)
                     const float x = wave.getX() + static_cast<float>(px);
                     g.drawVerticalLine(static_cast<int>(x), wave.getCentreY() - h, wave.getCentreY() + h);
                 }
+
+                if (selected && clip.audio->transientsAnalyzed && wantedSource > 1.0)
+                {
+                    g.setColour(juce::Colour(0xff7ce7ff).withAlpha(0.82f));
+                    int drawn = 0;
+                    for (const int transient : clip.audio->transientSamples)
+                    {
+                        double u = (static_cast<double>(transient) - sourceStart) / wantedSource;
+                        if (clip.reversed) u = 1.0 - u;
+                        if (u < 0.0 || u > 1.0)
+                            continue;
+                        const float x = wave.getX() + static_cast<float>(u) * wave.getWidth();
+                        g.drawVerticalLine(static_cast<int>(x), wave.getY(), wave.getBottom());
+                        juce::Path marker;
+                        marker.addTriangle(x - 3.5f, wave.getY(), x + 3.5f, wave.getY(), x, wave.getY() + 5.0f);
+                        g.fillPath(marker);
+                        if (++drawn >= 96) break;
+                    }
+                }
             }
         }
 
@@ -1179,6 +1434,16 @@ void DawWorkspace::showContextMenu(juce::Point<int> point)
         menu.addItem(8, "Reverse");
         menu.addItem(9, "Crossfade con clip solapado");
         menu.addItem(15, "Bounce in place");
+
+        juce::PopupMenu stretchMenu;
+        stretchMenu.addItem(20, "50%  ·  2x faster");
+        stretchMenu.addItem(21, "75%");
+        stretchMenu.addItem(22, "125%");
+        stretchMenu.addItem(23, "150%");
+        stretchMenu.addItem(24, "200%  ·  2x longer");
+        menu.addSubMenu(L"Time Stretch · PITCH LOCK", stretchMenu);
+        menu.addItem(25, L"Detectar transientes / Warp Markers");
+        menu.addItem(26, L"AUTO WARP al BPM del proyecto");
         menu.addItem(5, "Fit Selection");
         menu.addSeparator();
         menu.addItem(6, "Eliminar");
@@ -1229,6 +1494,13 @@ void DawWorkspace::showContextMenu(juce::Point<int> point)
                 case 8: safe->reverseSelectedClip(); break;
                 case 9: safe->crossfadeSelectedClip(); break;
                 case 15: safe->bounceSelectedClip(); break;
+                case 20: safe->timeStretchSelectedClip(0.50); break;
+                case 21: safe->timeStretchSelectedClip(0.75); break;
+                case 22: safe->timeStretchSelectedClip(1.25); break;
+                case 23: safe->timeStretchSelectedClip(1.50); break;
+                case 24: safe->timeStretchSelectedClip(2.00); break;
+                case 25: safe->detectTransientsSelectedClip(); break;
+                case 26: safe->autoWarpSelectedClip(); break;
                 case 10: safe->trackNameEditor_.grabKeyboardFocus(); safe->trackNameEditor_.selectAll(); break;
                 case 11: safe->checkpointUndo(); safe->addTrack(); break;
                 case 12: safe->checkpointUndo(); safe->addMidiTrack(); break;
@@ -1688,6 +1960,7 @@ bool DawWorkspace::keyPressed(const juce::KeyPress& key)
     if (mods.isCommandDown() && code == 'D') { duplicateSelectedClip(); return true; }
     if (mods.isCommandDown() && code == 'B') { bounceSelectedClip(); return true; }
     if (mods.isCommandDown() && mods.isShiftDown() && code == 'F') { crossfadeSelectedClip(); return true; }
+    if (mods.isCommandDown() && mods.isAltDown() && code == 'W') { autoWarpSelectedClip(); return true; }
     if (mods.isCommandDown() && code == 'Z' && !mods.isShiftDown()) { undo(); return true; }
     if ((mods.isCommandDown() && code == 'Y') || (mods.isCommandDown() && mods.isShiftDown() && code == 'Z')) { redo(); return true; }
     return false;
@@ -2221,6 +2494,193 @@ void DawWorkspace::bounceSelectedClip()
     syncInspector();
     repaint();
     refreshStatus(L"Bounce in place listo · " + file.getFileName());
+}
+
+void DawWorkspace::detectTransientsSelectedClip()
+{
+    auto* clip = clipAt({ -1, -1 });
+    if (clip == nullptr || clip->audio == nullptr)
+    {
+        refreshStatus(L"Transientes: seleccioná un clip de audio.");
+        return;
+    }
+
+    auto& audio = *clip->audio;
+    audio.transientSamples = detectTransientSamples(audio.samples, audio.sampleRate);
+    audio.transientsAnalyzed = true;
+    repaint();
+
+    refreshStatus(L"Transientes listos · "
+        + juce::String(static_cast<int>(audio.transientSamples.size()))
+        + L" Warp Markers detectados");
+}
+
+void DawWorkspace::timeStretchSelectedClip(double factor)
+{
+    factor = juce::jlimit(0.5, 2.0, factor);
+    auto* clip = clipAt({ -1, -1 });
+    if (clip == nullptr || clip->audio == nullptr)
+    {
+        refreshStatus(L"Time Stretch: seleccioná un clip de audio.");
+        return;
+    }
+
+    const auto& source = clip->audio->samples;
+    const int sourceSamples = source.getNumSamples();
+    const int channels = source.getNumChannels();
+    const double sourceRate = std::max(1.0, clip->audio->sampleRate);
+    const double durationSeconds = clip->lengthBeats * 60.0 / std::max(1.0, bpm());
+    const auto inputSamples64 = static_cast<std::int64_t>(std::llround(durationSeconds * sourceRate));
+    if (sourceSamples <= 0 || channels <= 0 || inputSamples64 < 128
+        || inputSamples64 > std::numeric_limits<int>::max())
+    {
+        refreshStatus(L"Time Stretch: el clip es demasiado corto o inválido.");
+        return;
+    }
+
+    const auto outputSamples64 = static_cast<std::int64_t>(std::llround(inputSamples64 * factor));
+    const std::int64_t estimatedBytes = outputSamples64 * channels * static_cast<std::int64_t>(sizeof(float));
+    if (outputSamples64 <= 0 || outputSamples64 > std::numeric_limits<int>::max()
+        || estimatedBytes > 512LL * 1024LL * 1024LL)
+    {
+        refreshStatus(L"Time Stretch: el resultado sería demasiado grande. Dividí el clip y procesalo por partes.");
+        return;
+    }
+
+    const int inputSamples = static_cast<int>(inputSamples64);
+    juce::AudioBuffer<float> current(channels, inputSamples);
+    current.clear();
+    const double sourceOffset = clip->sourceOffsetSeconds * sourceRate;
+    for (int sample = 0; sample < inputSamples; ++sample)
+    {
+        const int mappedLocal = clip->reversed ? (inputSamples - 1 - sample) : sample;
+        double sourcePosition = sourceOffset + static_cast<double>(mappedLocal);
+        if (clip->loop)
+        {
+            sourcePosition = std::fmod(sourcePosition, static_cast<double>(sourceSamples));
+            if (sourcePosition < 0.0) sourcePosition += sourceSamples;
+        }
+        else if (sourcePosition < 0.0 || sourcePosition >= sourceSamples - 1)
+        {
+            continue;
+        }
+
+        const int i0 = juce::jlimit(0, sourceSamples - 1, static_cast<int>(sourcePosition));
+        const int i1 = std::min(sourceSamples - 1, i0 + 1);
+        const float frac = static_cast<float>(sourcePosition - i0);
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            const float a = source.getSample(ch, i0);
+            const float b = source.getSample(ch, i1);
+            current.setSample(ch, sample, a + (b - a) * frac);
+        }
+    }
+
+    refreshStatus(L"Time Stretch · procesando con PITCH LOCK…");
+    auto stretched = stretchWsola(current, factor, sourceRate);
+    if (!stretched.has_value())
+    {
+        refreshStatus(L"Time Stretch: no se pudo procesar el clip.");
+        return;
+    }
+
+    auto root = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+        .getChildFile("J3 Worship").getChildFile("DAW Warps");
+    root.createDirectory();
+    const auto sourceName = juce::File(clip->audio->path).getFileNameWithoutExtension();
+    const auto stamp = juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S");
+    const auto percent = static_cast<int>(std::llround(factor * 100.0));
+    const auto fileName = juce::File::createLegalFileName(
+        (sourceName.isNotEmpty() ? sourceName : "Clip") + "-stretch-"
+        + juce::String(percent) + "-" + stamp + "-" + juce::String(clip->id) + ".wav");
+    const auto file = root.getChildFile(fileName);
+
+    if (!writeFloatWav(file, *stretched, sourceRate))
+    {
+        refreshStatus(L"Time Stretch: no se pudo escribir el WAV procesado.");
+        return;
+    }
+
+    juce::String error;
+    auto* stretchedAudio = loadAudioFile(file, error);
+    if (stretchedAudio == nullptr)
+    {
+        refreshStatus(L"Time Stretch: " + error);
+        return;
+    }
+
+    checkpointUndo();
+    clip->audio = stretchedAudio;
+    clip->sourceOffsetSeconds = 0.0;
+    clip->loop = false;
+    clip->reversed = false;
+    clip->lengthBeats = std::max(0.05, clip->lengthBeats * factor);
+    projectDirty_ = true;
+    markRenderDirty();
+    syncInspector();
+    repaint();
+    refreshStatus(L"Time Stretch PITCH LOCK listo · " + juce::String(percent) + "%");
+}
+
+void DawWorkspace::autoWarpSelectedClip()
+{
+    auto* clip = clipAt({ -1, -1 });
+    if (clip == nullptr || clip->audio == nullptr)
+    {
+        refreshStatus(L"Auto Warp: seleccioná un clip de audio.");
+        return;
+    }
+
+    auto& audio = *clip->audio;
+    if (!audio.transientsAnalyzed)
+    {
+        audio.transientSamples = detectTransientSamples(audio.samples, audio.sampleRate);
+        audio.transientsAnalyzed = true;
+    }
+
+    const double sourceStart = clip->sourceOffsetSeconds * audio.sampleRate;
+    const double sourceSpan = clip->lengthBeats * 60.0 / std::max(1.0, bpm()) * audio.sampleRate;
+    std::vector<int> local;
+    local.reserve(audio.transientSamples.size());
+    for (const int sample : audio.transientSamples)
+    {
+        if (sample >= sourceStart && sample <= sourceStart + sourceSpan)
+            local.push_back(static_cast<int>(sample - sourceStart));
+    }
+    if (local.size() < 3)
+        local = audio.transientSamples;
+
+    const auto sourceTempo = estimateTempoFromTransients(local, audio.sampleRate);
+    if (!sourceTempo.has_value())
+    {
+        refreshStatus(L"Auto Warp: no hay suficientes transientes claros para estimar el BPM.");
+        repaint();
+        return;
+    }
+
+    const double projectTempo = std::max(1.0, bpm());
+    const double factor = *sourceTempo / projectTempo;
+    if (factor < 0.5 || factor > 2.0)
+    {
+        refreshStatus(L"Auto Warp: el cambio requerido supera el rango seguro 50–200%.");
+        repaint();
+        return;
+    }
+
+    auto* before = clip->audio;
+    const int clipId = clip->id;
+    timeStretchSelectedClip(factor);
+    for (auto& candidate : clips_)
+    {
+        if (candidate.id != clipId) continue;
+        if (candidate.audio != before)
+        {
+            refreshStatus(L"AUTO WARP listo · detectado "
+                + juce::String(*sourceTempo, 1) + " BPM → proyecto "
+                + juce::String(projectTempo, 1) + " BPM · PITCH LOCK");
+        }
+        break;
+    }
 }
 
 void DawWorkspace::togglePlay()
