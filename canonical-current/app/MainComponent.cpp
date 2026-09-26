@@ -3859,8 +3859,8 @@ void MainComponent::refreshPluginUi()
             i == slot ? juce::Colour(accentDeep) : juce::Colour(occupied ? 0xff173246 : panel3));
     }
 
-    nativeEqButton_.setButtonText("J3 PARAMETRIC EQ  |  NATIVE  |  PRE-FX");
-    pluginBrowserTitle_.setText("ADVANCED PLUGIN MANAGER | SLOT " + juce::String(slot + 1),
+    nativeEqButton_.setButtonText("J3 EQ  |  NATIVE  |  PRE-FX");
+    pluginBrowserTitle_.setText("PLUGINS  |  SLOT " + juce::String(slot + 1),
         juce::dontSendNotification);
 
     auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
