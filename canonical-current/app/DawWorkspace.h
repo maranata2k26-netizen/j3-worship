@@ -206,6 +206,8 @@ private:
     void splitSelectedClipAtPlayhead();
     void normalizeSelectedClip();
     void reverseSelectedClip();
+    void crossfadeSelectedClip();
+    void bounceSelectedClip();
     void stopTransport(bool returnToStart);
     void togglePlay();
     void setTransportBeat(double beat) noexcept;
