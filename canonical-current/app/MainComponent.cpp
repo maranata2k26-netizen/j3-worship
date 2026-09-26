@@ -1917,7 +1917,28 @@ MainComponent::MainComponent()
         {
             if (safe != nullptr) safe->showFirstRunSetup();
         });
-    checkForUpdatesAsync();
+
+    if (const auto updateError = j3ui::UpdateService::consumeLastUpdateError(); updateError.has_value())
+    {
+        updateButton_.setButtonText(juce::String::fromUTF8("REINTENTAR"));
+        updateButton_.setTooltip(*updateError);
+        updateButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(warning).darker(0.45f));
+        juce::MessageManager::callAsync(
+            [safe = juce::Component::SafePointer<MainComponent>(this), message = *updateError]
+            {
+                if (safe == nullptr)
+                    return;
+                juce::AlertWindow::showMessageBoxAsync(
+                    juce::MessageBoxIconType::WarningIcon,
+                    juce::String::fromUTF8("La actualización no se instaló"),
+                    message + juce::String::fromUTF8(
+                        "\n\nJ3 no va a entrar en un bucle. Tocá REINTENTAR cuando quieras volver a probar."));
+            });
+    }
+    else
+    {
+        checkForUpdatesAsync();
+    }
 }
 
 MainComponent::~MainComponent()
@@ -2277,7 +2298,8 @@ void MainComponent::beginUpdateInstall()
         }
 
         juce::String error;
-        if (!j3ui::UpdateService::launchInstallerAndRestart(downloadedUpdateInstaller_, error))
+        if (!j3ui::UpdateService::launchInstallerAndRestart(
+                downloadedUpdateInstaller_, availableUpdate_->versionText, error))
         {
             showAudioError(error);
             return;
@@ -2322,7 +2344,8 @@ void MainComponent::beginUpdateInstall()
                 return;
 
             juce::String launchError;
-            if (!j3ui::UpdateService::launchInstallerAndRestart(installer, launchError))
+            if (!j3ui::UpdateService::launchInstallerAndRestart(
+                    installer, update.versionText, launchError))
             {
                 safe->showAudioError(launchError);
                 return;
