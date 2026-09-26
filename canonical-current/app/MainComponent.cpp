@@ -1377,17 +1377,31 @@ MainComponent::MainComponent()
     for (int slot = 0; slot < kPluginSlots; ++slot)
     {
         auto button = std::make_unique<juce::TextButton>();
-        button->setTooltip("FX slot estilo FL Studio: si hay un plugin cargado, un click abre su interfaz. Si está vacío, selecciona el slot para elegir un VST3.");
+        button->setTooltip("Un click abre este plugin, igual que un slot de FX en FL Studio. Si el slot todavía se está restaurando, J3 lo carga y lo abre apenas queda listo.");
+        button->setMouseCursor(juce::MouseCursor::PointingHandCursor);
         button->setClickingTogglesState(false);
         button->onClick = [this, slot]
         {
             const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
             pluginSlotBox_.setSelectedId(slot + 1, juce::dontSendNotification);
-            refreshPluginUi();
 
             if (channelPlugins_[ch][slot].load(std::memory_order_acquire) != nullptr)
             {
-                openSelectedPluginEditor();
+                refreshPluginUi();
+                openPluginEditorForSlot(ch, slot);
+                return;
+            }
+
+            const auto savedPlugin = pluginPaths_[ch][slot];
+            refreshPluginUi();
+            if (savedPlugin.isNotEmpty())
+            {
+                pluginStatusLabel_.setText(
+                    juce::String::fromUTF8("Abriendo ") +
+                    (pluginNames_[ch][slot].isNotEmpty() ? pluginNames_[ch][slot] : juce::String("plugin"))
+                    + "...",
+                    juce::dontSendNotification);
+                loadPluginPathIntoSlot(savedPlugin, ch, slot, true);
                 return;
             }
 
@@ -4056,7 +4070,7 @@ void MainComponent::loadSelectedPlugin()
     loadPluginDescriptionIntoSlot(description, ch, slot, true);
 }
 
-void MainComponent::loadPluginPathIntoSlot(const juce::String& savedKey, int channel, int slot)
+void MainComponent::loadPluginPathIntoSlot(const juce::String& savedKey, int channel, int slot, bool openEditorAfterLoad)
 {
     if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots || savedKey.isEmpty())
         return;
@@ -4068,7 +4082,7 @@ void MainComponent::loadPluginPathIntoSlot(const juce::String& savedKey, int cha
                 || pluginNames_[channel][slot].equalsIgnoreCase(description.name));
         if (savedPluginKeyMatches(savedKey, description) && (savedKey != description.fileOrIdentifier || legacyNameMatches))
         {
-            loadPluginDescriptionIntoSlot(description, channel, slot);
+            loadPluginDescriptionIntoSlot(description, channel, slot, openEditorAfterLoad);
             return;
         }
     }
@@ -4104,7 +4118,7 @@ void MainComponent::loadPluginPathIntoSlot(const juce::String& savedKey, int cha
         }
     }
 
-    loadPluginDescriptionIntoSlot(description, channel, slot);
+    loadPluginDescriptionIntoSlot(description, channel, slot, openEditorAfterLoad);
 }
 
 void MainComponent::loadPluginDescriptionIntoSlot(const juce::PluginDescription& description,
@@ -4172,7 +4186,7 @@ void MainComponent::loadPluginDescriptionIntoSlot(const juce::PluginDescription&
             safe->saveAppState();
 
             if (openEditorAfterLoad)
-                safe->openSelectedPluginEditor();
+                safe->openPluginEditorForSlot(channel, slot);
         });
 }
 
@@ -4238,13 +4252,19 @@ void MainComponent::moveSelectedPlugin(int delta)
     refreshPluginUi();
 }
 
-void MainComponent::openSelectedPluginEditor()
+void MainComponent::openPluginEditorForSlot(int channel, int slot)
 {
-    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
-    const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
-    auto plugin = channelPlugins_[ch][slot].load(std::memory_order_acquire);
-    if (plugin == nullptr)
+    if (channel < 0 || channel >= kMaxChannels || slot < 0 || slot >= kPluginSlots)
         return;
+
+    auto plugin = channelPlugins_[channel][slot].load(std::memory_order_acquire);
+    if (plugin == nullptr)
+    {
+        const auto savedPlugin = pluginPaths_[channel][slot];
+        if (savedPlugin.isNotEmpty())
+            loadPluginPathIntoSlot(savedPlugin, channel, slot, true);
+        return;
+    }
 
     auto holder = std::make_unique<GenericPluginEditorHolder>(plugin);
     juce::DialogWindow::LaunchOptions options;
@@ -4255,7 +4275,21 @@ void MainComponent::openSelectedPluginEditor()
     options.useNativeTitleBar = true;
     options.resizable = true;
     options.componentToCentreAround = this;
-    options.launchAsync();
+
+    if (auto* window = options.launchAsync())
+    {
+        window->setAlwaysOnTop(true);
+        window->setVisible(true);
+        window->toFront(true);
+        window->grabKeyboardFocus();
+    }
+}
+
+void MainComponent::openSelectedPluginEditor()
+{
+    const int ch = juce::jlimit(0, kMaxChannels - 1, pluginChannelBox_.getSelectedId() - 1);
+    const int slot = juce::jlimit(0, kPluginSlots - 1, pluginSlotBox_.getSelectedId() - 1);
+    openPluginEditorForSlot(ch, slot);
 }
 
 const float* MainComponent::processPluginChain(int channel, const float* input, int numSamples) noexcept

@@ -157,9 +157,10 @@ private:
     void paintListBoxItem(int rowNumber, juce::Graphics&, int width, int height, bool rowIsSelected) override;
     void selectedRowsChanged(int lastRowSelected) override;
     void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override;
-    void loadPluginPathIntoSlot(const juce::String& path, int channel, int slot);
+    void loadPluginPathIntoSlot(const juce::String& path, int channel, int slot, bool openEditorAfterLoad = false);
     void removeSelectedPlugin();
     void moveSelectedPlugin(int delta);
+    void openPluginEditorForSlot(int channel, int slot);
     void openSelectedPluginEditor();
     void restoreSavedPluginsAfterScan();
     bool pluginMutationLocked() const noexcept;
