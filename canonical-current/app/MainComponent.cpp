@@ -3856,6 +3856,7 @@ void MainComponent::updateDiagnostics()
                << " SAFE ROUTING\n    PA L " << (paLeft_.load() + 1) << juce::String::fromUTF8("  ·  PA R ") << (paRight_.load() + 1)
                << juce::String::fromUTF8("  ·  CLICK ") << (clickOutput_.load() < 0 ? juce::String("OFF") : juce::String(clickOutput_.load() + 1)) << "\n\n";
 
+        bool allRoutedInsertsBlocked = false;
         if (dawWorkspace_.isPlaying())
         {
             if (dawOutputUnavailable_.load(std::memory_order_relaxed))
@@ -3864,6 +3865,50 @@ void MainComponent::updateDiagnostics()
                 report << juce::String::fromUTF8("⚠ DAW PLAYBACK\n    La salida PA guardada no está activa. J3 está usando automáticamente una salida activa de respaldo.\n\n");
             else
                 report << juce::String::fromUTF8("✓ DAW PLAYBACK\n    Mixer → PA L/R activo.\n\n");
+
+            int routedInsertCount = 0;
+            int blockedInsertCount = 0;
+            juce::StringArray blockedReasons;
+            for (int ch = 0; ch < kMaxChannels; ++ch)
+            {
+                const auto routedName = dawWorkspace_.mixerInsertName(ch);
+                if (routedName.isEmpty())
+                    continue;
+
+                ++routedInsertCount;
+                juce::String reason;
+                if (channelMute_[ch].load(std::memory_order_relaxed))
+                    reason = "MUTE";
+                else if (channelGain_[ch].load(std::memory_order_relaxed) <= 1.0e-5f)
+                    reason = "FADER -INF";
+                else
+                {
+                    const int dca = channelDca_[ch].load(std::memory_order_relaxed);
+                    const int bus = channelBus_[ch].load(std::memory_order_relaxed);
+                    if (dca >= 0 && dca < kDcas && dcaMute_[dca].load(std::memory_order_relaxed))
+                        reason = "DCA " + juce::String(dca + 1) + " MUTED";
+                    else if (bus >= 0 && bus < kBuses && busMute_[bus].load(std::memory_order_relaxed))
+                        reason = "BUS " + juce::String(bus + 1) + " MUTED";
+                }
+
+                if (reason.isNotEmpty())
+                {
+                    ++blockedInsertCount;
+                    blockedReasons.add("Insert " + juce::String(ch + 1) + " · " + routedName + " · " + reason);
+                }
+            }
+
+            if (masterGain_.load(std::memory_order_relaxed) <= 1.0e-5f)
+            {
+                report << juce::String::fromUTF8("✕ MASTER\n    El MASTER está en silencio. Subí el master para escuchar el proyecto.\n\n");
+                allRoutedInsertsBlocked = routedInsertCount > 0;
+            }
+            else if (!blockedReasons.isEmpty())
+            {
+                allRoutedInsertsBlocked = routedInsertCount > 0 && blockedInsertCount == routedInsertCount;
+                report << (allRoutedInsertsBlocked ? juce::String::fromUTF8("✕") : juce::String::fromUTF8("⚠"))
+                       << " MUTED ROUTES\n    " << blockedReasons.joinIntoString("\n    ") << "\n\n";
+            }
         }
         else
         {
@@ -3877,6 +3922,11 @@ void MainComponent::updateDiagnostics()
         if (dawWorkspace_.isPlaying() && dawOutputUnavailable_.load(std::memory_order_relaxed))
         {
             statusLabel_.setText(juce::String::fromUTF8("NO HAY SALIDA DE AUDIO ACTIVA · PLAY no puede producir sonido"), juce::dontSendNotification);
+            statusLabel_.setColour(juce::Label::textColourId, juce::Colour(danger));
+        }
+        else if (dawWorkspace_.isPlaying() && allRoutedInsertsBlocked)
+        {
+            statusLabel_.setText(juce::String::fromUTF8("PLAYBACK SILENCIADO · revisá MUTE / FADER / BUS / DCA en el mixer"), juce::dontSendNotification);
             statusLabel_.setColour(juce::Label::textColourId, juce::Colour(danger));
         }
         else if (dawWorkspace_.isPlaying() && dawOutputFallbackActive_.load(std::memory_order_relaxed))
