@@ -3664,7 +3664,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     const int right = paRight_.load(std::memory_order_relaxed);
     const int click = clickOutput_.load(std::memory_order_relaxed);
     const bool safePa = left >= 0 && right >= 0 && left < numOutputChannels && right < numOutputChannels
-        && routeIsSafe(left, right, click) && outputChannelData[left] != nullptr && outputChannelData[right] != nullptr;
+        && outputChannelData[left] != nullptr && outputChannelData[right] != nullptr;
     const bool monitoring = liveMonitorEnabled_.load(std::memory_order_acquire);
     const bool busAvailable = busScratch_.getNumChannels() >= kBuses * 2 && busScratch_.getNumSamples() >= numSamples;
 
@@ -3783,9 +3783,97 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     if (padAudible)
         ambientPad_.process(outputChannelData[left], outputChannelData[right], numSamples);
 
-    const bool dawAudible = safePa && dawWorkspace_.isPlaying();
-    if (dawAudible)
-        dawWorkspace_.renderToMaster(outputChannelData[left], outputChannelData[right], numSamples);
+    const bool dawRunning = dawWorkspace_.isPlaying();
+    const bool dawScratchReady = dawMixerScratch_.getNumChannels() >= kMaxChannels * 2
+        && dawMixerScratch_.getNumSamples() >= numSamples;
+    const bool dawAudible = safePa && dawRunning && dawScratchReady;
+    if (dawRunning && dawScratchReady)
+    {
+        dawMixerScratch_.clear(0, numSamples);
+        dawWorkspace_.renderToMixer(dawMixerScratch_, kMaxChannels, numSamples);
+
+        if (dawAudible)
+        {
+            if (busAvailable)
+                busScratch_.clear(0, numSamples);
+
+            auto* outL = outputChannelData[left];
+            auto* outR = outputChannelData[right];
+            const bool monoPa = left == right;
+            const float master = masterGain_.load(std::memory_order_relaxed);
+
+            for (int ch = 0; ch < kMaxChannels; ++ch)
+            {
+                auto* insertL = dawMixerScratch_.getWritePointer(ch * 2);
+                auto* insertR = dawMixerScratch_.getWritePointer(ch * 2 + 1);
+                processPluginChainStereo(ch, insertL, insertR, numSamples);
+
+                const bool muted = channelMute_[ch].load(std::memory_order_relaxed);
+                const int dca = channelDca_[ch].load(std::memory_order_relaxed);
+                const bool dcaMuted = dca >= 0 && dca < kDcas && dcaMute_[dca].load(std::memory_order_relaxed);
+                const float dcaGain = dca >= 0 && dca < kDcas ? dcaGain_[dca].load(std::memory_order_relaxed) : 1.0f;
+                const float insertGain = channelGain_[ch].load(std::memory_order_relaxed) * dcaGain;
+                const float pan = juce::jlimit(-1.0f, 1.0f, channelPan_[ch].load(std::memory_order_relaxed));
+                const int bus = channelBus_[ch].load(std::memory_order_relaxed);
+                float peak = 0.0f;
+
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    float l = insertL[i];
+                    float r = insertR[i];
+                    peak = std::max(peak, std::max(std::abs(l), std::abs(r)));
+                    if (muted || dcaMuted)
+                        continue;
+
+                    if (pan < 0.0f) r *= 1.0f + pan;
+                    else if (pan > 0.0f) l *= 1.0f - pan;
+                    l *= insertGain;
+                    r *= insertGain;
+
+                    if (bus >= 0 && bus < kBuses && busAvailable)
+                    {
+                        busScratch_.getWritePointer(bus * 2)[i] += l;
+                        busScratch_.getWritePointer(bus * 2 + 1)[i] += r;
+                    }
+                    else if (monoPa)
+                    {
+                        outL[i] += (l + r) * 0.70710678f * master;
+                    }
+                    else
+                    {
+                        outL[i] += l * master;
+                        outR[i] += r * master;
+                    }
+                }
+
+                auto previous = channelMeter_[ch].load(std::memory_order_relaxed);
+                while (peak > previous
+                    && !channelMeter_[ch].compare_exchange_weak(previous, peak, std::memory_order_relaxed)) {}
+            }
+
+            if (busAvailable)
+            {
+                for (int bus = 0; bus < kBuses; ++bus)
+                {
+                    if (busMute_[bus].load(std::memory_order_relaxed))
+                        continue;
+                    const float gain = busGain_[bus].load(std::memory_order_relaxed) * master;
+                    const auto* busL = busScratch_.getReadPointer(bus * 2);
+                    const auto* busR = busScratch_.getReadPointer(bus * 2 + 1);
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        if (monoPa)
+                            outL[i] += (busL[i] + busR[i]) * 0.70710678f * gain;
+                        else
+                        {
+                            outL[i] += busL[i] * gain;
+                            outR[i] += busR[i] * gain;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Soft output protection is applied after live inputs, pads and DAW playback have been summed.
     if (monitoring || padAudible || dawAudible)
@@ -3865,6 +3953,8 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     pluginScratch_.clear();
     pluginGuardScratch_.setSize(2, preparedBlock, false, true, false);
     pluginGuardScratch_.clear();
+    dawMixerScratch_.setSize(kMaxChannels * 2, preparedBlock, false, true, false);
+    dawMixerScratch_.clear();
     outputSafetyEvents_.store(0, std::memory_order_release);
     for (int ch = 0; ch < kMaxChannels; ++ch)
     {
