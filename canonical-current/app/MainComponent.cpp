@@ -1682,7 +1682,7 @@ void MainComponent::checkForUpdatesAsync()
         return;
 
     auto current = j3::Updater::parseVersion(
-        juce::JUCEApplication::getInstance()->getApplicationVersion().toStdString()).value_or(j3::SemVer { 1, 7, 0 });
+        juce::JUCEApplication::getInstance()->getApplicationVersion().toStdString()).value_or(j3::SemVer { 0, 0, 0 });
     auto safe = juce::Component::SafePointer<MainComponent>(this);
     std::thread([safe, current]
     {
