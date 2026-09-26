@@ -116,6 +116,7 @@ private:
     void saveAudioState();
     juce::File getAudioStateFile() const;
     void openAudioSettings();
+    void showFirstRunSetup();
     void startStopRecording();
     void stopRecordingAfterDeviceLoss(const juce::String& reason);
     juce::File recordingsRoot() const;
@@ -143,6 +144,7 @@ private:
     void removeSetlistSong();
     void loadSelectedSong();
     void scanVst3Plugins();
+    void chooseAdditionalVst3Folder();
     void refreshPluginBrowser();
     void refreshPluginUi();
     void loadSelectedPlugin();
@@ -244,6 +246,8 @@ private:
     std::vector<int> pluginBrowserIndices_;
     juce::StringArray favoritePluginPaths_;
     juce::StringArray recentPluginPaths_;
+    juce::StringArray pluginCustomLocations_;
+    std::unique_ptr<juce::FileChooser> pluginFolderChooser_;
 
     std::array<std::array<std::atomic<float>, kMaxChannels>, kIemMixes> iemSendGain_{};
     std::array<std::array<std::atomic<float>, kMaxChannels>, kIemMixes> iemSendPan_{};
@@ -385,6 +389,7 @@ private:
     juce::ComboBox pluginCatalogBox_;
     juce::ToggleButton favoritePluginButton_ { "★ FAVORITE" };
     juce::TextButton scanPluginsButton_ { "SCAN VST3" };
+    juce::TextButton pluginLocationsButton_ { "ADD VST3 FOLDER" };
     juce::TextButton loadPluginButton_ { "LOAD INSERT" };
     juce::TextButton removePluginButton_ { "REMOVE" };
     juce::TextButton movePluginUpButton_ { "MOVE UP" };
