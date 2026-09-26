@@ -558,7 +558,8 @@ MainComponent::MainComponent()
     themeBox_.onChange = [this] { applyTheme(themeBox_.getSelectedId()); };
     addAndMakeVisible(themeBox_);
 
-    updateButton_.setVisible(false);
+    updateButton_.setVisible(true);
+    updateButton_.setButtonText(juce::String::fromUTF8("COMPROBANDO…"));
     updateButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
     updateButton_.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
     updateButton_.onClick = [this] { beginUpdateInstall(); };
@@ -1324,6 +1325,36 @@ MainComponent::MainComponent()
     {
         if (playing)
         {
+            auto* device = deviceManager_.getCurrentAudioDevice();
+            const bool hasOutput = device != nullptr
+                && device->getActiveOutputChannels().countNumberOfSetBits() > 0;
+
+            if (!hasOutput)
+            {
+                deviceManager_.closeAudioDevice();
+                const auto error = deviceManager_.initialise(0, 2, nullptr, true, {}, nullptr);
+                device = deviceManager_.getCurrentAudioDevice();
+
+                if (error.isNotEmpty() || device == nullptr
+                    || device->getActiveOutputChannels().countNumberOfSetBits() == 0)
+                {
+                    dawWorkspace_.emergencyStop();
+                    lastAudioError_ = error.isNotEmpty()
+                        ? error
+                        : juce::String::fromUTF8("No hay una salida de audio disponible.");
+                    showAudioError(juce::String::fromUTF8(
+                        "PLAY necesita una salida de audio. J3 intentó abrir automáticamente la salida predeterminada de Windows, pero no pudo. Elegí una salida en AUDIO / MIDI."));
+                    updateDiagnostics();
+                    openAudioSettings();
+                    return;
+                }
+
+                lastAudioError_.clear();
+                refreshRoutingControls();
+                updateDiagnostics();
+                saveAudioState();
+            }
+
             transportRunning_.store(true, std::memory_order_release);
             clickGenerator_.setTempo(dawWorkspace_.bpm());
             clickGenerator_.setEnabled(clickEnabledButton_.getToggleState());
@@ -1681,30 +1712,54 @@ void MainComponent::checkForUpdatesAsync()
     if (updateBusy_.exchange(true, std::memory_order_acq_rel))
         return;
 
+    updateButton_.setVisible(true);
+    updateButton_.setEnabled(false);
+    updateButton_.setButtonText(juce::String::fromUTF8("COMPROBANDO…"));
+    updateButton_.setTooltip(juce::String::fromUTF8("Buscando la última versión publicada de J3 Worship."));
+    resized();
+
     auto current = j3::Updater::parseVersion(
         juce::JUCEApplication::getInstance()->getApplicationVersion().toStdString()).value_or(j3::SemVer { 0, 0, 0 });
+    const auto currentText = juce::JUCEApplication::getInstance()->getApplicationVersion();
     auto safe = juce::Component::SafePointer<MainComponent>(this);
-    std::thread([safe, current]
+    std::thread([safe, current, currentText]
     {
         juce::String error;
         auto update = j3ui::UpdateService::checkLatest(current, error);
-        juce::MessageManager::callAsync([safe, update, error]
+        juce::MessageManager::callAsync([safe, update, error, currentText]
         {
             if (safe == nullptr)
                 return;
             safe->updateBusy_.store(false, std::memory_order_release);
+            safe->updateButton_.setEnabled(true);
+            safe->updateButton_.setVisible(true);
+
             if (update.has_value())
             {
                 safe->availableUpdate_ = *update;
                 safe->updateButton_.setButtonText("ACTUALIZAR " + update->versionText);
                 safe->updateButton_.setTooltip(juce::String::fromUTF8("Nueva versión disponible. Descarga verificada por SHA-256."));
-                safe->updateButton_.setVisible(true);
+                safe->updateButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
                 safe->resized();
                 safe->showAvailableUpdatePrompt();
             }
             else if (error.isNotEmpty())
             {
+                safe->availableUpdate_.reset();
+                safe->updateButton_.setButtonText(juce::String::fromUTF8("REINTENTAR"));
                 safe->updateButton_.setTooltip(juce::String::fromUTF8("No se pudo comprobar la versión: ") + error);
+                safe->updateButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(warning).darker(0.45f));
+                safe->resized();
+            }
+            else
+            {
+                safe->availableUpdate_.reset();
+                safe->downloadedUpdateInstaller_ = {};
+                safe->updateButton_.setButtonText(juce::String::fromUTF8("✓ ACTUALIZADO"));
+                safe->updateButton_.setTooltip(juce::String::fromUTF8("J3 Worship ") + currentText
+                    + juce::String::fromUTF8(" está actualizado. Tocá para comprobar de nuevo."));
+                safe->updateButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(good).darker(0.45f));
+                safe->resized();
             }
         });
     }).detach();
@@ -3583,20 +3638,34 @@ void MainComponent::configureAudio()
     if (stateFile.existsAsFile())
         savedState = juce::XmlDocument::parse(stateFile);
 
-    auto error = deviceManager_.initialise(kMaxChannels, kMaxChannels, savedState.get(), true, {}, nullptr);
-    if (error.isNotEmpty() && savedState != nullptr)
-        error = deviceManager_.initialise(kMaxChannels, kMaxChannels, nullptr, true, {}, nullptr);
+    // A DAW must always be able to play through an ordinary Windows stereo device.
+    // Requesting kMaxChannels here made first-run startup fail on laptops/headphones
+    // because JUCE tried to satisfy a 48-in/48-out configuration. Saved multichannel
+    // setups (XR18, Focusrite, etc.) are still restored from XML when they exist.
+    auto error = deviceManager_.initialise(0, 2, savedState.get(), true, {}, nullptr);
 
-    if (error.isNotEmpty())
+    if (error.isNotEmpty() || deviceManager_.getCurrentAudioDevice() == nullptr)
     {
-        lastAudioError_ = error;
+        deviceManager_.closeAudioDevice();
+        const auto fallbackError = deviceManager_.initialise(0, 2, nullptr, true, {}, nullptr);
+        if (fallbackError.isNotEmpty())
+            error = fallbackError;
+        else
+            error.clear();
+    }
+
+    if (error.isNotEmpty() || deviceManager_.getCurrentAudioDevice() == nullptr)
+    {
+        lastAudioError_ = error.isNotEmpty()
+            ? error
+            : juce::String::fromUTF8("Windows no devolvió una salida de audio activa.");
         statusLabel_.setText(juce::String::fromUTF8("Audio: requiere configuración"), juce::dontSendNotification);
         statusLabel_.setColour(juce::Label::textColourId, juce::Colour(warning));
         scheduleReconnect();
     }
-    else if (savedState == nullptr)
+    else
     {
-        preferAsioWhenAvailable(true);
+        lastAudioError_.clear();
     }
 
     deviceManager_.addAudioCallback(this);
