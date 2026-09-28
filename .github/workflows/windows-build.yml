@@ -44,7 +44,7 @@ jobs:
       - name: Upload UI layout snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-UI-Layout-1.10.8
+          name: J3Worship-UI-Layout-1.10.9
           path: canonical-current/build-win/ui-snapshots/*.png
           if-no-files-found: error
 
@@ -155,10 +155,25 @@ jobs:
           $exe = Join-Path $installDir "J3Worship.exe"
           if (!(Test-Path $exe)) { throw "Installed executable missing" }
 
+          # Regression fixture: a stale saved VST3 must never prevent the main
+          # window from appearing. 1.10.8 could identify/instantiate it on startup.
+          $stateDir = Join-Path $env:APPDATA "J3 Worship"
+          Remove-Item $stateDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+          '<J3WorshipState version="1.10.8"><Vst3 channel="0" slot="0" path="C:\definitely-missing\Broken.vst3" name="Broken VST3" /></J3WorshipState>' |
+            Set-Content -Path (Join-Path $stateDir "app-state.xml") -Encoding utf8
+
           $app = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Seconds 5
-          if ($app.HasExited -and $app.ExitCode -ne 0) { throw "Installed application exited with code $($app.ExitCode)" }
-          if (!$app.HasExited) { Stop-Process -Id $app.Id -Force }
+          $deadline = (Get-Date).AddSeconds(15)
+          do {
+            Start-Sleep -Milliseconds 250
+            $app.Refresh()
+          } while (!$app.HasExited -and $app.MainWindowHandle -eq 0 -and (Get-Date) -lt $deadline)
+
+          if ($app.HasExited) { throw "Installed application exited before creating its main window (code $($app.ExitCode))" }
+          if ($app.MainWindowHandle -eq 0) { throw "Installed application stayed alive but never created a visible main window" }
+          if ($app.MainWindowTitle -notlike "*J3 Worship*") { throw "Unexpected main window title: $($app.MainWindowTitle)" }
+          Stop-Process -Id $app.Id -Force
 
           $unins = Join-Path $installDir "unins000.exe"
           if (!(Test-Path $unins)) { throw "Uninstaller missing" }
@@ -174,14 +189,14 @@ jobs:
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.10.8
+          name: J3Worship-Windows-1.10.9
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Setup-1.10.8
+          name: J3Worship-Setup-1.10.9
           path: canonical-current/dist-installer/J3Worship-Setup.exe
           if-no-files-found: error
       - name: Publish official GitHub Release
