@@ -2208,7 +2208,8 @@ MainComponent::MainComponent()
     recoveredAfterUncleanExit_ = getRuntimeLockFile().existsAsFile();
     getRuntimeLockFile().getParentDirectory().createDirectory();
     getRuntimeLockFile().replaceWithText("running");
-    configureAudio();
+    // Keep the constructor non-blocking. The native window must be able to
+    // appear even when a third-party audio driver or a stale VST3 is slow.
     loadAppState();
     rebuildMixerBank();
     rebuildIemBank();
@@ -2216,18 +2217,23 @@ MainComponent::MainComponent()
     refreshPluginUi();
     updateClickUi();
     updateRecordingUi();
-    juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this)]
-    {
-        if (safe != nullptr) safe->restoreSavedPluginsAfterScan();
-    });
+    statusLabel_.setText(juce::String::fromUTF8("Audio: iniciando..."), juce::dontSendNotification);
     applyTheme(themeId_, false);
     refreshDashboard();
     startTimerHz(30);
     setSize(1600, 960);
-    if (firstRunSetup)
-        juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainComponent>(this)]
+
+    // Audio startup is deliberately deferred until after MainWindow has had a
+    // chance to become visible. Saved VST3 inserts are NOT restored here:
+    // they are restored only after an explicit background VST3 scan completes.
+    juce::MessageManager::callAsync(
+        [safe = juce::Component::SafePointer<MainComponent>(this), firstRunSetup]
         {
-            if (safe != nullptr) safe->showFirstRunSetup();
+            if (safe == nullptr)
+                return;
+            safe->configureAudio();
+            if (firstRunSetup)
+                safe->showFirstRunSetup();
         });
 
     const auto currentVersion = juce::JUCEApplication::getInstance()->getApplicationVersion();
@@ -4004,6 +4010,13 @@ void MainComponent::chooseAdditionalVst3Folder()
 
 void MainComponent::restoreSavedPluginsAfterScan()
 {
+    // Never identify or instantiate saved plug-ins during application startup.
+    // A stale/broken commercial VST3 can otherwise block the JUCE message
+    // thread before the user sees a usable window. The background scan owns
+    // discovery; only a completed scan is allowed to restore saved inserts.
+    if (!pluginsScanned_ || pluginScanBusy_.load(std::memory_order_acquire))
+        return;
+
     for (int ch = 0; ch < kMaxChannels; ++ch)
         for (int slot = 0; slot < kPluginSlots; ++slot)
             if (pluginPaths_[ch][slot].isNotEmpty()
@@ -4808,13 +4821,16 @@ void MainComponent::configureAudio()
     deviceManager_.addChangeListener(this);
     const auto stateFile = getAudioStateFile();
     std::unique_ptr<juce::XmlElement> savedState;
-    if (stateFile.existsAsFile())
+    // After an unclean exit, do not immediately reopen the exact driver that may
+    // have hung/crashed the previous session. Start from the Windows default and
+    // let the user select the ASIO interface again from AUDIO / MIDI.
+    if (stateFile.existsAsFile() && !recoveredAfterUncleanExit_)
         savedState = juce::XmlDocument::parse(stateFile);
 
     // A DAW must always be able to play through an ordinary Windows stereo device.
     // Requesting kMaxChannels here made first-run startup fail on laptops/headphones
     // because JUCE tried to satisfy a 48-in/48-out configuration. Saved multichannel
-    // setups (XR18, Focusrite, etc.) are still restored from XML when they exist.
+    // setups (XR18, Focusrite, etc.) are restored only after a clean prior shutdown.
     auto error = deviceManager_.initialise(0, 2, savedState.get(), true, {}, nullptr);
 
     if (error.isNotEmpty() || deviceManager_.getCurrentAudioDevice() == nullptr)
@@ -4843,10 +4859,25 @@ void MainComponent::configureAudio()
 
     deviceManager_.addAudioCallback(this);
 
-    scanAvailableDevices();
+    // Do not enumerate every installed driver here. Some ASIO drivers perform
+    // hardware probing in scanForDevices(), which can block startup for seconds
+    // or indefinitely. Full enumeration remains available through RESCAN in
+    // RUTEO/AJUSTES and the Audio/MIDI selector.
+    if (auto* device = deviceManager_.getCurrentAudioDevice())
+    {
+        deviceInventory_ = deviceManager_.getCurrentAudioDeviceType() + ": " + device->getName()
+            + juce::String::fromUTF8("\nEscaneo completo disponible manualmente en RUTEO.");
+    }
+    else
+    {
+        deviceInventory_ = juce::String::fromUTF8(
+            "Sin dispositivo activo. Abrí AUDIO / MIDI o usá RESCAN en RUTEO.");
+    }
+
     refreshRoutingControls();
     updateDiagnostics();
-    saveAudioState();
+    if (deviceManager_.getCurrentAudioDevice() != nullptr)
+        saveAudioState();
 }
 
 void MainComponent::preferAsioWhenAvailable(bool onlyIfNoSavedState)
@@ -4899,7 +4930,9 @@ void MainComponent::scanAvailableDevices()
 
 void MainComponent::saveAudioState()
 {
-    if (shuttingDown_.load(std::memory_order_acquire) && deviceManager_.getCurrentAudioDevice() == nullptr)
+    // Never overwrite a previously working device configuration with an empty
+    // state after a failed startup/reconnect attempt.
+    if (deviceManager_.getCurrentAudioDevice() == nullptr)
         return;
 
     if (auto state = deviceManager_.createStateXml())
