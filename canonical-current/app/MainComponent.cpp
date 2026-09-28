@@ -2226,7 +2226,8 @@ MainComponent::MainComponent()
     // Audio startup is deliberately deferred until after MainWindow has had a
     // chance to become visible. Saved VST3 inserts are NOT restored here:
     // they are restored only after an explicit background VST3 scan completes.
-    juce::MessageManager::callAsync(
+    juce::Timer::callAfterDelay(
+        250,
         [safe = juce::Component::SafePointer<MainComponent>(this), firstRunSetup]
         {
             if (safe == nullptr)
@@ -4821,16 +4822,13 @@ void MainComponent::configureAudio()
     deviceManager_.addChangeListener(this);
     const auto stateFile = getAudioStateFile();
     std::unique_ptr<juce::XmlElement> savedState;
-    // After an unclean exit, do not immediately reopen the exact driver that may
-    // have hung/crashed the previous session. Start from the Windows default and
-    // let the user select the ASIO interface again from AUDIO / MIDI.
-    if (stateFile.existsAsFile() && !recoveredAfterUncleanExit_)
+    if (stateFile.existsAsFile())
         savedState = juce::XmlDocument::parse(stateFile);
 
     // A DAW must always be able to play through an ordinary Windows stereo device.
     // Requesting kMaxChannels here made first-run startup fail on laptops/headphones
-    // because JUCE tried to satisfy a 48-in/48-out configuration. Saved multichannel
-    // setups (XR18, Focusrite, etc.) are restored only after a clean prior shutdown.
+    // because JUCE tried to satisfy a 48-in/48-out configuration. A saved XR18,
+    // Focusrite or other multichannel setup is preserved across launches.
     auto error = deviceManager_.initialise(0, 2, savedState.get(), true, {}, nullptr);
 
     if (error.isNotEmpty() || deviceManager_.getCurrentAudioDevice() == nullptr)
