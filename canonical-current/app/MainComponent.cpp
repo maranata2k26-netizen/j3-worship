@@ -5581,7 +5581,13 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
         int second = -1;
         for (int o = 0; o < numOutputChannels; ++o)
         {
-            if (outputChannelData[o] == nullptr || o == click)
+            bool reservedForIem = false;
+            for (int mix = 0; mix < kIemMixes && !reservedForIem; ++mix)
+            {
+                reservedForIem = o == iemOutLeft_[mix].load(std::memory_order_relaxed)
+                              || o == iemOutRight_[mix].load(std::memory_order_relaxed);
+            }
+            if (outputChannelData[o] == nullptr || o == click || reservedForIem)
                 continue;
             if (first < 0) first = o;
             else { second = o; break; }
@@ -5970,8 +5976,10 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     {
         const bool clickOn = clickAudible_.load(std::memory_order_relaxed);
         float* directClickOut = nullptr;
+        const int activePaLeft = dawRunning ? playbackLeft : left;
+        const int activePaRight = dawRunning ? playbackRight : right;
         if (clickOn && click >= 0 && click < numOutputChannels
-            && routeIsSafe(left, right, click))
+            && routeIsSafe(activePaLeft, activePaRight, click))
             directClickOut = outputChannelData[click];
 
         bool routeClickToIem = false;
