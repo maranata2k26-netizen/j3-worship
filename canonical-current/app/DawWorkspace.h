@@ -75,6 +75,8 @@ public:
     std::function<bool(int)> isIemEnabledForInsert;
     std::function<void(int)> onTogglePaForInsert;
     std::function<void(int)> onToggleIemForInsert;
+    std::function<float(int)> mixerGainDbForInsert;
+    std::function<void(int, float)> onSetMixerGainDbForInsert;
     std::function<int()> currentIemMixIndex;
 
     juce::String mixerInsertName(int insert) const;
@@ -238,7 +240,7 @@ private:
     enum class DragMode
     {
         none, move, trimLeft, trimRight, midiMove, midiResize,
-        resizeBrowser, resizeInspector, resizeMixer
+        resizeBrowser, resizeInspector, resizeMixer, quickMixerFader
     };
 
     void timerCallback() override;
@@ -335,6 +337,8 @@ private:
     int selectedTrack_ { 0 };
     int selectedClipId_ { -1 };
     int selectedMidiNoteId_ { -1 };
+    int quickMixerDragTrack_ { -1 };
+    int quickMixerDragInsert_ { -1 };
 
     std::array<RenderState, kRenderBuffers> renderStates_ {};
     std::array<std::atomic<int>, kRenderBuffers> renderReaders_ {};
