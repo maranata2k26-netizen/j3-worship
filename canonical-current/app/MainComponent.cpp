@@ -6042,7 +6042,10 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
     const bool dedicatedClickOutput = click >= 0 && click < numOutputChannels
         && outputChannelData[click] != nullptr
         && routeIsSafe(dawRunning ? playbackLeft : left, dawRunning ? playbackRight : right, click);
-    if (monitoring || padAudible || dawAudible)
+    const bool clickIemAudible = transportRunning_.load(std::memory_order_relaxed)
+        && clickAudible_.load(std::memory_order_relaxed)
+        && anyClickIemRouted();
+    if (monitoring || padAudible || dawAudible || clickIemAudible)
     {
         for (int o = 0; o < numOutputChannels; ++o)
         {
