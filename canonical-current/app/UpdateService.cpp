@@ -119,6 +119,72 @@ bool requestBytesWithPowerShell(const juce::String& url, juce::MemoryBlock& byte
     return true;
 }
 
+bool requestBytesWithCurl(const juce::String& url, juce::MemoryBlock& bytes, juce::String& error)
+{
+    if (!isAllowedUpdateUrl(url))
+    {
+        error = juce::String::fromUTF8("La URL de actualización no pertenece a un servidor permitido.");
+        return false;
+    }
+
+    auto temp = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("j3-update-curl", ".bin", false);
+
+    juce::StringArray args;
+    args.add("curl.exe");
+    args.add("-L");
+    args.add("--fail");
+    args.add("--silent");
+    args.add("--show-error");
+    args.add("--retry");
+    args.add("3");
+    args.add("--retry-all-errors");
+    args.add("--connect-timeout");
+    args.add("15");
+    args.add("--max-time");
+    args.add("180");
+    args.add("-A");
+    args.add("J3Worship-Updater/3");
+    args.add("-o");
+    args.add(temp.getFullPathName());
+    args.add(url);
+
+    juce::ChildProcess process;
+    if (!process.start(args))
+    {
+        error = juce::String::fromUTF8("No se pudo iniciar curl.exe como tercer método de descarga.");
+        return false;
+    }
+
+    if (!process.waitForProcessToFinish(190000))
+    {
+        process.kill();
+        temp.deleteFile();
+        error = juce::String::fromUTF8("La descarga con curl superó el tiempo máximo.");
+        return false;
+    }
+
+    const auto output = process.readAllProcessOutput().trim();
+    if (process.getExitCode() != 0 || !temp.existsAsFile())
+    {
+        temp.deleteFile();
+        error = juce::String::fromUTF8("curl tampoco pudo descargar la actualización.")
+            + (output.isNotEmpty() ? " " + output.substring(0, 240) : juce::String());
+        return false;
+    }
+
+    bytes.reset();
+    const bool loaded = temp.loadFileAsData(bytes);
+    temp.deleteFile();
+    if (!loaded || bytes.getSize() == 0)
+    {
+        error = juce::String::fromUTF8("La descarga con curl terminó vacía.");
+        return false;
+    }
+
+    return true;
+}
+
 bool requestBytesWithWinHttp(const juce::String& initialUrl,
                              juce::MemoryBlock& bytes,
                              juce::String& error)
@@ -367,9 +433,19 @@ bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& byt
         return true;
     }
 
+    juce::String curlError;
+    bytes.reset();
+    if (requestBytesWithCurl(url, bytes, curlError))
+    {
+        error.clear();
+        return true;
+    }
+
     error = winHttpError;
     if (fallbackError.isNotEmpty())
-        error << juce::String::fromUTF8(" Método alternativo: ") << fallbackError;
+        error << juce::String::fromUTF8(" PowerShell: ") << fallbackError;
+    if (curlError.isNotEmpty())
+        error << juce::String::fromUTF8(" curl: ") << curlError;
     return false;
 #else
     juce::ignoreUnused(url, bytes);
