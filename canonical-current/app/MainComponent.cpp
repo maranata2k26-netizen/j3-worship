@@ -1502,11 +1502,22 @@ MainComponent::MainComponent()
         clickEnabledButton_.triggerClick();
         refreshDashboard();
     };
+    dashboardClickIemButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(accent));
+    dashboardClickIemButton_.setTooltip("CLICK sólo hacia el IEM seleccionado; nunca se suma al PA.");
+    dashboardClickIemButton_.onClick = [this]
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+        iemClickEnabled_[mix].store(dashboardClickIemButton_.getToggleState(), std::memory_order_release);
+        clickToIemButton_.setToggleState(dashboardClickIemButton_.getToggleState(), juce::dontSendNotification);
+        updateClickUi();
+        saveAppState();
+    };
     dashboardTempoLabel_.setJustificationType(juce::Justification::centred);
     dashboardTempoLabel_.setFont(juce::FontOptions(13.5f, juce::Font::bold));
     mixerPage_.addAndMakeVisible(dashboardLiveTitle_);
     mixerPage_.addAndMakeVisible(dashboardPadButton_);
     mixerPage_.addAndMakeVisible(dashboardClickButton_);
+    mixerPage_.addAndMakeVisible(dashboardClickIemButton_);
     mixerPage_.addAndMakeVisible(dashboardTempoLabel_);
 
     for (std::size_t i = 0; i < names.size(); ++i)
@@ -1928,7 +1939,7 @@ MainComponent::MainComponent()
             transportRunning_.store(true, std::memory_order_release);
             clickGenerator_.setEnabled(true);
         }
-        if (clickAudible_.load() && clickOutput_.load() < 0)
+        if (clickAudible_.load() && clickOutput_.load() < 0 && !anyClickIemRouted())
         {
             clickEnabledButton_.setToggleState(false, juce::dontSendNotification);
             clickAudible_.store(false, std::memory_order_release);
@@ -1937,12 +1948,26 @@ MainComponent::MainComponent()
                 transportRunning_.store(false, std::memory_order_release);
                 clickGenerator_.setEnabled(false);
             }
-            showAudioError(juce::String::fromUTF8("Elegí una salida CLICK / GUIDE distinta del PA antes de activar el click."));
+            showAudioError(juce::String::fromUTF8(
+                "El CLICK necesita un destino. Elegí CLICK / GUIDE en RUTEO o activá CLICK → IEM en una mezcla IEM que tenga salidas asignadas."));
         }
         updateClickUi();
         saveAppState();
     };
     clickPage_.addAndMakeVisible(clickEnabledButton_);
+
+    clickToIemButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(accent));
+    clickToIemButton_.setTooltip("Envía el metrónomo al IEM seleccionado sin mandarlo al PA.");
+    clickToIemButton_.onClick = [this]
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+        iemClickEnabled_[mix].store(clickToIemButton_.getToggleState(), std::memory_order_release);
+        dashboardClickIemButton_.setToggleState(clickToIemButton_.getToggleState(), juce::dontSendNotification);
+        updateClickUi();
+        refreshDashboard();
+        saveAppState();
+    };
+    clickPage_.addAndMakeVisible(clickToIemButton_);
 
     bpmSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     bpmSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 90, 28);
@@ -2093,6 +2118,41 @@ MainComponent::MainComponent()
         updateDiagnostics();
     };
     diagnosticsPage_.addAndMakeVisible(runCheckButton_);
+
+    dawWorkspace_.onToggleClick = [this]
+    {
+        clickEnabledButton_.triggerClick();
+        updateClickUi();
+        refreshDashboard();
+    };
+    dawWorkspace_.isPaEnabledForInsert = [this](int insert)
+    {
+        return channelPaEnabled_[juce::jlimit(0, kMaxChannels - 1, insert)].load(std::memory_order_relaxed);
+    };
+    dawWorkspace_.isIemEnabledForInsert = [this](int insert)
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        return iemSendGain_[mix][ch].load(std::memory_order_relaxed) > 1.0e-8f;
+    };
+    dawWorkspace_.currentIemMixIndex = [this] { return selectedIemMix_; };
+    dawWorkspace_.onTogglePaForInsert = [this](int insert)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        channelPaEnabled_[ch].store(!channelPaEnabled_[ch].load(std::memory_order_relaxed), std::memory_order_release);
+        for (auto& strip : strips_) if (strip) strip->syncFromModel();
+        saveAppState(false);
+    };
+    dawWorkspace_.onToggleIemForInsert = [this](int insert)
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        const bool enabled = iemSendGain_[mix][ch].load(std::memory_order_relaxed) > 1.0e-8f;
+        iemSendGain_[mix][ch].store(enabled ? 0.0f : 1.0f, std::memory_order_release);
+        for (auto& strip : strips_) if (strip) strip->syncFromModel();
+        for (auto& strip : iemStrips_) if (strip) strip->syncFromModel();
+        saveAppState(false);
+    };
 
     dawWorkspace_.onBpmChanged = [this](double value)
     {
@@ -3224,6 +3284,7 @@ void MainComponent::resized()
     dashboardStopButton_.setBounds(transportTop.removeFromLeft(70).reduced(2));
     dashboardPadButton_.setBounds(transportTop.removeFromLeft(70).reduced(2));
     dashboardClickButton_.setBounds(transportTop.removeFromLeft(78).reduced(2));
+    dashboardClickIemButton_.setBounds(transportTop.removeFromLeft(118).reduced(2));
     dashboardTempoLabel_.setBounds(transportTop.removeFromRight(150));
     transport.removeFromTop(7);
     const int sectionGap = 5;
@@ -3390,7 +3451,10 @@ void MainComponent::resized()
     auto clickArea = clickPage_.getLocalBounds().reduced(36);
     clickTitle_.setBounds(clickArea.removeFromTop(48));
     clickArea.removeFromTop(18);
-    clickEnabledButton_.setBounds(clickArea.removeFromTop(40).removeFromLeft(180));
+    auto clickRouteButtons = clickArea.removeFromTop(40);
+    clickEnabledButton_.setBounds(clickRouteButtons.removeFromLeft(180));
+    clickRouteButtons.removeFromLeft(12);
+    clickToIemButton_.setBounds(clickRouteButtons.removeFromLeft(210));
     clickArea.removeFromTop(18);
     auto tempoRow = clickArea.removeFromTop(58);
     bpmSlider_.setBounds(tempoRow.removeFromLeft(std::min(560, tempoRow.getWidth() - 180)));
