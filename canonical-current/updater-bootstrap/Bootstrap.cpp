@@ -676,6 +676,25 @@ bool hasWorkerFlag()
     return found;
 }
 
+bool hasTestWorkerExitFlag()
+{
+    int argc = 0;
+    auto** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv == nullptr)
+        return false;
+
+    bool found = false;
+    for (int i = 1; i < argc; ++i)
+        if (_wcsicmp(argv[i], L"--j3-test-worker-exit") == 0)
+        {
+            found = true;
+            break;
+        }
+
+    LocalFree(argv);
+    return found;
+}
+
 std::filesystem::path currentExecutablePath()
 {
     std::vector<wchar_t> buffer(32768, L'\0');
@@ -794,6 +813,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
         // visible cmd.exe / start /wait chain can close instead of appearing frozen.
         return 0;
     }
+
+    if (hasTestWorkerExitFlag())
+    {
+        logLine(L"Detached worker smoke test completed.");
+        return 0;
+    }
+
     std::error_code ec;
     std::filesystem::remove(logPath(), ec);
 
