@@ -48,6 +48,15 @@ jobs:
           }
           Write-Host "Version declarations synchronized: $appVersion"
 
+      - name: Validate updater no longer launches cmd scripts
+        shell: pwsh
+        run: |
+          $service = Get-Content "canonical-current/app/UpdateService.cpp" -Raw
+          if ($service -match 'apply-update\.cmd' -or $service -match 'script\.startAsProcess') {
+            throw "UpdateService still contains the legacy visible cmd launcher"
+          }
+          Write-Host "Native hidden updater launcher confirmed"
+
       - name: Configure Visual Studio x64
         shell: pwsh
         run: cmake -S canonical-current -B canonical-current/build-win -G "Visual Studio 17 2022" -A x64 -DJ3_BUILD_DESKTOP_APP=ON
@@ -107,6 +116,31 @@ jobs:
           $bootstrapInfo = Get-Item $bootstrap
           if ($bootstrapInfo.Length -gt 2097152) { throw "Updater bootstrap is unexpectedly large: $($bootstrapInfo.Length) bytes" }
           $bootstrapInfo | Format-List FullName,Length,LastWriteTime
+
+      - name: Legacy cmd window detachment smoke test
+        shell: pwsh
+        run: |
+          $bootstrap = (Resolve-Path "canonical-current/dist-bootstrap/J3Worship-Setup.exe").Path
+          $script = Join-Path $env:RUNNER_TEMP "j3-detach-smoke.cmd"
+          @(
+            '@echo off',
+            ('start /wait "" "' + $bootstrap + '" --j3-test-worker-exit'),
+            'exit /b %ERRORLEVEL%'
+          ) | Set-Content -Path $script -Encoding ascii
+
+          $watch = [System.Diagnostics.Stopwatch]::StartNew()
+          $cmdArgs = '/d /c "' + $script + '"'
+          $cmd = Start-Process -FilePath $env:ComSpec -ArgumentList $cmdArgs -PassThru
+          if (!$cmd.WaitForExit(15000)) {
+            Stop-Process -Id $cmd.Id -Force -ErrorAction SilentlyContinue
+            throw "Legacy cmd/start-wait updater remained open longer than 15 seconds"
+          }
+          $watch.Stop()
+          if ($cmd.ExitCode -ne 0) {
+            throw "Legacy cmd detachment smoke test exited with code $($cmd.ExitCode)"
+          }
+          Write-Host "Legacy cmd closed after $([math]::Round($watch.Elapsed.TotalSeconds, 2)) seconds"
+          Remove-Item $script -Force -ErrorAction SilentlyContinue
 
       - name: Legacy 1.9 running-executable migration smoke test
         shell: pwsh
