@@ -432,6 +432,64 @@ bool downloadWithPowerShell(const std::wstring& url,
     return true;
 }
 
+bool downloadWithCurl(const std::wstring& url,
+                      const std::filesystem::path& destination,
+                      std::wstring& error)
+{
+    const auto command =
+        L"curl.exe -L --fail --silent --show-error --retry 3 --retry-all-errors "
+        L"--connect-timeout 15 --max-time 180 -A \"J3Worship-Bootstrap/2\" -o "
+        + quoteArg(destination.wstring()) + L" " + quoteArg(url);
+
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+
+    STARTUPINFOW si {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi {};
+
+    if (!CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    {
+        error = L"No se pudo iniciar curl.exe: " + lastErrorText(GetLastError());
+        return false;
+    }
+
+    const auto wait = WaitForSingleObject(pi.hProcess, 190000);
+    if (wait == WAIT_TIMEOUT)
+    {
+        TerminateProcess(pi.hProcess, 124);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        error = L"curl superó el tiempo máximo.";
+        return false;
+    }
+
+    DWORD exitCode = 1;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    if (exitCode != 0 || !std::filesystem::exists(destination))
+    {
+        std::error_code ec;
+        std::filesystem::remove(destination, ec);
+        error = L"curl tampoco pudo descargar la actualización. Código "
+              + std::to_wstring(exitCode) + L".";
+        return false;
+    }
+
+    if (std::filesystem::file_size(destination) == 0)
+    {
+        std::error_code ec;
+        std::filesystem::remove(destination, ec);
+        error = L"curl descargó un archivo vacío.";
+        return false;
+    }
+
+    return true;
+}
+
 bool verifySha256(const std::filesystem::path& file,
                   const std::wstring& expected,
                   std::wstring& error)
@@ -634,7 +692,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 
     if (!downloaded)
     {
-        showFailure(error.empty() ? L"No se pudo descargar el instalador completo." : error);
+        error.clear();
+        logLine(L"Probando tercer método curl.exe.");
+        downloaded = downloadWithCurl(kFullUrl, destination, error);
+        if (!downloaded)
+            logLine(L"curl falló: " + error);
+    }
+
+    if (!downloaded)
+    {
+        showFailure(error.empty() ? L"No se pudo descargar el instalador completo por ninguno de los métodos disponibles." : error);
         return 20;
     }
 
