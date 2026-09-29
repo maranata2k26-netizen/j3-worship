@@ -5968,13 +5968,79 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
 
     if (transportRunning_.load(std::memory_order_acquire))
     {
-        float* clickOut = nullptr;
-        if (clickAudible_.load(std::memory_order_relaxed) && click >= 0 && click < numOutputChannels
+        const bool clickOn = clickAudible_.load(std::memory_order_relaxed);
+        float* directClickOut = nullptr;
+        if (clickOn && click >= 0 && click < numOutputChannels
             && routeIsSafe(left, right, click))
-            clickOut = outputChannelData[click];
-        const int beats = clickGenerator_.process(clickOut, numSamples);
+            directClickOut = outputChannelData[click];
+
+        bool routeClickToIem = false;
+        if (clickOn)
+        {
+            for (int m = 0; m < kIemMixes; ++m)
+            {
+                const int il = iemOutLeft_[m].load(std::memory_order_relaxed);
+                const int ir = iemOutRight_[m].load(std::memory_order_relaxed);
+                if (iemClickEnabled_[m].load(std::memory_order_relaxed)
+                    && !iemMute_[m].load(std::memory_order_relaxed)
+                    && il >= 0 && ir >= 0 && il < numOutputChannels && ir < numOutputChannels
+                    && il != ir && outputChannelData[il] != nullptr && outputChannelData[ir] != nullptr)
+                {
+                    routeClickToIem = true;
+                    break;
+                }
+            }
+        }
+
+        const bool scratchReady = clickScratch_.getNumChannels() >= 1
+            && clickScratch_.getNumSamples() >= numSamples;
+        float* generatorOut = directClickOut;
+        if (routeClickToIem && scratchReady)
+        {
+            clickScratch_.clear(0, 0, numSamples);
+            generatorOut = clickScratch_.getWritePointer(0);
+        }
+
+        const int beats = clickGenerator_.process(clickOn ? generatorOut : nullptr, numSamples);
         if (beats > 0)
             pendingBeatEvents_.fetch_add(beats, std::memory_order_relaxed);
+
+        if (routeClickToIem && scratchReady)
+        {
+            const auto* source = clickScratch_.getReadPointer(0);
+
+            // Preserve an optional dedicated GUIDE output while sharing the same
+            // generated click with one or more independent IEM mixes.
+            if (directClickOut != nullptr)
+                juce::FloatVectorOperations::add(directClickOut, source, numSamples);
+
+            for (int m = 0; m < kIemMixes; ++m)
+            {
+                if (!iemClickEnabled_[m].load(std::memory_order_relaxed)
+                    || iemMute_[m].load(std::memory_order_relaxed))
+                    continue;
+
+                const int il = iemOutLeft_[m].load(std::memory_order_relaxed);
+                const int ir = iemOutRight_[m].load(std::memory_order_relaxed);
+                if (il < 0 || ir < 0 || il >= numOutputChannels || ir >= numOutputChannels || il == ir)
+                    continue;
+                if (il == left || il == right || ir == left || ir == right || il == click || ir == click)
+                    continue;
+
+                auto* iemL = outputChannelData[il];
+                auto* iemR = outputChannelData[ir];
+                if (iemL == nullptr || iemR == nullptr)
+                    continue;
+
+                const float level = iemMaster_[m].load(std::memory_order_relaxed) * 0.70710678f;
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    const float sample = source[i] * level;
+                    iemL[i] += sample;
+                    iemR[i] += sample;
+                }
+            }
+        }
     }
 
     if (recordingEnabled_.load(std::memory_order_acquire))
