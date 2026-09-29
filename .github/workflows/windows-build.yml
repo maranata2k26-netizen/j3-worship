@@ -29,6 +29,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate application and installer versions match
+        shell: pwsh
+        run: |
+          $cmake = Get-Content "canonical-current/CMakeLists.txt" -Raw
+          $installer = Get-Content "canonical-current/installer/J3Worship.iss" -Raw
+          $appMatch = [regex]::Match($cmake, 'project\(J3Worship VERSION ([0-9]+\.[0-9]+\.[0-9]+)')
+          $installerMatch = [regex]::Match($installer, '#define MyAppVersion "([0-9]+\.[0-9]+\.[0-9]+)"')
+          $versionInfoMatch = [regex]::Match($installer, 'VersionInfoVersion=([0-9]+\.[0-9]+\.[0-9]+)\.0')
+          if (!$appMatch.Success -or !$installerMatch.Success -or !$versionInfoMatch.Success) {
+            throw "Could not read one or more J3 Worship version declarations"
+          }
+          $appVersion = $appMatch.Groups[1].Value
+          $installerVersion = $installerMatch.Groups[1].Value
+          $versionInfo = $versionInfoMatch.Groups[1].Value
+          if ($appVersion -ne $installerVersion -or $appVersion -ne $versionInfo) {
+            throw "Version mismatch: app=$appVersion installer=$installerVersion versionInfo=$versionInfo"
+          }
+          Write-Host "Version declarations synchronized: $appVersion"
+
       - name: Configure Visual Studio x64
         shell: pwsh
         run: cmake -S canonical-current -B canonical-current/build-win -G "Visual Studio 17 2022" -A x64 -DJ3_BUILD_DESKTOP_APP=ON
