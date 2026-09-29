@@ -44,7 +44,7 @@ jobs:
       - name: Upload UI layout snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-UI-Layout-1.11.1
+          name: J3Worship-UI-Layout-1.11.2
           path: canonical-current/build-win/ui-snapshots/*.png
           if-no-files-found: error
 
@@ -67,10 +67,32 @@ jobs:
           & $iscc "canonical-current/installer/J3Worship.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
+      - name: Build resilient updater bootstrap
+        shell: pwsh
+        run: |
+          $cmake = Get-Content "canonical-current/CMakeLists.txt" -Raw
+          $match = [regex]::Match($cmake, 'project\(J3Worship VERSION ([0-9]+\.[0-9]+\.[0-9]+)')
+          if (!$match.Success) { throw "Could not determine J3 Worship version" }
+          $version = $match.Groups[1].Value
+          $fullSetup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Full-Setup.exe").Path
+          $fullSha = (Get-FileHash $fullSetup -Algorithm SHA256).Hash.ToLowerInvariant()
+          $fullUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v$version/J3Worship-Full-Setup.exe"
+
+          cmake -S canonical-current/updater-bootstrap -B canonical-current/updater-bootstrap/build-win -G "Visual Studio 17 2022" -A x64 "-DJ3_BOOTSTRAP_VERSION=$version" "-DJ3_BOOTSTRAP_URL=$fullUrl" "-DJ3_BOOTSTRAP_SHA256=$fullSha"
+          if ($LASTEXITCODE -ne 0) { throw "Updater bootstrap configure failed" }
+          cmake --build canonical-current/updater-bootstrap/build-win --config Release
+          if ($LASTEXITCODE -ne 0) { throw "Updater bootstrap build failed" }
+
+          $bootstrap = "canonical-current/dist-bootstrap/J3Worship-Setup.exe"
+          if (!(Test-Path $bootstrap)) { throw "Updater bootstrap was not generated" }
+          $bootstrapInfo = Get-Item $bootstrap
+          if ($bootstrapInfo.Length -gt 2097152) { throw "Updater bootstrap is unexpectedly large: $($bootstrapInfo.Length) bytes" }
+          $bootstrapInfo | Format-List FullName,Length,LastWriteTime
+
       - name: Legacy 1.9 running-executable migration smoke test
         shell: pwsh
         run: |
-          $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Setup.exe").Path
+          $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Full-Setup.exe").Path
           $sourceExe = (Resolve-Path "canonical-current/dist/J3Worship.exe").Path
           $legacyDir = Join-Path $env:RUNNER_TEMP "J3WorshipLegacy19Locked"
           $updaterDir = Join-Path $env:TEMP "J3WorshipUpdater"
@@ -124,7 +146,7 @@ jobs:
       - name: In-place updater target smoke test
         shell: pwsh
         run: |
-          $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Setup.exe").Path
+          $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Full-Setup.exe").Path
           $sourceExe = (Resolve-Path "canonical-current/dist/J3Worship.exe").Path
           $updateDir = Join-Path $env:RUNNER_TEMP "J3WorshipUpdateTarget"
           $log1 = Join-Path $env:RUNNER_TEMP "j3-update-first.log"
@@ -147,7 +169,7 @@ jobs:
       - name: End-to-end installer smoke test
         shell: pwsh
         run: |
-          $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Setup.exe").Path
+          $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Full-Setup.exe").Path
           $installDir = Join-Path $env:RUNNER_TEMP "J3WorshipSmoke"
           $log = Join-Path $env:RUNNER_TEMP "j3-install.log"
           $p = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=$installDir","/LOG=$log" -Wait -PassThru
@@ -180,25 +202,119 @@ jobs:
           $u = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
           if ($u.ExitCode -ne 0) { throw "Uninstaller exit code $($u.ExitCode)" }
 
+      - name: Stage full installer as public prerelease
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $cmake = Get-Content "canonical-current/CMakeLists.txt" -Raw
+          $match = [regex]::Match($cmake, 'project\(J3Worship VERSION ([0-9]+\.[0-9]+\.[0-9]+)')
+          if (!$match.Success) { throw "Could not determine J3 Worship version" }
+          $version = $match.Groups[1].Value
+          $tag = "v$version"
+          $full = (Resolve-Path "canonical-current/dist-installer/J3Worship-Full-Setup.exe").Path
+          $fullSha = (Get-FileHash $full -Algorithm SHA256).Hash.ToLowerInvariant()
+          $notes = "J3 Worship $version staging release.`n`nFull installer SHA256: $fullSha`nThis prerelease is not offered by the in-app updater."
+
+          gh release view $tag --repo "$env:GITHUB_REPOSITORY" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $full --clobber --repo "$env:GITHUB_REPOSITORY"
+            if ($LASTEXITCODE -ne 0) { throw "Could not refresh staged full installer" }
+            $releaseId = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.id'
+            $payload = @{
+              prerelease = $true
+              name = "J3 Worship $version"
+              body = $notes
+            } | ConvertTo-Json
+            $payload | gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$releaseId" --input - | Out-Null
+          } else {
+            gh release create $tag $full --target "$env:GITHUB_SHA" --title "J3 Worship $version" --notes $notes --prerelease --latest=false --repo "$env:GITHUB_REPOSITORY"
+            if ($LASTEXITCODE -ne 0) { throw "Could not create staged prerelease" }
+          }
+
+      - name: Bootstrap 1.10.9 rescue-path smoke test
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          $bootstrap = (Resolve-Path "canonical-current/dist-bootstrap/J3Worship-Setup.exe").Path
+          $sourceExe = (Resolve-Path "canonical-current/dist/J3Worship.exe").Path
+          $legacyDir = Join-Path $env:RUNNER_TEMP "J3WorshipLegacy1109Bootstrap"
+          $updaterDir = Join-Path $env:TEMP "J3WorshipUpdater"
+          $legacyExe = Join-Path $legacyDir "J3Worship.exe"
+          $script = Join-Path $updaterDir "apply-update.cmd"
+          $log = Join-Path $updaterDir "bootstrap-e2e-install.log"
+
+          Remove-Item $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $updaterDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $legacyDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $updaterDir | Out-Null
+
+          Copy-Item "$env:WINDIR\System32\ping.exe" $legacyExe -Force
+          $legacyProcess = Start-Process -FilePath $legacyExe -ArgumentList "127.0.0.1","-t" -PassThru
+          Start-Sleep -Milliseconds 500
+          if ($legacyProcess.HasExited) { throw "Could not create running 1.10.9 legacy target" }
+
+          @(
+            '@echo off',
+            'setlocal',
+            'timeout /t 2 /nobreak >nul',
+            ('start /wait "" "' + $bootstrap + '" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /DIR="' + $legacyDir + '" /LOG="' + $log + '"'),
+            ('start "" "' + $legacyExe + '"'),
+            'del "%~f0"'
+          ) | Set-Content -Path $script -Encoding ascii
+
+          $p = Start-Process -FilePath $bootstrap -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/CLOSEAPPLICATIONS","/DIR=$legacyDir","/LOG=$log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            Get-Content (Join-Path $updaterDir "bootstrap.log") -ErrorAction SilentlyContinue
+            Get-Content $log -ErrorAction SilentlyContinue
+            Get-Content (Join-Path $updaterDir "migration-result.txt") -ErrorAction SilentlyContinue
+            throw "Bootstrap rescue path failed: $($p.ExitCode)"
+          }
+
+          Start-Sleep -Milliseconds 500
+          $expected = (Get-FileHash $sourceExe -Algorithm SHA256).Hash
+          $actual = (Get-FileHash $legacyExe -Algorithm SHA256).Hash
+          if ($actual -ne $expected) {
+            Get-Content (Join-Path $updaterDir "bootstrap.log") -ErrorAction SilentlyContinue
+            Get-Content $log -ErrorAction SilentlyContinue
+            Get-Content (Join-Path $updaterDir "migration-result.txt") -ErrorAction SilentlyContinue
+            throw "Bootstrap did not replace the legacy executable with 1.11.2"
+          }
+
+          $migration = Get-Content (Join-Path $updaterDir "migration-result.txt") -Raw
+          if ($migration -notmatch '^OK') { throw "Bootstrap migration marker did not report success" }
+          if (!$legacyProcess.HasExited) { Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue }
+          Remove-Item $script -Force -ErrorAction SilentlyContinue
+
       - name: SHA256
         shell: pwsh
         run: |
           Get-FileHash "canonical-current/dist/J3Worship.exe" -Algorithm SHA256
-          Get-FileHash "canonical-current/dist-installer/J3Worship-Setup.exe" -Algorithm SHA256
+          Get-FileHash "canonical-current/dist-installer/J3Worship-Full-Setup.exe" -Algorithm SHA256
+          Get-FileHash "canonical-current/dist-bootstrap/J3Worship-Setup.exe" -Algorithm SHA256
 
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.11.1
+          name: J3Worship-Windows-1.11.2
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
-      - name: Upload Windows installer
+      - name: Upload Windows full installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Setup-1.11.1
-          path: canonical-current/dist-installer/J3Worship-Setup.exe
+          name: J3Worship-Full-Setup-1.11.2
+          path: canonical-current/dist-installer/J3Worship-Full-Setup.exe
           if-no-files-found: error
+
+      - name: Upload updater bootstrap
+        uses: actions/upload-artifact@v4
+        with:
+          name: J3Worship-Updater-Bootstrap-1.11.2
+          path: canonical-current/dist-bootstrap/J3Worship-Setup.exe
+          if-no-files-found: error
+
       - name: Publish official GitHub Release
         if: github.ref == 'refs/heads/main'
         shell: pwsh
@@ -210,13 +326,31 @@ jobs:
           if (!$match.Success) { throw "Could not determine J3 Worship version" }
           $version = $match.Groups[1].Value
           $tag = "v$version"
-          $setup = (Resolve-Path "canonical-current/dist-installer/J3Worship-Setup.exe").Path
-          $sha = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
-          $notes = "J3 Worship $version`n`nWindows x64 official installer.`nSHA256: $sha"
+          $bootstrap = (Resolve-Path "canonical-current/dist-bootstrap/J3Worship-Setup.exe").Path
+          $full = (Resolve-Path "canonical-current/dist-installer/J3Worship-Full-Setup.exe").Path
+          $bootstrapSha = (Get-FileHash $bootstrap -Algorithm SHA256).Hash.ToLowerInvariant()
+          $fullSha = (Get-FileHash $full -Algorithm SHA256).Hash.ToLowerInvariant()
+          $notes = "J3 Worship $version`n`nAutomatic updater bootstrap: J3Worship-Setup.exe`nSHA256: $bootstrapSha`n`nFull Windows x64 installer: J3Worship-Full-Setup.exe`nFULL_SHA256: $fullSha"
 
-          gh release view $tag --repo "$env:GITHUB_REPOSITORY" *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $setup --clobber --repo "$env:GITHUB_REPOSITORY"
-          } else {
-            gh release create $tag $setup --target "$env:GITHUB_SHA" --title "J3 Worship $version" --notes $notes --repo "$env:GITHUB_REPOSITORY"
+          gh release upload $tag $bootstrap $full --clobber --repo "$env:GITHUB_REPOSITORY"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload final updater assets" }
+
+          $releaseId = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.id'
+          $payload = @{
+            prerelease = $false
+            name = "J3 Worship $version"
+            body = $notes
+            make_latest = "true"
+          } | ConvertTo-Json
+          $payload | gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$releaseId" --input - | Out-Null
+
+          $latest = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" | ConvertFrom-Json
+          if ($latest.tag_name -ne $tag) { throw "Published release is not latest: $($latest.tag_name)" }
+          $assetNames = @($latest.assets | ForEach-Object { $_.name })
+          if ($assetNames -notcontains "J3Worship-Setup.exe") { throw "Bootstrap asset missing from latest release" }
+          if ($assetNames -notcontains "J3Worship-Full-Setup.exe") { throw "Full installer asset missing from latest release" }
+
+          $bootstrapAsset = $latest.assets | Where-Object { $_.name -eq "J3Worship-Setup.exe" } | Select-Object -First 1
+          if ($bootstrapAsset.digest -and $bootstrapAsset.digest.ToLowerInvariant() -ne "sha256:$bootstrapSha") {
+            throw "GitHub bootstrap digest does not match local SHA256"
           }

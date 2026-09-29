@@ -1,5 +1,5 @@
 #define MyAppName "J3 Worship"
-#define MyAppVersion "1.11.1"
+#define MyAppVersion "1.11.2"
 #define MyAppPublisher "J3 Worship"
 #define MyAppExeName "J3Worship.exe"
 
@@ -11,7 +11,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={code:GetInstallDir}
 DefaultGroupName=J3 Worship
 OutputDir=..\dist-installer
-OutputBaseFilename=J3Worship-Setup
+OutputBaseFilename=J3Worship-Full-Setup
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -22,7 +22,7 @@ CloseApplications=yes
 RestartApplications=no
 SetupIconFile=..\resources\J3Worship.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
-VersionInfoVersion=1.11.1.0
+VersionInfoVersion=1.11.2.0
 VersionInfoCompany=J3 Worship
 VersionInfoDescription=J3 Worship Installer
 VersionInfoProductName=J3 Worship
