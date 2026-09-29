@@ -49,11 +49,8 @@ bool writePlaybackFixture(const juce::File& file)
 
 int main()
 {
-    std::cerr << "[TRACE] init gui" << std::endl;
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
-    std::cerr << "[TRACE] construct workspace" << std::endl;
     DawWorkspace workspace;
-    std::cerr << "[TRACE] workspace constructed" << std::endl;
     workspace.setVisible(true);
 
     struct Case
@@ -79,13 +76,10 @@ int main()
 
         const int workspaceWidth = std::max(1080, logicalWidth - 16);
         const int workspaceHeight = std::max(520, logicalHeight - 122);
-        std::cerr << "[TRACE] resize " << testCase.label << std::endl;
         workspace.setSize(workspaceWidth, workspaceHeight);
-        std::cerr << "[TRACE] validate " << testCase.label << std::endl;
 
         juce::String report;
         const bool pass = workspace.validateLayoutForTesting(report);
-        std::cerr << "[TRACE] validated " << testCase.label << std::endl;
         std::cout << (pass ? "[PASS] " : "[FAIL] ") << testCase.label
                   << " -> logical workspace " << workspaceWidth << "x" << workspaceHeight
                   << " : " << report << std::endl;
