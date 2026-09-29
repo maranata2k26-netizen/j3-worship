@@ -1097,6 +1097,7 @@ void DawWorkspace::paint(juce::Graphics& g)
         const float normGain = juce::jlimit(0.0f, 1.0f, (gainDb + 60.0f) / 72.0f);
 
         // A real fader-style quick view reads as a mixer even when no audio is playing.
+        auto panArea = body.removeFromRight(std::max(42, body.getWidth() / 3));
         auto faderLane = body.withWidth(std::max(22, body.getWidth() / 3)).withCentre(body.getCentre());
         const int laneX = faderLane.getCentreX();
         const int laneTop = faderLane.getY() + 3;
@@ -1118,7 +1119,6 @@ void DawWorkspace::paint(juce::Graphics& g)
         // FL-style always-visible PAN knob: the production view is also a usable mixer.
         const float pan = juce::jlimit(-1.0f, 1.0f,
             mixerPanForInsert ? mixerPanForInsert(insert) : tracks_[i].pan);
-        auto panArea = body.removeFromRight(std::max(42, body.getWidth() / 3));
         const int knobSize = juce::jlimit(24, 38, std::min(panArea.getWidth() - 4, panArea.getHeight() - 18));
         const int knobCx = panArea.getCentreX();
         const int knobCy = panArea.getCentreY() - 5;
