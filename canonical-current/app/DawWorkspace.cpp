@@ -1780,7 +1780,12 @@ void DawWorkspace::loadWorkspaceState()
     workspacePreset_ = juce::jlimit(1, 5, xml->getIntAttribute("preset", 4));
     browserWidth_ = juce::jlimit(140, 360, xml->getIntAttribute("browserWidth", 210));
     inspectorWidth_ = juce::jlimit(220, 420, xml->getIntAttribute("inspectorWidth", 285));
-    mixerHeight_ = juce::jlimit(96, 360, xml->getIntAttribute("mixerHeight", 125));
+    mixerHeight_ = juce::jlimit(96, 360, xml->getIntAttribute("mixerHeight", 190));
+    // 1.11 promotes the combined Production view. Older EDIT workspaces used a
+    // very shallow 125 px quick mixer; lift that legacy value once so timeline
+    // and console are both useful on the same screen.
+    if (workspacePreset_ == 4 && mixerHeight_ < 160)
+        mixerHeight_ = 180;
     trackHeight_ = juce::jlimit(44, 150, xml->getIntAttribute("trackHeight", 76));
     workspaceBox_.setSelectedId(workspacePreset_, juce::dontSendNotification);
 }
@@ -1807,7 +1812,7 @@ void DawWorkspace::applyWorkspacePreset(int preset)
         case 2: browserWidth_ = 150; inspectorWidth_ = 245; mixerHeight_ = 245; trackHeight_ = 64; break;
         case 3: browserWidth_ = 165; inspectorWidth_ = 255; mixerHeight_ = 175; trackHeight_ = 76; break;
         case 5: browserWidth_ = 150; inspectorWidth_ = 225; mixerHeight_ = 220; trackHeight_ = 66; break;
-        default: browserWidth_ = 210; inspectorWidth_ = 285; mixerHeight_ = 125; trackHeight_ = 82; break;
+        default: browserWidth_ = 180; inspectorWidth_ = 250; mixerHeight_ = 180; trackHeight_ = 74; break;
     }
     workspaceBox_.setSelectedId(workspacePreset_, juce::dontSendNotification);
     resized();
