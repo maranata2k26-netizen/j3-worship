@@ -1442,24 +1442,25 @@ void DawWorkspace::resized()
     takeRight(topRow, dspViewButton_, 48);
     takeRight(topRow, mixerViewButton_, 62);
 
-    takeLeft(bottomRow, stopButton_, 54);
-    takeLeft(bottomRow, playButton_, 60);
-    takeLeft(bottomRow, recordButton_, 48);
-    takeLeft(bottomRow, loopButton_, 58);
-    takeLeft(bottomRow, clickButton_, 72);
-    takeLeft(bottomRow, clickIemButton_, 146);
-    bottomRow.removeFromLeft(std::min(8, bottomRow.getWidth()));
-    takeLeft(bottomRow, splitButton_, 66);
-    takeLeft(bottomRow, duplicateButton_, 74);
-    takeLeft(bottomRow, deleteButton_, 60);
-    bottomRow.removeFromLeft(std::min(8, bottomRow.getWidth()));
-    takeLeft(bottomRow, bpmSlider_, 136);
-    takeLeft(bottomRow, snapBox_, 102);
+    const bool compactToolbar = getWidth() < 1250;
+    takeLeft(bottomRow, stopButton_, compactToolbar ? 48 : 54);
+    takeLeft(bottomRow, playButton_, compactToolbar ? 52 : 60);
+    takeLeft(bottomRow, recordButton_, compactToolbar ? 44 : 48);
+    takeLeft(bottomRow, loopButton_, compactToolbar ? 50 : 58);
+    takeLeft(bottomRow, clickButton_, compactToolbar ? 62 : 72);
+    takeLeft(bottomRow, clickIemButton_, compactToolbar ? 112 : 146);
+    bottomRow.removeFromLeft(std::min(compactToolbar ? 4 : 8, bottomRow.getWidth()));
+    takeLeft(bottomRow, splitButton_, compactToolbar ? 56 : 66);
+    takeLeft(bottomRow, duplicateButton_, compactToolbar ? 62 : 74);
+    takeLeft(bottomRow, deleteButton_, compactToolbar ? 52 : 60);
+    bottomRow.removeFromLeft(std::min(compactToolbar ? 4 : 8, bottomRow.getWidth()));
+    takeLeft(bottomRow, bpmSlider_, compactToolbar ? 104 : 136);
+    takeLeft(bottomRow, snapBox_, compactToolbar ? 82 : 102);
 
-    takeRight(bottomRow, resetWorkspaceButton_, 68);
-    takeRight(bottomRow, workspaceBox_, 94);
-    takeRight(bottomRow, fitSelectionButton_, 44);
-    takeRight(bottomRow, fitProjectButton_, 44);
+    takeRight(bottomRow, resetWorkspaceButton_, compactToolbar ? 56 : 68);
+    takeRight(bottomRow, workspaceBox_, compactToolbar ? 78 : 94);
+    takeRight(bottomRow, fitSelectionButton_, compactToolbar ? 40 : 44);
+    takeRight(bottomRow, fitProjectButton_, compactToolbar ? 40 : 44);
     zoomSlider_.setBounds(bottomRow);
 
     auto browser = browserBounds().reduced(9, 8);
