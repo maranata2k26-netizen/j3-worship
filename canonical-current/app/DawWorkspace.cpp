@@ -605,15 +605,6 @@ DawWorkspace::DawWorkspace()
         tracks_[i].colour = trackColour(i);
         tracks_[i].mixerInsert = i;
     }
-    tracks_[0].name = "Voz";
-    tracks_[1].name = juce::String::fromUTF8("Batería");
-    tracks_[2].name = "Bajo";
-    tracks_[3].name = "Guitarra";
-    tracks_[4].name = "Teclado";
-    tracks_[5].name = "Secuencias";
-    tracks_[6].name = "Pads";
-    tracks_[7].name = "FX";
-
     for (int i = 0; i < kMaxTracks; ++i)
     {
         liveActiveClipIds_[i].store(kLiveNoClip, std::memory_order_relaxed);
@@ -667,10 +658,19 @@ void DawWorkspace::configureControls()
     loopButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(kText));
     addAndMakeVisible(clickButton_);
     clickButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(kText));
-    clickButton_.setTooltip("Metrónomo CLICK · un toque para encender/apagar. El destino se configura en CLICK / IEM.");
+    clickButton_.setTooltip("Metrónomo CLICK · un toque para encender/apagar.");
     clickButton_.onClick = [this]
     {
         if (onToggleClick) onToggleClick();
+    };
+
+    addAndMakeVisible(clickIemButton_);
+    clickIemButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(kAccent));
+    clickIemButton_.setTooltip("Envía el CLICK al in-ear seleccionado, separado del PA.");
+    clickIemButton_.onClick = [this]
+    {
+        if (onSetClickIemEnabled)
+            onSetClickIemEnabled(clickIemButton_.getToggleState());
     };
 
     newButton_.onClick = [this] { newProject(); };
@@ -1097,6 +1097,7 @@ void DawWorkspace::paint(juce::Graphics& g)
         const float normGain = juce::jlimit(0.0f, 1.0f, (gainDb + 60.0f) / 72.0f);
 
         // A real fader-style quick view reads as a mixer even when no audio is playing.
+        auto panArea = body.removeFromRight(std::max(42, body.getWidth() / 3));
         auto faderLane = body.withWidth(std::max(22, body.getWidth() / 3)).withCentre(body.getCentre());
         const int laneX = faderLane.getCentreX();
         const int laneTop = faderLane.getY() + 3;
@@ -1115,15 +1116,28 @@ void DawWorkspace::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xffeaf5ff).withAlpha(selected ? 0.9f : 0.42f));
         g.drawRoundedRectangle(handle.toFloat(), 2.5f, 0.8f);
 
-        // Pan marker gives useful at-a-glance information without adding another control row.
-        const float pan = juce::jlimit(-1.0f, 1.0f, tracks_[i].pan);
-        auto panRail = juce::Rectangle<int>(body.getX() + 5, body.getBottom() - 8,
-                                            std::max(12, body.getWidth() - 10), 2);
-        g.setColour(juce::Colour(0xff273a46));
-        g.fillRoundedRectangle(panRail.toFloat(), 1.0f);
-        const int panX = panRail.getCentreX() + static_cast<int>(pan * panRail.getWidth() * 0.45f);
+        // FL-style always-visible PAN knob: the production view is also a usable mixer.
+        const float pan = juce::jlimit(-1.0f, 1.0f,
+            mixerPanForInsert ? mixerPanForInsert(insert) : tracks_[i].pan);
+        const int knobSize = juce::jlimit(24, 38, std::min(panArea.getWidth() - 4, panArea.getHeight() - 18));
+        const int knobCx = panArea.getCentreX();
+        const int knobCy = panArea.getCentreY() - 5;
+        auto knob = juce::Rectangle<int>(knobCx - knobSize / 2, knobCy - knobSize / 2, knobSize, knobSize);
+        g.setColour(juce::Colour(0xff1a2b36));
+        g.fillEllipse(knob.toFloat());
+        g.setColour(selected ? tracks_[i].colour.brighter(0.2f) : juce::Colour(0xff4d6574));
+        g.drawEllipse(knob.toFloat().reduced(0.8f), 1.4f);
+        const float angle = juce::MathConstants<float>::pi * (0.75f + 1.5f * ((pan + 1.0f) * 0.5f));
+        const float radius = static_cast<float>(knobSize) * 0.34f;
+        const auto centre = knob.toFloat().getCentre();
+        g.setColour(juce::Colour(0xffeaf5ff));
+        g.drawLine(centre.x, centre.y,
+                   centre.x + std::cos(angle) * radius,
+                   centre.y + std::sin(angle) * radius, 1.8f);
+        g.setFont(juce::FontOptions(8.0f, juce::Font::bold));
         g.setColour(juce::Colour(kMuted));
-        g.fillEllipse(static_cast<float>(panX - 2), static_cast<float>(panRail.getCentreY() - 2), 5.0f, 5.0f);
+        g.drawText("PAN", panArea.getX(), panArea.getBottom() - 12, panArea.getWidth(), 10,
+                   juce::Justification::centred);
 
         g.setFont(juce::FontOptions(8.5f, juce::Font::bold));
         g.setColour(juce::Colour(kMuted));
@@ -1428,23 +1442,25 @@ void DawWorkspace::resized()
     takeRight(topRow, dspViewButton_, 48);
     takeRight(topRow, mixerViewButton_, 62);
 
-    takeLeft(bottomRow, stopButton_, 54);
-    takeLeft(bottomRow, playButton_, 60);
-    takeLeft(bottomRow, recordButton_, 48);
-    takeLeft(bottomRow, loopButton_, 58);
-    takeLeft(bottomRow, clickButton_, 62);
-    bottomRow.removeFromLeft(std::min(8, bottomRow.getWidth()));
-    takeLeft(bottomRow, splitButton_, 66);
-    takeLeft(bottomRow, duplicateButton_, 74);
-    takeLeft(bottomRow, deleteButton_, 60);
-    bottomRow.removeFromLeft(std::min(8, bottomRow.getWidth()));
-    takeLeft(bottomRow, bpmSlider_, 136);
-    takeLeft(bottomRow, snapBox_, 102);
+    const bool compactToolbar = getWidth() < 1250;
+    takeLeft(bottomRow, stopButton_, compactToolbar ? 48 : 54);
+    takeLeft(bottomRow, playButton_, compactToolbar ? 52 : 60);
+    takeLeft(bottomRow, recordButton_, compactToolbar ? 44 : 48);
+    takeLeft(bottomRow, loopButton_, compactToolbar ? 50 : 58);
+    takeLeft(bottomRow, clickButton_, compactToolbar ? 62 : 72);
+    takeLeft(bottomRow, clickIemButton_, compactToolbar ? 112 : 146);
+    bottomRow.removeFromLeft(std::min(compactToolbar ? 4 : 8, bottomRow.getWidth()));
+    takeLeft(bottomRow, splitButton_, compactToolbar ? 56 : 66);
+    takeLeft(bottomRow, duplicateButton_, compactToolbar ? 62 : 74);
+    takeLeft(bottomRow, deleteButton_, compactToolbar ? 52 : 60);
+    bottomRow.removeFromLeft(std::min(compactToolbar ? 4 : 8, bottomRow.getWidth()));
+    takeLeft(bottomRow, bpmSlider_, compactToolbar ? 104 : 136);
+    takeLeft(bottomRow, snapBox_, compactToolbar ? 82 : 102);
 
-    takeRight(bottomRow, resetWorkspaceButton_, 68);
-    takeRight(bottomRow, workspaceBox_, 94);
-    takeRight(bottomRow, fitSelectionButton_, 44);
-    takeRight(bottomRow, fitProjectButton_, 44);
+    takeRight(bottomRow, resetWorkspaceButton_, compactToolbar ? 56 : 68);
+    takeRight(bottomRow, workspaceBox_, compactToolbar ? 78 : 94);
+    takeRight(bottomRow, fitSelectionButton_, compactToolbar ? 40 : 44);
+    takeRight(bottomRow, fitProjectButton_, compactToolbar ? 40 : 44);
     zoomSlider_.setBounds(bottomRow);
 
     auto browser = browserBounds().reduced(9, 8);
@@ -2067,7 +2083,19 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
                 bodyStrip.removeFromTop(19);
                 bodyStrip.removeFromBottom(24);
                 auto body = bodyStrip.reduced(7, 3);
-                if (body.contains(e.getPosition()) && onSetMixerGainDbForInsert)
+                auto panArea = body.removeFromRight(std::max(42, body.getWidth() / 3));
+
+                if (panArea.contains(e.getPosition()) && onSetMixerPanForInsert)
+                {
+                    quickMixerDragTrack_ = idx;
+                    quickMixerDragInsert_ = insert;
+                    dragMode_ = DragMode::quickMixerPan;
+                    const float norm = panArea.getWidth() > 1
+                        ? static_cast<float>(e.x - panArea.getX()) / static_cast<float>(panArea.getWidth())
+                        : 0.5f;
+                    onSetMixerPanForInsert(insert, juce::jlimit(-1.0f, 1.0f, norm * 2.0f - 1.0f));
+                }
+                else if (body.contains(e.getPosition()) && onSetMixerGainDbForInsert)
                 {
                     quickMixerDragTrack_ = idx;
                     quickMixerDragInsert_ = insert;
@@ -2240,6 +2268,7 @@ void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
             strip.removeFromTop(19);
             strip.removeFromBottom(24);
             auto body = strip.reduced(7, 3);
+            body.removeFromRight(std::max(42, body.getWidth() / 3));
             auto lane = body.withWidth(std::max(22, body.getWidth() / 3)).withCentre(body.getCentre());
             const int top = lane.getY() + 3;
             const int bottom = lane.getBottom() - 3;
@@ -2247,6 +2276,30 @@ void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
                 ? juce::jlimit(0.0f, 1.0f, 1.0f - static_cast<float>(e.y - top) / static_cast<float>(bottom - top))
                 : 0.0f;
             onSetMixerGainDbForInsert(quickMixerDragInsert_, -60.0f + norm * 72.0f);
+            repaint();
+        }
+        return;
+    }
+
+    if (dragMode_ == DragMode::quickMixerPan)
+    {
+        const auto mixer = mixerBounds();
+        auto content = mixer.reduced(8, 25);
+        const int count = std::min(8, trackCount_);
+        if (quickMixerDragTrack_ >= 0 && quickMixerDragTrack_ < count && onSetMixerPanForInsert)
+        {
+            const int stripW = std::max(1, content.getWidth() / count);
+            auto strip = juce::Rectangle<int>(content.getX() + quickMixerDragTrack_ * stripW, content.getY(),
+                                              stripW, content.getHeight()).reduced(2);
+            strip.removeFromTop(3);
+            strip.removeFromTop(19);
+            strip.removeFromBottom(24);
+            auto body = strip.reduced(7, 3);
+            auto panArea = body.removeFromRight(std::max(42, body.getWidth() / 3));
+            const float norm = panArea.getWidth() > 1
+                ? static_cast<float>(e.x - panArea.getX()) / static_cast<float>(panArea.getWidth())
+                : 0.5f;
+            onSetMixerPanForInsert(quickMixerDragInsert_, juce::jlimit(-1.0f, 1.0f, norm * 2.0f - 1.0f));
             repaint();
         }
         return;
@@ -4568,6 +4621,12 @@ void DawWorkspace::setClickEnabledFromHost(bool enabled)
     clickButton_.setToggleState(enabled, juce::dontSendNotification);
 }
 
+void DawWorkspace::setClickIemEnabledFromHost(bool enabled, int mixIndex)
+{
+    clickIemButton_.setToggleState(enabled, juce::dontSendNotification);
+    clickIemButton_.setButtonText("ENVIAR A IN EAR " + juce::String(juce::jlimit(0, 15, mixIndex) + 1));
+}
+
 void DawWorkspace::checkpointUndo()
 {
     pushUndoSnapshot(serializeProject());
@@ -4844,14 +4903,6 @@ void DawWorkspace::newProject()
         tracks_[i].colour = trackColour(i);
         tracks_[i].mixerInsert = i;
     }
-    tracks_[0].name = "Voz";
-    tracks_[1].name = juce::String::fromUTF8("Batería");
-    tracks_[2].name = "Bajo";
-    tracks_[3].name = "Guitarra";
-    tracks_[4].name = "Teclado";
-    tracks_[5].name = "Secuencias";
-    tracks_[6].name = "Pads";
-    tracks_[7].name = "FX";
     selectedTrack_ = 0;
     selectedClipId_ = -1;
     selectedMidiNoteId_ = -1;

@@ -44,6 +44,7 @@ public:
     double bpm() const noexcept { return bpm_.load(std::memory_order_relaxed); }
     void setTempoFromHost(double bpm);
     void setClickEnabledFromHost(bool enabled);
+    void setClickIemEnabledFromHost(bool enabled, int mixIndex);
 
     // Test hooks keep timeline navigation deterministic in headless Windows CI.
     void fitProjectForTesting() { fitProject(); }
@@ -68,6 +69,7 @@ public:
     std::function<void()> onOpenIem;
     std::function<void()> onOpenSetlist;
     std::function<void()> onToggleClick;
+    std::function<void(bool)> onSetClickIemEnabled;
     std::function<void(int)> onOpenMixerInsert;
     std::function<void(int)> onOpenPluginsForInsert;
     std::function<void()> onMixerRoutingChanged;
@@ -77,6 +79,8 @@ public:
     std::function<void(int)> onToggleIemForInsert;
     std::function<float(int)> mixerGainDbForInsert;
     std::function<void(int, float)> onSetMixerGainDbForInsert;
+    std::function<float(int)> mixerPanForInsert;
+    std::function<void(int, float)> onSetMixerPanForInsert;
     std::function<int()> currentIemMixIndex;
 
     juce::String mixerInsertName(int insert) const;
@@ -240,7 +244,7 @@ private:
     enum class DragMode
     {
         none, move, trimLeft, trimRight, midiMove, midiResize,
-        resizeBrowser, resizeInspector, resizeMixer, quickMixerFader
+        resizeBrowser, resizeInspector, resizeMixer, quickMixerFader, quickMixerPan
     };
 
     void timerCallback() override;
@@ -425,6 +429,7 @@ private:
     juce::TextButton recordButton_ { "REC" };
     juce::ToggleButton loopButton_ { "LOOP" };
     juce::ToggleButton clickButton_ { "CLICK" };
+    juce::ToggleButton clickIemButton_ { "ENVIAR A IN EAR" };
     juce::TextButton splitButton_ { "DIVIDIR" };
     juce::TextButton duplicateButton_ { "DUPLICAR" };
     juce::TextButton deleteButton_ { "BORRAR" };

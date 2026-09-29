@@ -1810,8 +1810,8 @@ MainComponent::MainComponent()
     };
     pluginsPage_.addAndMakeVisible(favoritePluginButton_);
 
-    scanPluginsButton_.setButtonText("ESCANEAR CARPETA...");
-    pluginLocationsButton_.setButtonText("ESCANEAR TODO");
+    scanPluginsButton_.setButtonText("BUSCAR VST3 / WAVES...");
+    pluginLocationsButton_.setButtonText("ESCANEAR TODO VST3");
     loadPluginButton_.setButtonText("CARGAR EN SLOT");
     scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
     pluginLocationsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
@@ -2129,6 +2129,16 @@ MainComponent::MainComponent()
         updateClickUi();
         refreshDashboard();
     };
+    dawWorkspace_.onSetClickIemEnabled = [this](bool enabled)
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+        iemClickEnabled_[mix].store(enabled, std::memory_order_release);
+        clickToIemButton_.setToggleState(enabled, juce::dontSendNotification);
+        dashboardClickIemButton_.setToggleState(enabled, juce::dontSendNotification);
+        updateClickUi();
+        refreshDashboard();
+        saveAppState();
+    };
     dawWorkspace_.isPaEnabledForInsert = [this](int insert)
     {
         return channelPaEnabled_[juce::jlimit(0, kMaxChannels - 1, insert)].load(std::memory_order_relaxed);
@@ -2167,6 +2177,17 @@ MainComponent::MainComponent()
     {
         const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
         channelGain_[ch].store(dbToGain(juce::jlimit(-60.0f, 12.0f, db)), std::memory_order_relaxed);
+        for (auto& strip : strips_) if (strip) strip->syncFromModel();
+    };
+    dawWorkspace_.mixerPanForInsert = [this](int insert)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        return channelPan_[ch].load(std::memory_order_relaxed);
+    };
+    dawWorkspace_.onSetMixerPanForInsert = [this](int insert, float pan)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        channelPan_[ch].store(juce::jlimit(-1.0f, 1.0f, pan), std::memory_order_relaxed);
         for (auto& strip : strips_) if (strip) strip->syncFromModel();
     };
 
@@ -4037,51 +4058,82 @@ void MainComponent::scanVst3Plugins()
         return;
     }
 
-    const auto searchPath = format->getDefaultLocationsToSearch();
-    std::vector<std::filesystem::path> roots;
-    roots.reserve(static_cast<std::size_t>(searchPath.getNumPaths() + pluginCustomLocations_.size()));
-    for (int i = 0; i < searchPath.getNumPaths(); ++i)
-        roots.emplace_back(std::filesystem::u8path(searchPath[i].getFullPathName().toStdString()));
+    juce::FileSearchPath searchPath = format->getDefaultLocationsToSearch();
+   #if JUCE_WINDOWS
+    for (const auto& common : {
+            juce::File("C:\\Program Files\\Common Files\\VST3"),
+            juce::File("C:\\Program Files\\VSTPlugins"),
+            juce::File("C:\\Program Files\\Steinberg\\VstPlugins") })
+    {
+        if (common.isDirectory())
+            searchPath.addIfNotAlreadyThere(common);
+    }
+   #endif
     for (const auto& custom : pluginCustomLocations_)
     {
         const juce::File folder(custom);
         if (folder.isDirectory())
-            roots.emplace_back(std::filesystem::u8path(folder.getFullPathName().toStdString()));
+            searchPath.addIfNotAlreadyThere(folder);
+    }
+    searchPath.removeNonExistentPaths();
+    searchPath.removeRedundantPaths();
+
+    if (searchPath.getNumPaths() == 0)
+    {
+        pluginScanBusy_.store(false, std::memory_order_release);
+        pluginStatusLabel_.setText("No hay carpetas VST3 válidas para escanear.", juce::dontSendNotification);
+        return;
     }
 
     pluginStatusLabel_.setText(
-        "Escaneando VST3 reales en segundo plano... podés seguir usando el audio.",
+        "Preparando escaneo VST3/Waves... 0%",
         juce::dontSendNotification);
 
     if (pluginScanThread_.joinable())
         pluginScanThread_.join();
 
     auto safe = juce::Component::SafePointer<MainComponent>(this);
-    pluginScanThread_ = std::jthread([safe, roots = std::move(roots)](std::stop_token stop) mutable
+    pluginScanThread_ = std::jthread([safe, searchPath](std::stop_token stop) mutable
     {
-        j3::PluginCatalog scannedBundles;
-        scannedBundles.scan(roots);
-        if (stop.stop_requested())
-            return;
+        juce::KnownPluginList known;
+        auto deadMansPedal = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+            .getChildFile("J3 Worship")
+            .getChildFile("plugin-scan-deadmans-pedal.txt");
+        deadMansPedal.getParentDirectory().createDirectory();
 
-        std::vector<juce::PluginDescription> descriptions;
         juce::VST3PluginFormat scannerFormat;
+        juce::PluginDirectoryScanner scanner(
+            known, scannerFormat, searchPath, true, deadMansPedal, false);
 
-        for (const auto& record : scannedBundles.plugins())
+        juce::String current;
+        int lastPercent = -1;
+        while (!stop.stop_requested() && scanner.scanNextFile(false, current))
         {
-            if (stop.stop_requested())
-                return;
-
-            const juce::String bundlePath(record.path.wstring().c_str());
-            juce::OwnedArray<juce::PluginDescription> types;
-            scannerFormat.findAllTypesForFile(types, bundlePath);
-            for (auto* type : types)
-                if (type != nullptr)
-                    descriptions.push_back(*type);
+            const int percent = juce::jlimit(0, 100, juce::roundToInt(scanner.getProgress() * 100.0f));
+            if (percent != lastPercent)
+            {
+                lastPercent = percent;
+                const auto currentName = current;
+                juce::MessageManager::callAsync([safe, percent, currentName]
+                {
+                    if (safe == nullptr)
+                        return;
+                    juce::String status = "Escaneando VST3/Waves... " + juce::String(percent) + "%";
+                    if (currentName.isNotEmpty())
+                        status << "  ·  " << juce::File(currentName).getFileName();
+                    safe->pluginStatusLabel_.setText(status, juce::dontSendNotification);
+                });
+            }
         }
 
         if (stop.stop_requested())
             return;
+
+        std::vector<juce::PluginDescription> descriptions;
+        const auto knownTypes = known.getTypes();
+        descriptions.reserve(static_cast<std::size_t>(knownTypes.size()));
+        for (const auto& type : knownTypes)
+            descriptions.push_back(type);
 
         std::sort(descriptions.begin(), descriptions.end(),
             [](const juce::PluginDescription& a, const juce::PluginDescription& b)
@@ -4101,13 +4153,14 @@ void MainComponent::scanVst3Plugins()
                 return pluginDescriptionKey(a) == pluginDescriptionKey(b);
             }), descriptions.end());
 
+        const auto failed = scanner.getFailedFiles();
+
         juce::MessageManager::callAsync(
-            [safe, scannedBundles = std::move(scannedBundles), descriptions = std::move(descriptions)]() mutable
+            [safe, descriptions = std::move(descriptions), failed]() mutable
             {
                 if (safe == nullptr)
                     return;
 
-                safe->pluginCatalog_ = std::move(scannedBundles);
                 safe->pluginDescriptions_ = std::move(descriptions);
                 safe->pluginScanBusy_.store(false, std::memory_order_release);
                 safe->pluginsScanned_ = true;
@@ -4115,11 +4168,12 @@ void MainComponent::scanVst3Plugins()
                 safe->restoreSavedPluginsAfterScan();
                 safe->refreshPluginUi();
 
-                safe->pluginStatusLabel_.setText(
-                    juce::String(safe->pluginDescriptions_.size()) + " plugins VST3 encontrados en "
-                        + juce::String(safe->pluginCatalog_.plugins().size())
-                        + " bundles. Waves shells incluidos como plugins individuales.",
-                    juce::dontSendNotification);
+                juce::String status = juce::String(safe->pluginDescriptions_.size())
+                    + " plugins VST3 encontrados. Waves/WaveShell se muestran como plugins individuales.";
+                if (!failed.isEmpty())
+                    status << "  ·  " << juce::String(failed.size())
+                           << " archivo(s) fallaron y fueron aislados para no trabar el escaneo.";
+                safe->pluginStatusLabel_.setText(status, juce::dontSendNotification);
             });
     });
 }
@@ -4979,6 +5033,9 @@ void MainComponent::updateClickUi()
     clickRouteLabel_.setText(route, juce::dontSendNotification);
 
     dawWorkspace_.setClickEnabledFromHost(clickEnabledButton_.getToggleState());
+    const int selectedMix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+    dawWorkspace_.setClickIemEnabledFromHost(
+        iemClickEnabled_[selectedMix].load(std::memory_order_relaxed), selectedMix);
 }
 
 void MainComponent::configureAudio()
