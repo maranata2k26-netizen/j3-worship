@@ -192,6 +192,7 @@ private:
     void refreshIemUi();
     void applyIemRoutingFromControls();
     bool anyIemRouted() const noexcept;
+    bool anyClickIemRouted() const noexcept;
 
     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
                                           int numInputChannels,
@@ -268,6 +269,7 @@ private:
     juce::AudioBuffer<float> pluginGuardScratch_;
     juce::AudioBuffer<float> dawMixerScratch_;
     juce::AudioBuffer<float> dawDryScratch_;
+    juce::AudioBuffer<float> clickScratch_;
     juce::MidiBuffer pluginMidiScratch_;
     bool pluginsScanned_ { false };
     std::atomic<bool> pluginScanBusy_ { false };
