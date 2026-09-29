@@ -3669,6 +3669,7 @@ void MainComponent::loadAppState()
         channelGain_[index].store(static_cast<float>(ch->getDoubleAttribute("gain", dbToGain(-6.0))), std::memory_order_relaxed);
         channelPan_[index].store(static_cast<float>(ch->getDoubleAttribute("pan", 0.0)), std::memory_order_relaxed);
         channelMute_[index].store(ch->getBoolAttribute("mute", false), std::memory_order_relaxed);
+        channelPaEnabled_[index].store(ch->getBoolAttribute("paEnabled", true), std::memory_order_relaxed);
         channelBus_[index].store(juce::jlimit(-1, kBuses - 1, ch->getIntAttribute("bus", -1)), std::memory_order_relaxed);
         channelDca_[index].store(juce::jlimit(-1, kDcas - 1, ch->getIntAttribute("dca", -1)), std::memory_order_relaxed);
         if (migrateLegacyMixer)
@@ -3679,6 +3680,7 @@ void MainComponent::loadAppState()
             channelGain_[index].store(1.0f, std::memory_order_relaxed);
             channelPan_[index].store(0.0f, std::memory_order_relaxed);
             channelMute_[index].store(false, std::memory_order_relaxed);
+            channelPaEnabled_[index].store(true, std::memory_order_relaxed);
             channelBus_[index].store(-1, std::memory_order_relaxed);
             channelDca_[index].store(-1, std::memory_order_relaxed);
         }
@@ -3720,6 +3722,7 @@ void MainComponent::loadAppState()
         if (mix < 0 || mix >= kIemMixes) continue;
         iemMaster_[mix].store(static_cast<float>(iem->getDoubleAttribute("master", 1.0)), std::memory_order_relaxed);
         iemMute_[mix].store(iem->getBoolAttribute("mute", false), std::memory_order_relaxed);
+        iemClickEnabled_[mix].store(iem->getBoolAttribute("click", false), std::memory_order_relaxed);
         iemOutLeft_[mix].store(iem->getIntAttribute("outL", -1), std::memory_order_relaxed);
         iemOutRight_[mix].store(iem->getIntAttribute("outR", -1), std::memory_order_relaxed);
         forEachXmlChildElementWithTagName(*iem, send, "Send")
@@ -3828,6 +3831,7 @@ void MainComponent::saveAppState(bool capturePluginState)
         ch->setAttribute("gain", static_cast<double>(channelGain_[i].load(std::memory_order_relaxed)));
         ch->setAttribute("pan", static_cast<double>(channelPan_[i].load(std::memory_order_relaxed)));
         ch->setAttribute("mute", channelMute_[i].load(std::memory_order_relaxed));
+        ch->setAttribute("paEnabled", channelPaEnabled_[i].load(std::memory_order_relaxed));
         ch->setAttribute("bus", channelBus_[i].load(std::memory_order_relaxed));
         ch->setAttribute("dca", channelDca_[i].load(std::memory_order_relaxed));
         ch->setAttribute("hpf", static_cast<double>(channelHpf_[i].load(std::memory_order_relaxed)));
@@ -3865,6 +3869,7 @@ void MainComponent::saveAppState(bool capturePluginState)
         iem->setAttribute("index", m);
         iem->setAttribute("master", static_cast<double>(iemMaster_[m].load(std::memory_order_relaxed)));
         iem->setAttribute("mute", iemMute_[m].load(std::memory_order_relaxed));
+        iem->setAttribute("click", iemClickEnabled_[m].load(std::memory_order_relaxed));
         iem->setAttribute("outL", iemOutLeft_[m].load(std::memory_order_relaxed));
         iem->setAttribute("outR", iemOutRight_[m].load(std::memory_order_relaxed));
         for (int ch = 0; ch < kMaxChannels; ++ch)
