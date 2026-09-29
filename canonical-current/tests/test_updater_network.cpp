@@ -6,8 +6,6 @@
 int main()
 {
 #if JUCE_WINDOWS
-    juce::ScopedJuceInitialiser_GUI juceInitialiser;
-
     // Exercise the exact public GitHub release path that failed on a real 1.10.9
     // installation. This is deliberately a real network smoke test: it validates
     // GitHub redirects/CDN download plus SHA-256 verification.
