@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 if(POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
-project(J3Worship VERSION 1.11.0 LANGUAGES C CXX)
+project(J3Worship VERSION 1.11.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -145,4 +145,29 @@ if(J3_BUILD_DESKTOP_APP)
     juce::juce_recommended_warning_flags
   )
   add_test(NAME j3ui_layout_tests COMMAND J3WorshipUiLayoutTests)
+
+  juce_add_console_app(J3WorshipUpdaterNetworkTests
+    PRODUCT_NAME "J3 Worship Updater Network Tests"
+  )
+  juce_generate_juce_header(J3WorshipUpdaterNetworkTests)
+  target_sources(J3WorshipUpdaterNetworkTests PRIVATE
+    tests/test_updater_network.cpp
+    app/UpdateService.cpp
+    app/UpdateService.h
+  )
+  target_include_directories(J3WorshipUpdaterNetworkTests PRIVATE include)
+  target_compile_definitions(J3WorshipUpdaterNetworkTests PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+  )
+  target_link_libraries(J3WorshipUpdaterNetworkTests PRIVATE
+    j3core
+    juce::juce_core
+    juce::juce_cryptography
+    winhttp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags
+  )
+  add_test(NAME j3updater_network_tests COMMAND J3WorshipUpdaterNetworkTests)
+  set_tests_properties(j3updater_network_tests PROPERTIES TIMEOUT 240)
 endif()
