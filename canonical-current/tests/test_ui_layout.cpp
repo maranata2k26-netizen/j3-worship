@@ -384,26 +384,29 @@ int main()
         if (recovery.replaceWithText(longProject.toString()))
         {
             {
-                DawWorkspace navigationWorkspace;
-                navigationWorkspace.setSize(1400, 800);
-                navigationWorkspace.prepare(48000.0, 512);
-                navigationWorkspace.setTransportBeatForTesting(500.0);
-                const bool playStarted = navigationWorkspace.keyPressed(juce::KeyPress(juce::KeyPress::spaceKey));
-                navigationWorkspace.timerTickForTesting();
+                // DawWorkspace owns large fixed render buffers. Keep this extra regression
+                // instance off the Windows test stack (the primary workspace already lives
+                // there) so the test validates navigation instead of exhausting stack space.
+                auto navigationWorkspace = std::make_unique<DawWorkspace>();
+                navigationWorkspace->setSize(1400, 800);
+                navigationWorkspace->prepare(48000.0, 512);
+                navigationWorkspace->setTransportBeatForTesting(500.0);
+                const bool playStarted = navigationWorkspace->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey));
+                navigationWorkspace->timerTickForTesting();
 
-                const double followStart = navigationWorkspace.viewStartBeatForTesting();
-                const double followSpan = navigationWorkspace.visibleBeatSpanForTesting();
+                const double followStart = navigationWorkspace->viewStartBeatForTesting();
+                const double followSpan = navigationWorkspace->visibleBeatSpanForTesting();
                 followPass = playStarted
                     && followStart > 1.0
                     && 500.0 >= followStart
                     && 500.0 <= followStart + followSpan;
 
-                navigationWorkspace.emergencyStop();
-                navigationWorkspace.fitProjectForTesting();
-                const double endBeat = navigationWorkspace.projectEndBeatForTesting();
-                fitProjectPass = navigationWorkspace.zoomForTesting() < 0.5
-                    && navigationWorkspace.viewStartBeatForTesting() == 0.0
-                    && navigationWorkspace.visibleBeatSpanForTesting() + 0.5 >= endBeat;
+                navigationWorkspace->emergencyStop();
+                navigationWorkspace->fitProjectForTesting();
+                const double endBeat = navigationWorkspace->projectEndBeatForTesting();
+                fitProjectPass = navigationWorkspace->zoomForTesting() < 0.5
+                    && navigationWorkspace->viewStartBeatForTesting() == 0.0
+                    && navigationWorkspace->visibleBeatSpanForTesting() + 0.5 >= endBeat;
             }
         }
 
