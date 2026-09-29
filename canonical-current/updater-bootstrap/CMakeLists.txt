@@ -25,7 +25,7 @@ target_link_libraries(J3WorshipUpdaterBootstrap PRIVATE winhttp advapi32 shell32
 
 if(MSVC)
   set_property(TARGET J3WorshipUpdaterBootstrap PROPERTY
-    MSVC_RUNTIME_LIBRARY "MultiThreaded${<CONFIG:Debug>:Debug}")
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
   target_compile_options(J3WorshipUpdaterBootstrap PRIVATE /W4 /permissive- /utf-8)
 endif()
 
