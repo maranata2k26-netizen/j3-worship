@@ -2157,6 +2157,18 @@ MainComponent::MainComponent()
         for (auto& strip : iemStrips_) if (strip) strip->syncFromModel();
         saveAppState(false);
     };
+    dawWorkspace_.mixerGainDbForInsert = [this](int insert)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        return juce::Decibels::gainToDecibels(
+            std::max(1.0e-6f, channelGain_[ch].load(std::memory_order_relaxed)), -60.0f);
+    };
+    dawWorkspace_.onSetMixerGainDbForInsert = [this](int insert, float db)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        channelGain_[ch].store(dbToGain(juce::jlimit(-60.0f, 12.0f, db)), std::memory_order_relaxed);
+        for (auto& strip : strips_) if (strip) strip->syncFromModel();
+    };
 
     dawWorkspace_.onBpmChanged = [this](double value)
     {
