@@ -1640,8 +1640,12 @@ MainComponent::MainComponent()
     iemMixBox_.onChange = [this]
     {
         selectedIemMix_ = juce::jlimit(0, kIemMixes - 1, iemMixBox_.getSelectedId() - 1);
+        dashboardIemMixBox_.setSelectedId(selectedIemMix_ + 1, juce::dontSendNotification);
         rebuildIemBank();
+        rebuildMixerBank();
         refreshIemUi();
+        refreshDashboard();
+        resized();
     };
     iemPage_.addAndMakeVisible(iemMixBox_);
 
@@ -2565,6 +2569,9 @@ void MainComponent::refreshDashboard()
     const float master = std::max(1.0e-6f, iemMaster_[mix].load(std::memory_order_relaxed));
     dashboardIemMasterSlider_.setValue(juce::Decibels::gainToDecibels(master, -60.0f),
                                        juce::dontSendNotification);
+    dashboardClickIemButton_.setToggleState(iemClickEnabled_[mix].load(std::memory_order_relaxed),
+                                            juce::dontSendNotification);
+    dashboardClickIemButton_.setButtonText("CLICK → IEM " + juce::String(mix + 1));
 
     const bool recording = recordingEnabled_.load(std::memory_order_acquire);
     dashboardRecordButton_.setButtonText(recording ? "DETENER" : "GRABAR");
@@ -3096,7 +3103,15 @@ void MainComponent::refreshIemUi()
     iemOutLeftBox_.setSelectedId(left >= 0 ? left + 2 : 1, juce::dontSendNotification);
     iemOutRightBox_.setSelectedId(right >= 0 ? right + 2 : 1, juce::dontSendNotification);
 
+    const bool clickToThisIem = iemClickEnabled_[mix].load(std::memory_order_relaxed);
+    clickToIemButton_.setToggleState(clickToThisIem, juce::dontSendNotification);
+    clickToIemButton_.setButtonText("CLICK → IEM " + juce::String(mix + 1));
+    dashboardClickIemButton_.setToggleState(clickToThisIem, juce::dontSendNotification);
+    dashboardClickIemButton_.setButtonText("CLICK → IEM " + juce::String(mix + 1));
+
     for (auto& strip : iemStrips_)
+        if (strip) strip->syncFromModel();
+    for (auto& strip : strips_)
         if (strip) strip->syncFromModel();
 }
 
@@ -3130,6 +3145,20 @@ bool MainComponent::anyIemRouted() const noexcept
             && iemOutRight_[i].load(std::memory_order_relaxed) >= 0
             && !iemMute_[i].load(std::memory_order_relaxed))
             return true;
+    return false;
+}
+
+bool MainComponent::anyClickIemRouted() const noexcept
+{
+    for (int i = 0; i < kIemMixes; ++i)
+    {
+        const int left = iemOutLeft_[i].load(std::memory_order_relaxed);
+        const int right = iemOutRight_[i].load(std::memory_order_relaxed);
+        if (iemClickEnabled_[i].load(std::memory_order_relaxed)
+            && !iemMute_[i].load(std::memory_order_relaxed)
+            && left >= 0 && right >= 0 && left != right)
+            return true;
+    }
     return false;
 }
 
@@ -4906,11 +4935,33 @@ void MainComponent::updateClickUi()
 {
     const int out = clickOutput_.load(std::memory_order_relaxed);
     juce::String route = "CLICK routing: ";
-    if (out < 0) route << juce::String::fromUTF8("OFF — choose an output in AUDIO / ROUTING.");
-    else route << "Output " << (out + 1) << ". J3 Safe Routing blocks this output if it is also used by PA.";
+    bool hasDestination = false;
+    if (out >= 0)
+    {
+        route << "GUIDE OUT " << (out + 1);
+        hasDestination = true;
+    }
+
+    for (int mix = 0; mix < kIemMixes; ++mix)
+    {
+        if (!iemClickEnabled_[mix].load(std::memory_order_relaxed))
+            continue;
+        const int left = iemOutLeft_[mix].load(std::memory_order_relaxed);
+        const int right = iemOutRight_[mix].load(std::memory_order_relaxed);
+        if (left < 0 || right < 0 || left == right || iemMute_[mix].load(std::memory_order_relaxed))
+            continue;
+        if (hasDestination) route << juce::String::fromUTF8(" · ");
+        route << "IEM " << (mix + 1);
+        hasDestination = true;
+    }
+
+    if (!hasDestination)
+        route << juce::String::fromUTF8("OFF — elegí GUIDE OUT o activá CLICK → IEM en una mezcla ruteada.");
     route << "\nTempo: " << juce::String(bpmSlider_.getValue(), 1) << juce::String::fromUTF8(" BPM · ")
           << clickGenerator_.numerator() << "/" << clickGenerator_.denominator();
     clickRouteLabel_.setText(route, juce::dontSendNotification);
+
+    dawWorkspace_.setClickEnabledFromHost(clickEnabledButton_.getToggleState());
 }
 
 void MainComponent::configureAudio()
