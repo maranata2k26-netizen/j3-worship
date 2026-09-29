@@ -2232,7 +2232,7 @@ MainComponent::MainComponent()
         pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
         dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
         selectedDspChannel_ = ch;
-        tabs_.setCurrentTabIndex(1);
+        tabs_.setCurrentTabIndex(0);
         refreshPluginUi();
         refreshDspUi();
     };
@@ -2297,7 +2297,7 @@ MainComponent::MainComponent()
     tabs_.addTab("RUTEO", juce::Colour(panel), &setupPage_, false);
     tabs_.addTab("AJUSTES", juce::Colour(panel), &diagnosticsPage_, false);
     addAndMakeVisible(tabs_);
-    tabs_.setCurrentTabIndex(0);
+    tabs_.setCurrentTabIndex(1);
 
     const bool firstRunSetup = !getAudioStateFile().existsAsFile() && !getAppStateFile().existsAsFile();
     recoveredAfterUncleanExit_ = getRuntimeLockFile().existsAsFile();
