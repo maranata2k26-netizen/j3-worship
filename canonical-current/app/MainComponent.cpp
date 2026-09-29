@@ -925,9 +925,12 @@ MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
                                       std::atomic<float>& gain, std::atomic<float>& pan,
                                       std::atomic<bool>& muted, std::atomic<float>& meter,
                                       std::atomic<int>& bus, std::atomic<int>& dca,
+                                      std::atomic<bool>& paEnabled,
+                                      std::atomic<float>& iemSendGain, int iemMixIndex,
                                       std::function<void(int)> onOpenFx)
     : index_(index), gain_(gain), pan_(pan), muted_(muted), meter_(meter),
-      bus_(bus), dca_(dca), meterBar_(meterValue_), onOpenFx_(std::move(onOpenFx))
+      bus_(bus), dca_(dca), paEnabled_(paEnabled), iemSendGain_(iemSendGain),
+      iemMixIndex_(iemMixIndex), meterBar_(meterValue_), onOpenFx_(std::move(onOpenFx))
 {
     setOpaque(false);
 
@@ -957,6 +960,21 @@ MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
     muteButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(mutedText));
     muteButton_.onClick = [this] { muted_.store(muteButton_.getToggleState(), std::memory_order_relaxed); };
     addAndMakeVisible(muteButton_);
+
+    paButton_.setButtonText("PA");
+    paButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(good));
+    paButton_.setTooltip("Salida exterior / PA. Apagalo para dejar este canal fuera de los parlantes sin quitarlo del IEM.");
+    paButton_.onClick = [this] { paEnabled_.store(paButton_.getToggleState(), std::memory_order_release); };
+    addAndMakeVisible(paButton_);
+
+    iemButton_.setButtonText("IEM " + juce::String(iemMixIndex_ + 1));
+    iemButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(accent));
+    iemButton_.setTooltip("Envío rápido al IEM seleccionado. ON = 0 dB; OFF = sin envío.");
+    iemButton_.onClick = [this]
+    {
+        iemSendGain_.store(iemButton_.getToggleState() ? 1.0f : 0.0f, std::memory_order_release);
+    };
+    addAndMakeVisible(iemButton_);
 
     fxButton_.setButtonText("FX / PLUGINS");
     fxButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173246));
@@ -1025,8 +1043,13 @@ void MainComponent::MixerStrip::resized()
     r.removeFromBottom(3);
     fxButton_.setBounds(r.removeFromBottom(26));
     r.removeFromBottom(3);
-    muteButton_.setBounds(r.removeFromBottom(28));
-    panSlider_.setBounds(r.removeFromBottom(76));
+    muteButton_.setBounds(r.removeFromBottom(26));
+    r.removeFromBottom(2);
+    auto routeRow = r.removeFromBottom(26);
+    paButton_.setBounds(routeRow.removeFromLeft(routeRow.getWidth() / 2).reduced(1, 0));
+    iemButton_.setBounds(routeRow.reduced(1, 0));
+    r.removeFromBottom(2);
+    panSlider_.setBounds(r.removeFromBottom(64));
     fader_.setBounds(r.reduced(2, 4));
 }
 
@@ -1046,6 +1069,9 @@ void MainComponent::MixerStrip::syncFromModel()
     fader_.setValue(juce::Decibels::gainToDecibels(gain, -60.0f), juce::dontSendNotification);
     panSlider_.setValue(pan_.load(std::memory_order_relaxed), juce::dontSendNotification);
     muteButton_.setToggleState(muted_.load(std::memory_order_relaxed), juce::dontSendNotification);
+    paButton_.setToggleState(paEnabled_.load(std::memory_order_relaxed), juce::dontSendNotification);
+    iemButton_.setToggleState(iemSendGain_.load(std::memory_order_relaxed) > 1.0e-8f, juce::dontSendNotification);
+    iemButton_.setButtonText("IEM " + juce::String(iemMixIndex_ + 1));
     const int bus = bus_.load(std::memory_order_relaxed);
     const int dca = dca_.load(std::memory_order_relaxed);
     busBox_.setSelectedId(bus >= 0 && bus < kBuses ? bus + 2 : 1, juce::dontSendNotification);
@@ -1168,6 +1194,7 @@ MainComponent::MainComponent()
         channelGain_[i].store(dbToGain(-6.0));
         channelPan_[i].store(0.0f);
         channelMute_[i].store(false);
+        channelPaEnabled_[i].store(true);
         channelMeter_[i].store(0.0f);
         channelBus_[i].store(-1);
         channelDca_[i].store(-1);
@@ -1202,6 +1229,7 @@ MainComponent::MainComponent()
     {
         iemMaster_[m].store(1.0f);
         iemMute_[m].store(false);
+        iemClickEnabled_[m].store(false);
         iemOutLeft_[m].store(-1);
         iemOutRight_[m].store(-1);
         for (int ch = 0; ch < kMaxChannels; ++ch)
@@ -1420,7 +1448,10 @@ MainComponent::MainComponent()
         selectedIemMix_ = juce::jlimit(0, kIemMixes - 1, dashboardIemMixBox_.getSelectedId() - 1);
         iemMixBox_.setSelectedId(selectedIemMix_ + 1, juce::dontSendNotification);
         rebuildIemBank();
+        rebuildMixerBank();
         refreshIemUi();
+        refreshDashboard();
+        resized();
     };
     dashboardIemMasterSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     dashboardIemMasterSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 62, 22);
@@ -1471,11 +1502,22 @@ MainComponent::MainComponent()
         clickEnabledButton_.triggerClick();
         refreshDashboard();
     };
+    dashboardClickIemButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(accent));
+    dashboardClickIemButton_.setTooltip("CLICK sólo hacia el IEM seleccionado; nunca se suma al PA.");
+    dashboardClickIemButton_.onClick = [this]
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+        iemClickEnabled_[mix].store(dashboardClickIemButton_.getToggleState(), std::memory_order_release);
+        clickToIemButton_.setToggleState(dashboardClickIemButton_.getToggleState(), juce::dontSendNotification);
+        updateClickUi();
+        saveAppState();
+    };
     dashboardTempoLabel_.setJustificationType(juce::Justification::centred);
     dashboardTempoLabel_.setFont(juce::FontOptions(13.5f, juce::Font::bold));
     mixerPage_.addAndMakeVisible(dashboardLiveTitle_);
     mixerPage_.addAndMakeVisible(dashboardPadButton_);
     mixerPage_.addAndMakeVisible(dashboardClickButton_);
+    mixerPage_.addAndMakeVisible(dashboardClickIemButton_);
     mixerPage_.addAndMakeVisible(dashboardTempoLabel_);
 
     for (std::size_t i = 0; i < names.size(); ++i)
@@ -1598,8 +1640,12 @@ MainComponent::MainComponent()
     iemMixBox_.onChange = [this]
     {
         selectedIemMix_ = juce::jlimit(0, kIemMixes - 1, iemMixBox_.getSelectedId() - 1);
+        dashboardIemMixBox_.setSelectedId(selectedIemMix_ + 1, juce::dontSendNotification);
         rebuildIemBank();
+        rebuildMixerBank();
         refreshIemUi();
+        refreshDashboard();
+        resized();
     };
     iemPage_.addAndMakeVisible(iemMixBox_);
 
@@ -1897,7 +1943,7 @@ MainComponent::MainComponent()
             transportRunning_.store(true, std::memory_order_release);
             clickGenerator_.setEnabled(true);
         }
-        if (clickAudible_.load() && clickOutput_.load() < 0)
+        if (clickAudible_.load() && clickOutput_.load() < 0 && !anyClickIemRouted())
         {
             clickEnabledButton_.setToggleState(false, juce::dontSendNotification);
             clickAudible_.store(false, std::memory_order_release);
@@ -1906,12 +1952,26 @@ MainComponent::MainComponent()
                 transportRunning_.store(false, std::memory_order_release);
                 clickGenerator_.setEnabled(false);
             }
-            showAudioError(juce::String::fromUTF8("Elegí una salida CLICK / GUIDE distinta del PA antes de activar el click."));
+            showAudioError(juce::String::fromUTF8(
+                "El CLICK necesita un destino. Elegí CLICK / GUIDE en RUTEO o activá CLICK → IEM en una mezcla IEM que tenga salidas asignadas."));
         }
         updateClickUi();
         saveAppState();
     };
     clickPage_.addAndMakeVisible(clickEnabledButton_);
+
+    clickToIemButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(accent));
+    clickToIemButton_.setTooltip("Envía el metrónomo al IEM seleccionado sin mandarlo al PA.");
+    clickToIemButton_.onClick = [this]
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+        iemClickEnabled_[mix].store(clickToIemButton_.getToggleState(), std::memory_order_release);
+        dashboardClickIemButton_.setToggleState(clickToIemButton_.getToggleState(), juce::dontSendNotification);
+        updateClickUi();
+        refreshDashboard();
+        saveAppState();
+    };
+    clickPage_.addAndMakeVisible(clickToIemButton_);
 
     bpmSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     bpmSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 90, 28);
@@ -2063,6 +2123,53 @@ MainComponent::MainComponent()
     };
     diagnosticsPage_.addAndMakeVisible(runCheckButton_);
 
+    dawWorkspace_.onToggleClick = [this]
+    {
+        clickEnabledButton_.triggerClick();
+        updateClickUi();
+        refreshDashboard();
+    };
+    dawWorkspace_.isPaEnabledForInsert = [this](int insert)
+    {
+        return channelPaEnabled_[juce::jlimit(0, kMaxChannels - 1, insert)].load(std::memory_order_relaxed);
+    };
+    dawWorkspace_.isIemEnabledForInsert = [this](int insert)
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        return iemSendGain_[mix][ch].load(std::memory_order_relaxed) > 1.0e-8f;
+    };
+    dawWorkspace_.currentIemMixIndex = [this] { return selectedIemMix_; };
+    dawWorkspace_.onTogglePaForInsert = [this](int insert)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        channelPaEnabled_[ch].store(!channelPaEnabled_[ch].load(std::memory_order_relaxed), std::memory_order_release);
+        for (auto& strip : strips_) if (strip) strip->syncFromModel();
+        saveAppState(false);
+    };
+    dawWorkspace_.onToggleIemForInsert = [this](int insert)
+    {
+        const int mix = juce::jlimit(0, kIemMixes - 1, selectedIemMix_);
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        const bool enabled = iemSendGain_[mix][ch].load(std::memory_order_relaxed) > 1.0e-8f;
+        iemSendGain_[mix][ch].store(enabled ? 0.0f : 1.0f, std::memory_order_release);
+        for (auto& strip : strips_) if (strip) strip->syncFromModel();
+        for (auto& strip : iemStrips_) if (strip) strip->syncFromModel();
+        saveAppState(false);
+    };
+    dawWorkspace_.mixerGainDbForInsert = [this](int insert)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        return juce::Decibels::gainToDecibels(
+            std::max(1.0e-6f, channelGain_[ch].load(std::memory_order_relaxed)), -60.0f);
+    };
+    dawWorkspace_.onSetMixerGainDbForInsert = [this](int insert, float db)
+    {
+        const int ch = juce::jlimit(0, kMaxChannels - 1, insert);
+        channelGain_[ch].store(dbToGain(juce::jlimit(-60.0f, 12.0f, db)), std::memory_order_relaxed);
+        for (auto& strip : strips_) if (strip) strip->syncFromModel();
+    };
+
     dawWorkspace_.onBpmChanged = [this](double value)
     {
         if (std::abs(bpmSlider_.getValue() - value) > 0.001)
@@ -2189,8 +2296,8 @@ MainComponent::MainComponent()
     };
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(42);
-    tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
-    tabs_.addTab("ARRANGER", juce::Colour(panel), &dawWorkspace_, false);
+    tabs_.addTab("MIXER SOLO", juce::Colour(panel), &mixerPage_, false);
+    tabs_.addTab(juce::String::fromUTF8("PRODUCCIÓN"), juce::Colour(panel), &dawWorkspace_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GRUPOS", juce::Colour(panel), &groupsPage_, false);
@@ -2202,7 +2309,7 @@ MainComponent::MainComponent()
     tabs_.addTab("RUTEO", juce::Colour(panel), &setupPage_, false);
     tabs_.addTab("AJUSTES", juce::Colour(panel), &diagnosticsPage_, false);
     addAndMakeVisible(tabs_);
-    tabs_.setCurrentTabIndex(0);
+    tabs_.setCurrentTabIndex(1);
 
     const bool firstRunSetup = !getAudioStateFile().existsAsFile() && !getAppStateFile().existsAsFile();
     recoveredAfterUncleanExit_ = getRuntimeLockFile().existsAsFile();
@@ -2474,6 +2581,9 @@ void MainComponent::refreshDashboard()
     const float master = std::max(1.0e-6f, iemMaster_[mix].load(std::memory_order_relaxed));
     dashboardIemMasterSlider_.setValue(juce::Decibels::gainToDecibels(master, -60.0f),
                                        juce::dontSendNotification);
+    dashboardClickIemButton_.setToggleState(iemClickEnabled_[mix].load(std::memory_order_relaxed),
+                                            juce::dontSendNotification);
+    dashboardClickIemButton_.setButtonText("CLICK → IEM " + juce::String(mix + 1));
 
     const bool recording = recordingEnabled_.load(std::memory_order_acquire);
     dashboardRecordButton_.setButtonText(recording ? "DETENER" : "GRABAR");
@@ -2948,6 +3058,7 @@ void MainComponent::rebuildMixerBank()
             channel, title,
             channelGain_[channel], channelPan_[channel], channelMute_[channel], channelMeter_[channel],
             channelBus_[channel], channelDca_[channel],
+            channelPaEnabled_[channel], iemSendGain_[selectedIemMix_][channel], selectedIemMix_,
             [this](int ch)
             {
                 pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
@@ -3004,7 +3115,15 @@ void MainComponent::refreshIemUi()
     iemOutLeftBox_.setSelectedId(left >= 0 ? left + 2 : 1, juce::dontSendNotification);
     iemOutRightBox_.setSelectedId(right >= 0 ? right + 2 : 1, juce::dontSendNotification);
 
+    const bool clickToThisIem = iemClickEnabled_[mix].load(std::memory_order_relaxed);
+    clickToIemButton_.setToggleState(clickToThisIem, juce::dontSendNotification);
+    clickToIemButton_.setButtonText("CLICK → IEM " + juce::String(mix + 1));
+    dashboardClickIemButton_.setToggleState(clickToThisIem, juce::dontSendNotification);
+    dashboardClickIemButton_.setButtonText("CLICK → IEM " + juce::String(mix + 1));
+
     for (auto& strip : iemStrips_)
+        if (strip) strip->syncFromModel();
+    for (auto& strip : strips_)
         if (strip) strip->syncFromModel();
 }
 
@@ -3038,6 +3157,20 @@ bool MainComponent::anyIemRouted() const noexcept
             && iemOutRight_[i].load(std::memory_order_relaxed) >= 0
             && !iemMute_[i].load(std::memory_order_relaxed))
             return true;
+    return false;
+}
+
+bool MainComponent::anyClickIemRouted() const noexcept
+{
+    for (int i = 0; i < kIemMixes; ++i)
+    {
+        const int left = iemOutLeft_[i].load(std::memory_order_relaxed);
+        const int right = iemOutRight_[i].load(std::memory_order_relaxed);
+        if (iemClickEnabled_[i].load(std::memory_order_relaxed)
+            && !iemMute_[i].load(std::memory_order_relaxed)
+            && left >= 0 && right >= 0 && left != right)
+            return true;
+    }
     return false;
 }
 
@@ -3192,6 +3325,7 @@ void MainComponent::resized()
     dashboardStopButton_.setBounds(transportTop.removeFromLeft(70).reduced(2));
     dashboardPadButton_.setBounds(transportTop.removeFromLeft(70).reduced(2));
     dashboardClickButton_.setBounds(transportTop.removeFromLeft(78).reduced(2));
+    dashboardClickIemButton_.setBounds(transportTop.removeFromLeft(118).reduced(2));
     dashboardTempoLabel_.setBounds(transportTop.removeFromRight(150));
     transport.removeFromTop(7);
     const int sectionGap = 5;
@@ -3358,7 +3492,10 @@ void MainComponent::resized()
     auto clickArea = clickPage_.getLocalBounds().reduced(36);
     clickTitle_.setBounds(clickArea.removeFromTop(48));
     clickArea.removeFromTop(18);
-    clickEnabledButton_.setBounds(clickArea.removeFromTop(40).removeFromLeft(180));
+    auto clickRouteButtons = clickArea.removeFromTop(40);
+    clickEnabledButton_.setBounds(clickRouteButtons.removeFromLeft(180));
+    clickRouteButtons.removeFromLeft(12);
+    clickToIemButton_.setBounds(clickRouteButtons.removeFromLeft(210));
     clickArea.removeFromTop(18);
     auto tempoRow = clickArea.removeFromTop(58);
     bpmSlider_.setBounds(tempoRow.removeFromLeft(std::min(560, tempoRow.getWidth() - 180)));
@@ -3544,6 +3681,7 @@ void MainComponent::loadAppState()
         channelGain_[index].store(static_cast<float>(ch->getDoubleAttribute("gain", dbToGain(-6.0))), std::memory_order_relaxed);
         channelPan_[index].store(static_cast<float>(ch->getDoubleAttribute("pan", 0.0)), std::memory_order_relaxed);
         channelMute_[index].store(ch->getBoolAttribute("mute", false), std::memory_order_relaxed);
+        channelPaEnabled_[index].store(ch->getBoolAttribute("paEnabled", true), std::memory_order_relaxed);
         channelBus_[index].store(juce::jlimit(-1, kBuses - 1, ch->getIntAttribute("bus", -1)), std::memory_order_relaxed);
         channelDca_[index].store(juce::jlimit(-1, kDcas - 1, ch->getIntAttribute("dca", -1)), std::memory_order_relaxed);
         if (migrateLegacyMixer)
@@ -3554,6 +3692,7 @@ void MainComponent::loadAppState()
             channelGain_[index].store(1.0f, std::memory_order_relaxed);
             channelPan_[index].store(0.0f, std::memory_order_relaxed);
             channelMute_[index].store(false, std::memory_order_relaxed);
+            channelPaEnabled_[index].store(true, std::memory_order_relaxed);
             channelBus_[index].store(-1, std::memory_order_relaxed);
             channelDca_[index].store(-1, std::memory_order_relaxed);
         }
@@ -3595,6 +3734,7 @@ void MainComponent::loadAppState()
         if (mix < 0 || mix >= kIemMixes) continue;
         iemMaster_[mix].store(static_cast<float>(iem->getDoubleAttribute("master", 1.0)), std::memory_order_relaxed);
         iemMute_[mix].store(iem->getBoolAttribute("mute", false), std::memory_order_relaxed);
+        iemClickEnabled_[mix].store(iem->getBoolAttribute("click", false), std::memory_order_relaxed);
         iemOutLeft_[mix].store(iem->getIntAttribute("outL", -1), std::memory_order_relaxed);
         iemOutRight_[mix].store(iem->getIntAttribute("outR", -1), std::memory_order_relaxed);
         forEachXmlChildElementWithTagName(*iem, send, "Send")
@@ -3703,6 +3843,7 @@ void MainComponent::saveAppState(bool capturePluginState)
         ch->setAttribute("gain", static_cast<double>(channelGain_[i].load(std::memory_order_relaxed)));
         ch->setAttribute("pan", static_cast<double>(channelPan_[i].load(std::memory_order_relaxed)));
         ch->setAttribute("mute", channelMute_[i].load(std::memory_order_relaxed));
+        ch->setAttribute("paEnabled", channelPaEnabled_[i].load(std::memory_order_relaxed));
         ch->setAttribute("bus", channelBus_[i].load(std::memory_order_relaxed));
         ch->setAttribute("dca", channelDca_[i].load(std::memory_order_relaxed));
         ch->setAttribute("hpf", static_cast<double>(channelHpf_[i].load(std::memory_order_relaxed)));
@@ -3740,6 +3881,7 @@ void MainComponent::saveAppState(bool capturePluginState)
         iem->setAttribute("index", m);
         iem->setAttribute("master", static_cast<double>(iemMaster_[m].load(std::memory_order_relaxed)));
         iem->setAttribute("mute", iemMute_[m].load(std::memory_order_relaxed));
+        iem->setAttribute("click", iemClickEnabled_[m].load(std::memory_order_relaxed));
         iem->setAttribute("outL", iemOutLeft_[m].load(std::memory_order_relaxed));
         iem->setAttribute("outR", iemOutRight_[m].load(std::memory_order_relaxed));
         for (int ch = 0; ch < kMaxChannels; ++ch)
@@ -4810,11 +4952,33 @@ void MainComponent::updateClickUi()
 {
     const int out = clickOutput_.load(std::memory_order_relaxed);
     juce::String route = "CLICK routing: ";
-    if (out < 0) route << juce::String::fromUTF8("OFF — choose an output in AUDIO / ROUTING.");
-    else route << "Output " << (out + 1) << ". J3 Safe Routing blocks this output if it is also used by PA.";
+    bool hasDestination = false;
+    if (out >= 0)
+    {
+        route << "GUIDE OUT " << (out + 1);
+        hasDestination = true;
+    }
+
+    for (int mix = 0; mix < kIemMixes; ++mix)
+    {
+        if (!iemClickEnabled_[mix].load(std::memory_order_relaxed))
+            continue;
+        const int left = iemOutLeft_[mix].load(std::memory_order_relaxed);
+        const int right = iemOutRight_[mix].load(std::memory_order_relaxed);
+        if (left < 0 || right < 0 || left == right || iemMute_[mix].load(std::memory_order_relaxed))
+            continue;
+        if (hasDestination) route << juce::String::fromUTF8(" · ");
+        route << "IEM " << (mix + 1);
+        hasDestination = true;
+    }
+
+    if (!hasDestination)
+        route << juce::String::fromUTF8("OFF — elegí GUIDE OUT o activá CLICK → IEM en una mezcla ruteada.");
     route << "\nTempo: " << juce::String(bpmSlider_.getValue(), 1) << juce::String::fromUTF8(" BPM · ")
           << clickGenerator_.numerator() << "/" << clickGenerator_.denominator();
     clickRouteLabel_.setText(route, juce::dontSendNotification);
+
+    dawWorkspace_.setClickEnabledFromHost(clickEnabledButton_.getToggleState());
 }
 
 void MainComponent::configureAudio()
@@ -5429,7 +5593,13 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
         int second = -1;
         for (int o = 0; o < numOutputChannels; ++o)
         {
-            if (outputChannelData[o] == nullptr || o == click)
+            bool reservedForIem = false;
+            for (int mix = 0; mix < kIemMixes && !reservedForIem; ++mix)
+            {
+                reservedForIem = o == iemOutLeft_[mix].load(std::memory_order_relaxed)
+                              || o == iemOutRight_[mix].load(std::memory_order_relaxed);
+            }
+            if (outputChannelData[o] == nullptr || o == click || reservedForIem)
                 continue;
             if (first < 0) first = o;
             else { second = o; break; }
@@ -5508,7 +5678,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
                     iemR[i] += x * send * std::sin(iemAngle);
                 }
 
-                if (!safePa || dcaMuted)
+                if (!safePa || dcaMuted || !channelPaEnabled_[ch].load(std::memory_order_relaxed))
                     continue;
 
                 const float post = x * channelGain * dcaGain;
@@ -5583,7 +5753,8 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
 
             for (int ch = 0; ch < kMaxChannels; ++ch)
             {
-                if (channelMute_[ch].load(std::memory_order_relaxed))
+                if (channelMute_[ch].load(std::memory_order_relaxed)
+                    || !channelPaEnabled_[ch].load(std::memory_order_relaxed))
                     continue;
 
                 const int dca = channelDca_[ch].load(std::memory_order_relaxed);
@@ -5647,6 +5818,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
                 processPluginChainStereo(ch, insertL, insertR, numSamples);
 
                 const bool muted = channelMute_[ch].load(std::memory_order_relaxed);
+                const bool paEnabled = channelPaEnabled_[ch].load(std::memory_order_relaxed);
                 const int dca = channelDca_[ch].load(std::memory_order_relaxed);
                 const bool dcaMuted = dca >= 0 && dca < kDcas && dcaMute_[dca].load(std::memory_order_relaxed);
                 const float dcaGain = dca >= 0 && dca < kDcas ? dcaGain_[dca].load(std::memory_order_relaxed) : 1.0f;
@@ -5660,7 +5832,38 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
                     float l = insertL[i];
                     float r = insertR[i];
                     peak = std::max(peak, std::max(std::abs(l), std::abs(r)));
-                    if (muted || dcaMuted)
+                    if (muted)
+                        continue;
+
+                    // DAW tracks follow the same live-console rule as XR18 inputs:
+                    // IEM is post-DSP/FX but pre-fader/DCA and independent from PA ON/OFF.
+                    const float monitorMono = (l + r) * 0.70710678f;
+                    for (int m = 0; m < kIemMixes; ++m)
+                    {
+                        if (iemMute_[m].load(std::memory_order_relaxed))
+                            continue;
+                        const int il = iemOutLeft_[m].load(std::memory_order_relaxed);
+                        const int ir = iemOutRight_[m].load(std::memory_order_relaxed);
+                        if (il < 0 || ir < 0 || il >= numOutputChannels || ir >= numOutputChannels || il == ir)
+                            continue;
+                        if (il == playbackLeft || il == playbackRight || ir == playbackLeft || ir == playbackRight
+                            || il == click || ir == click)
+                            continue;
+                        auto* iemL = outputChannelData[il];
+                        auto* iemR = outputChannelData[ir];
+                        if (iemL == nullptr || iemR == nullptr)
+                            continue;
+                        const float send = iemSendGain_[m][ch].load(std::memory_order_relaxed)
+                            * iemMaster_[m].load(std::memory_order_relaxed);
+                        if (send <= 1.0e-8f)
+                            continue;
+                        const float iemPan = juce::jlimit(-1.0f, 1.0f, iemSendPan_[m][ch].load(std::memory_order_relaxed));
+                        const float iemAngle = (iemPan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+                        iemL[i] += monitorMono * send * std::cos(iemAngle);
+                        iemR[i] += monitorMono * send * std::sin(iemAngle);
+                    }
+
+                    if (dcaMuted || !paEnabled)
                         continue;
 
                     if (pan < 0.0f) r *= 1.0f + pan;
@@ -5753,13 +5956,96 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
         dawFxSilenceFallbackActive_.store(false, std::memory_order_relaxed);
     }
 
+    if (transportRunning_.load(std::memory_order_acquire))
+    {
+        const bool clickOn = clickAudible_.load(std::memory_order_relaxed);
+        float* directClickOut = nullptr;
+        const int activePaLeft = dawRunning ? playbackLeft : left;
+        const int activePaRight = dawRunning ? playbackRight : right;
+        if (clickOn && click >= 0 && click < numOutputChannels
+            && routeIsSafe(activePaLeft, activePaRight, click))
+            directClickOut = outputChannelData[click];
+
+        bool routeClickToIem = false;
+        if (clickOn)
+        {
+            for (int m = 0; m < kIemMixes; ++m)
+            {
+                const int il = iemOutLeft_[m].load(std::memory_order_relaxed);
+                const int ir = iemOutRight_[m].load(std::memory_order_relaxed);
+                if (iemClickEnabled_[m].load(std::memory_order_relaxed)
+                    && !iemMute_[m].load(std::memory_order_relaxed)
+                    && il >= 0 && ir >= 0 && il < numOutputChannels && ir < numOutputChannels
+                    && il != ir && outputChannelData[il] != nullptr && outputChannelData[ir] != nullptr)
+                {
+                    routeClickToIem = true;
+                    break;
+                }
+            }
+        }
+
+        const bool scratchReady = clickScratch_.getNumChannels() >= 1
+            && clickScratch_.getNumSamples() >= numSamples;
+        float* generatorOut = directClickOut;
+        if (routeClickToIem && scratchReady)
+        {
+            clickScratch_.clear(0, 0, numSamples);
+            generatorOut = clickScratch_.getWritePointer(0);
+        }
+
+        const int beats = clickGenerator_.process(clickOn ? generatorOut : nullptr, numSamples);
+        if (beats > 0)
+            pendingBeatEvents_.fetch_add(beats, std::memory_order_relaxed);
+
+        if (routeClickToIem && scratchReady)
+        {
+            const auto* source = clickScratch_.getReadPointer(0);
+
+            // Preserve an optional dedicated GUIDE output while sharing the same
+            // generated click with one or more independent IEM mixes.
+            if (directClickOut != nullptr)
+                juce::FloatVectorOperations::add(directClickOut, source, numSamples);
+
+            for (int m = 0; m < kIemMixes; ++m)
+            {
+                if (!iemClickEnabled_[m].load(std::memory_order_relaxed)
+                    || iemMute_[m].load(std::memory_order_relaxed))
+                    continue;
+
+                const int il = iemOutLeft_[m].load(std::memory_order_relaxed);
+                const int ir = iemOutRight_[m].load(std::memory_order_relaxed);
+                if (il < 0 || ir < 0 || il >= numOutputChannels || ir >= numOutputChannels || il == ir)
+                    continue;
+                if (il == left || il == right || ir == left || ir == right || il == click || ir == click)
+                    continue;
+
+                auto* iemL = outputChannelData[il];
+                auto* iemR = outputChannelData[ir];
+                if (iemL == nullptr || iemR == nullptr)
+                    continue;
+
+                const float level = iemMaster_[m].load(std::memory_order_relaxed) * 0.70710678f;
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    const float sample = source[i] * level;
+                    iemL[i] += sample;
+                    iemR[i] += sample;
+                }
+            }
+        }
+    }
+
+
     // Soft output protection is applied after live inputs, pads and DAW playback have been summed.
     // Only exclude CLICK when it actually owns a dedicated safe output; a stale conflicting
     // click route must never remove protection from a PA output.
     const bool dedicatedClickOutput = click >= 0 && click < numOutputChannels
         && outputChannelData[click] != nullptr
         && routeIsSafe(dawRunning ? playbackLeft : left, dawRunning ? playbackRight : right, click);
-    if (monitoring || padAudible || dawAudible)
+    const bool clickIemAudible = transportRunning_.load(std::memory_order_relaxed)
+        && clickAudible_.load(std::memory_order_relaxed)
+        && anyClickIemRouted();
+    if (monitoring || padAudible || dawAudible || clickIemAudible)
     {
         for (int o = 0; o < numOutputChannels; ++o)
         {
@@ -5779,17 +6065,6 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
                 }
             }
         }
-    }
-
-    if (transportRunning_.load(std::memory_order_acquire))
-    {
-        float* clickOut = nullptr;
-        if (clickAudible_.load(std::memory_order_relaxed) && click >= 0 && click < numOutputChannels
-            && routeIsSafe(left, right, click))
-            clickOut = outputChannelData[click];
-        const int beats = clickGenerator_.process(clickOut, numSamples);
-        if (beats > 0)
-            pendingBeatEvents_.fetch_add(beats, std::memory_order_relaxed);
     }
 
     if (recordingEnabled_.load(std::memory_order_acquire))
@@ -5840,6 +6115,8 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     dawMixerScratch_.clear();
     dawDryScratch_.setSize(2, preparedBlock, false, true, false);
     dawDryScratch_.clear();
+    clickScratch_.setSize(1, preparedBlock, false, true, false);
+    clickScratch_.clear();
     dawFxSilenceFallbackActive_.store(false, std::memory_order_release);
     outputSafetyEvents_.store(0, std::memory_order_release);
     for (int ch = 0; ch < kMaxChannels; ++ch)

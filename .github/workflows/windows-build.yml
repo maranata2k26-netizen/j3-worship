@@ -39,12 +39,12 @@ jobs:
 
       - name: Run core tests
         shell: pwsh
-        run: ctest --test-dir canonical-current/build-win -C Release --output-on-failure
+        run: ctest --test-dir canonical-current/build-win -C Release --verbose --output-on-failure
 
       - name: Upload UI layout snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-UI-Layout-1.10.9
+          name: J3Worship-UI-Layout-1.11.0
           path: canonical-current/build-win/ui-snapshots/*.png
           if-no-files-found: error
 
@@ -189,14 +189,14 @@ jobs:
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.10.9
+          name: J3Worship-Windows-1.11.0
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Setup-1.10.9
+          name: J3Worship-Setup-1.11.0
           path: canonical-current/dist-installer/J3Worship-Setup.exe
           if-no-files-found: error
       - name: Publish official GitHub Release

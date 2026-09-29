@@ -17,6 +17,8 @@ constexpr std::uint32_t kMuted = 0xff8fa5b6;
 constexpr std::uint32_t kAccent = 0xff178dff;
 constexpr std::uint32_t kGood = 0xff2ed47a;
 constexpr std::uint32_t kDanger = 0xffff4d64;
+constexpr double kMinTimelineZoom = 0.01;
+constexpr double kMaxTimelineZoom = 4.0;
 
 float dbToGain(double db)
 {
@@ -663,6 +665,13 @@ void DawWorkspace::configureControls()
     recordButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(kDanger).darker(0.32f));
     addAndMakeVisible(loopButton_);
     loopButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(kText));
+    addAndMakeVisible(clickButton_);
+    clickButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(kText));
+    clickButton_.setTooltip("Metrónomo CLICK · un toque para encender/apagar. El destino se configura en CLICK / IEM.");
+    clickButton_.onClick = [this]
+    {
+        if (onToggleClick) onToggleClick();
+    };
 
     newButton_.onClick = [this] { newProject(); };
     openButton_.onClick = [this] { openProjectInteractive(); };
@@ -730,7 +739,7 @@ void DawWorkspace::configureControls()
 
     zoomSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     zoomSlider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    zoomSlider_.setRange(0.5, 4.0, 0.01);
+    zoomSlider_.setRange(kMinTimelineZoom, kMaxTimelineZoom, 0.005);
     zoomSlider_.setValue(1.0, juce::dontSendNotification);
     zoomSlider_.onValueChange = [this] { zoom_ = zoomSlider_.getValue(); repaint(); };
     addAndMakeVisible(zoomSlider_);
@@ -1079,9 +1088,12 @@ void DawWorkspace::paint(juce::Graphics& g)
         g.setFont(juce::FontOptions(10.0f, selected ? juce::Font::bold : juce::Font::plain));
         g.drawFittedText(tracks_[i].name, strip.removeFromTop(19).reduced(4, 0), juce::Justification::centred, 1);
 
-        auto footer = strip.removeFromBottom(22);
+        auto footer = strip.removeFromBottom(24);
         auto body = strip.reduced(7, 3);
-        const float gainDb = static_cast<float>(gainToDb(tracks_[i].gain));
+        const int insert = juce::jlimit(0, kMaxTracks - 1, tracks_[i].mixerInsert);
+        const float gainDb = mixerGainDbForInsert
+            ? mixerGainDbForInsert(insert)
+            : static_cast<float>(gainToDb(tracks_[i].gain));
         const float normGain = juce::jlimit(0.0f, 1.0f, (gainDb + 60.0f) / 72.0f);
 
         // A real fader-style quick view reads as a mixer even when no audio is playing.
@@ -1115,23 +1127,24 @@ void DawWorkspace::paint(juce::Graphics& g)
 
         g.setFont(juce::FontOptions(8.5f, juce::Font::bold));
         g.setColour(juce::Colour(kMuted));
-        auto gainLabel = footer.removeFromLeft(std::max(42, footer.getWidth() - 64)).reduced(3, 1);
+        const bool paEnabled = isPaEnabledForInsert ? isPaEnabledForInsert(insert) : true;
+        const bool iemEnabled = isIemEnabledForInsert ? isIemEnabledForInsert(insert) : false;
+        const int iemMix = currentIemMixIndex ? juce::jlimit(0, 15, currentIemMixIndex()) : 0;
+
+        auto gainLabel = footer.removeFromLeft(std::min(48, std::max(36, footer.getWidth() / 3))).reduced(3, 1);
         g.drawFittedText(juce::String(gainDb, 1) + " dB", gainLabel, juce::Justification::centredLeft, 1);
 
-        auto chipArea = footer.reduced(1, 2);
-        auto drawMiniChip = [&](const char* label, bool active, juce::Colour colour)
+        auto drawRouteChip = [&](const juce::String& label, bool active, juce::Colour colour, int wantedWidth)
         {
-            if (chipArea.getWidth() < 14) return;
-            auto chip = chipArea.removeFromLeft(std::min(18, chipArea.getWidth())).reduced(1);
+            if (footer.getWidth() < 18) return;
+            auto chip = footer.removeFromLeft(std::min(wantedWidth, footer.getWidth())).reduced(1, 2);
             g.setColour(active ? colour : juce::Colour(0xff182832));
-            g.fillRoundedRectangle(chip.toFloat(), 2.0f);
+            g.fillRoundedRectangle(chip.toFloat(), 2.5f);
             g.setColour(active ? juce::Colours::white : juce::Colour(0xff708491));
-            g.drawText(label, chip, juce::Justification::centred);
+            g.drawFittedText(label, chip, juce::Justification::centred, 1);
         };
-        drawMiniChip("M", tracks_[i].mute, juce::Colour(kDanger));
-        drawMiniChip("S", tracks_[i].solo, juce::Colour(kGood));
-        if (!tracks_[i].midi)
-            drawMiniChip("R", tracks_[i].armed, juce::Colour(kDanger));
+        drawRouteChip("PA", paEnabled, juce::Colour(kGood), 31);
+        drawRouteChip("I" + juce::String(iemMix + 1), iemEnabled, juce::Colour(kAccent), 36);
 
         if (selected)
         {
@@ -1147,9 +1160,10 @@ void DawWorkspace::paint(juce::Graphics& g)
 
     g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
     const double ppb = pixelsPerBeat();
-    const int firstBeat = std::max(0, static_cast<int>(std::floor(viewStartBeat_)));
-    const int lastBeat = static_cast<int>(std::ceil(viewStartBeat_ + (tl.getWidth() - headerWidth_) / ppb)) + 1;
-    for (int beat = firstBeat; beat <= lastBeat; ++beat)
+    const int gridStep = ppb >= 8.0 ? 1 : (ppb >= 2.0 ? 4 : (ppb >= 0.5 ? 16 : 64));
+    const int firstBeat = std::max(0, static_cast<int>(std::floor(viewStartBeat_ / gridStep)) * gridStep);
+    const int lastBeat = static_cast<int>(std::ceil(viewStartBeat_ + (tl.getWidth() - headerWidth_) / ppb)) + gridStep;
+    for (int beat = firstBeat; beat <= lastBeat; beat += gridStep)
     {
         const float x = xForBeat(static_cast<double>(beat));
         if (x < tl.getX() + headerWidth_ || x > tl.getRight()) continue;
@@ -1418,6 +1432,7 @@ void DawWorkspace::resized()
     takeLeft(bottomRow, playButton_, 60);
     takeLeft(bottomRow, recordButton_, 48);
     takeLeft(bottomRow, loopButton_, 58);
+    takeLeft(bottomRow, clickButton_, 62);
     bottomRow.removeFromLeft(std::min(8, bottomRow.getWidth()));
     takeLeft(bottomRow, splitButton_, 66);
     takeLeft(bottomRow, duplicateButton_, 74);
@@ -1710,7 +1725,7 @@ void DawWorkspace::fitProject()
     const auto tl = timelineBounds();
     const double endBeat = std::max(4.0, projectEndBeat());
     const double usable = std::max(80, tl.getWidth() - headerWidth_ - 24);
-    zoom_ = juce::jlimit(0.5, 4.0, usable / (44.0 * endBeat));
+    zoom_ = juce::jlimit(kMinTimelineZoom, kMaxTimelineZoom, usable / (44.0 * endBeat));
     viewStartBeat_ = 0.0;
     zoomSlider_.setValue(zoom_, juce::dontSendNotification);
     repaint();
@@ -1744,7 +1759,7 @@ void DawWorkspace::fitSelection()
     const double pad = std::max(0.5, (endBeat - startBeat) * 0.12);
     const double span = std::max(0.5, (endBeat - startBeat) + pad * 2.0);
     const double usable = std::max(80, tl.getWidth() - headerWidth_ - 24);
-    zoom_ = juce::jlimit(0.5, 4.0, usable / (44.0 * span));
+    zoom_ = juce::jlimit(kMinTimelineZoom, kMaxTimelineZoom, usable / (44.0 * span));
     viewStartBeat_ = std::max(0.0, startBeat - pad);
     zoomSlider_.setValue(zoom_, juce::dontSendNotification);
     repaint();
@@ -1767,7 +1782,12 @@ void DawWorkspace::loadWorkspaceState()
     workspacePreset_ = juce::jlimit(1, 5, xml->getIntAttribute("preset", 4));
     browserWidth_ = juce::jlimit(140, 360, xml->getIntAttribute("browserWidth", 210));
     inspectorWidth_ = juce::jlimit(220, 420, xml->getIntAttribute("inspectorWidth", 285));
-    mixerHeight_ = juce::jlimit(96, 360, xml->getIntAttribute("mixerHeight", 125));
+    mixerHeight_ = juce::jlimit(96, 360, xml->getIntAttribute("mixerHeight", 190));
+    // 1.11 promotes the combined Production view. Older EDIT workspaces used a
+    // very shallow 125 px quick mixer; lift that legacy value once so timeline
+    // and console are both useful on the same screen.
+    if (workspacePreset_ == 4 && mixerHeight_ < 160)
+        mixerHeight_ = 180;
     trackHeight_ = juce::jlimit(44, 150, xml->getIntAttribute("trackHeight", 76));
     workspaceBox_.setSelectedId(workspacePreset_, juce::dontSendNotification);
 }
@@ -1794,7 +1814,7 @@ void DawWorkspace::applyWorkspacePreset(int preset)
         case 2: browserWidth_ = 150; inspectorWidth_ = 245; mixerHeight_ = 245; trackHeight_ = 64; break;
         case 3: browserWidth_ = 165; inspectorWidth_ = 255; mixerHeight_ = 175; trackHeight_ = 76; break;
         case 5: browserWidth_ = 150; inspectorWidth_ = 225; mixerHeight_ = 220; trackHeight_ = 66; break;
-        default: browserWidth_ = 210; inspectorWidth_ = 285; mixerHeight_ = 125; trackHeight_ = 82; break;
+        default: browserWidth_ = 180; inspectorWidth_ = 250; mixerHeight_ = 180; trackHeight_ = 74; break;
     }
     workspaceBox_.setSelectedId(workspacePreset_, juce::dontSendNotification);
     resized();
@@ -2022,6 +2042,47 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
             selectedTrack_ = idx;
             selectedClipId_ = -1;
             selectedMidiNoteId_ = -1;
+
+            auto strip = juce::Rectangle<int>(content.getX() + idx * stripW, content.getY(),
+                                              stripW, content.getHeight()).reduced(2);
+            auto footer = strip.removeFromBottom(24);
+            footer.removeFromLeft(std::min(48, std::max(36, footer.getWidth() / 3)));
+            const auto paChip = footer.removeFromLeft(std::min(31, footer.getWidth())).reduced(1, 2);
+            const auto iemChip = footer.removeFromLeft(std::min(36, footer.getWidth())).reduced(1, 2);
+            const int insert = juce::jlimit(0, kMaxTracks - 1, tracks_[idx].mixerInsert);
+
+            if (paChip.contains(e.getPosition()) && onTogglePaForInsert)
+            {
+                onTogglePaForInsert(insert);
+            }
+            else if (iemChip.contains(e.getPosition()) && onToggleIemForInsert)
+            {
+                onToggleIemForInsert(insert);
+            }
+            else
+            {
+                auto bodyStrip = juce::Rectangle<int>(content.getX() + idx * stripW, content.getY(),
+                                                      stripW, content.getHeight()).reduced(2);
+                bodyStrip.removeFromTop(3);
+                bodyStrip.removeFromTop(19);
+                bodyStrip.removeFromBottom(24);
+                auto body = bodyStrip.reduced(7, 3);
+                if (body.contains(e.getPosition()) && onSetMixerGainDbForInsert)
+                {
+                    quickMixerDragTrack_ = idx;
+                    quickMixerDragInsert_ = insert;
+                    dragMode_ = DragMode::quickMixerFader;
+
+                    auto lane = body.withWidth(std::max(22, body.getWidth() / 3)).withCentre(body.getCentre());
+                    const int top = lane.getY() + 3;
+                    const int bottom = lane.getBottom() - 3;
+                    const float norm = bottom > top
+                        ? juce::jlimit(0.0f, 1.0f, 1.0f - static_cast<float>(e.y - top) / static_cast<float>(bottom - top))
+                        : 0.0f;
+                    onSetMixerGainDbForInsert(insert, -60.0f + norm * 72.0f);
+                }
+            }
+
             syncInspector();
             repaint();
         }
@@ -2165,6 +2226,31 @@ void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
         resized();
         return;
     }
+    if (dragMode_ == DragMode::quickMixerFader)
+    {
+        const auto mixer = mixerBounds();
+        auto content = mixer.reduced(8, 25);
+        const int count = std::min(8, trackCount_);
+        if (quickMixerDragTrack_ >= 0 && quickMixerDragTrack_ < count && onSetMixerGainDbForInsert)
+        {
+            const int stripW = std::max(1, content.getWidth() / count);
+            auto strip = juce::Rectangle<int>(content.getX() + quickMixerDragTrack_ * stripW, content.getY(),
+                                              stripW, content.getHeight()).reduced(2);
+            strip.removeFromTop(3);
+            strip.removeFromTop(19);
+            strip.removeFromBottom(24);
+            auto body = strip.reduced(7, 3);
+            auto lane = body.withWidth(std::max(22, body.getWidth() / 3)).withCentre(body.getCentre());
+            const int top = lane.getY() + 3;
+            const int bottom = lane.getBottom() - 3;
+            const float norm = bottom > top
+                ? juce::jlimit(0.0f, 1.0f, 1.0f - static_cast<float>(e.y - top) / static_cast<float>(bottom - top))
+                : 0.0f;
+            onSetMixerGainDbForInsert(quickMixerDragInsert_, -60.0f + norm * 72.0f);
+            repaint();
+        }
+        return;
+    }
 
     if (rejectStructuralEditWhileLive("mover o recortar clips"))
     {
@@ -2254,6 +2340,8 @@ void DawWorkspace::mouseUp(const juce::MouseEvent&)
                                || dragMode_ == DragMode::resizeInspector
                                || dragMode_ == DragMode::resizeMixer;
     dragMode_ = DragMode::none;
+    quickMixerDragTrack_ = -1;
+    quickMixerDragInsert_ = -1;
     dragUndoSnapshot_.clear();
     dragChanged_ = false;
     if (resizedWorkspace) saveWorkspaceState();
@@ -2326,7 +2414,8 @@ void DawWorkspace::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWh
     {
         const auto tl = timelineBounds();
         const double before = beatAtX(static_cast<float>(e.x));
-        const double nextZoom = juce::jlimit(0.5, 4.0, zoom_ * (1.0 + static_cast<double>(wheel.deltaY) * 0.55));
+        const double nextZoom = juce::jlimit(kMinTimelineZoom, kMaxTimelineZoom,
+                                             zoom_ * (1.0 + static_cast<double>(wheel.deltaY) * 0.55));
         if (std::abs(nextZoom - zoom_) > 0.0001)
         {
             zoom_ = nextZoom;
@@ -4175,6 +4264,28 @@ void DawWorkspace::timerCallback()
 
     const bool nowPlaying = playing_.load(std::memory_order_acquire);
     playButton_.setButtonText(liveLock ? "STOP CLIPS" : (nowPlaying ? "PAUSE" : "PLAY"));
+
+    // Follow the song automatically so the playhead never disappears off-screen.
+    // The playhead is kept around the 72% mark, leaving useful context ahead.
+    if (nowPlaying && !liveLock)
+    {
+        const auto content = timelineBounds().withTrimmedLeft(headerWidth_);
+        const double visibleBeats = content.getWidth() > 0
+            ? static_cast<double>(content.getWidth()) / std::max(0.001, pixelsPerBeat())
+            : 0.0;
+        if (visibleBeats > 0.25)
+        {
+            const double sr = std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed));
+            const double posBeat = (static_cast<double>(transportSamples_.load(std::memory_order_relaxed)) / sr)
+                                 * bpm() / 60.0;
+            const double followRight = viewStartBeat_ + visibleBeats * 0.72;
+            const double followLeft = viewStartBeat_ + visibleBeats * 0.08;
+            if (posBeat > followRight)
+                viewStartBeat_ = std::max(0.0, posBeat - visibleBeats * 0.28);
+            else if (posBeat < followLeft && posBeat < viewStartBeat_)
+                viewStartBeat_ = std::max(0.0, posBeat - visibleBeats * 0.08);
+        }
+    }
     if (nowPlaying != lastReportedPlaying_)
     {
         lastReportedPlaying_ = nowPlaying;
@@ -4452,6 +4563,11 @@ void DawWorkspace::setTempoFromHost(double value)
     repaint();
 }
 
+void DawWorkspace::setClickEnabledFromHost(bool enabled)
+{
+    clickButton_.setToggleState(enabled, juce::dontSendNotification);
+}
+
 void DawWorkspace::checkpointUndo()
 {
     pushUndoSnapshot(serializeProject());
@@ -4569,7 +4685,7 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
     bpm_.store(juce::jlimit(40.0, 240.0, xml->getDoubleAttribute("bpm", 120.0)));
     bpmSlider_.setValue(bpm(), juce::dontSendNotification);
     viewStartBeat_ = std::max(0.0, xml->getDoubleAttribute("viewStartBeat", 0.0));
-    zoom_ = juce::jlimit(0.5, 4.0, xml->getDoubleAttribute("zoom", 1.0));
+    zoom_ = juce::jlimit(kMinTimelineZoom, kMaxTimelineZoom, xml->getDoubleAttribute("zoom", 1.0));
     zoomSlider_.setValue(zoom_, juce::dontSendNotification);
     firstVisibleTrack_ = juce::jlimit(0, std::max(0, trackCount_ - 1),
         xml->getIntAttribute("firstVisibleTrack", 0));

@@ -51,6 +51,8 @@ private:
                    std::atomic<float>& gain, std::atomic<float>& pan,
                    std::atomic<bool>& muted, std::atomic<float>& meter,
                    std::atomic<int>& bus, std::atomic<int>& dca,
+                   std::atomic<bool>& paEnabled,
+                   std::atomic<float>& iemSendGain, int iemMixIndex,
                    std::function<void(int)> onOpenFx);
         void paint(juce::Graphics&) override;
         void resized() override;
@@ -65,10 +67,15 @@ private:
         std::atomic<float>& meter_;
         std::atomic<int>& bus_;
         std::atomic<int>& dca_;
+        std::atomic<bool>& paEnabled_;
+        std::atomic<float>& iemSendGain_;
+        int iemMixIndex_ { 0 };
         juce::Label title_;
         juce::Slider fader_;
         juce::Slider panSlider_;
         juce::ToggleButton muteButton_ { "MUTE" };
+        juce::ToggleButton paButton_ { "PA" };
+        juce::ToggleButton iemButton_ { "IEM" };
         juce::TextButton fxButton_ { "FX" };
         juce::ComboBox busBox_;
         juce::ComboBox dcaBox_;
@@ -185,6 +192,7 @@ private:
     void refreshIemUi();
     void applyIemRoutingFromControls();
     bool anyIemRouted() const noexcept;
+    bool anyClickIemRouted() const noexcept;
 
     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
                                           int numInputChannels,
@@ -217,6 +225,9 @@ private:
     std::array<std::atomic<float>, kMaxChannels> channelGain_{};
     std::array<std::atomic<float>, kMaxChannels> channelPan_{};
     std::array<std::atomic<bool>, kMaxChannels> channelMute_{};
+    // Independent PA route: MUTE affects the complete channel, while PA can be
+    // disabled without removing the source from the selected in-ear mix.
+    std::array<std::atomic<bool>, kMaxChannels> channelPaEnabled_{};
     std::array<std::atomic<float>, kMaxChannels> channelMeter_{};
     std::array<std::atomic<int>, kMaxChannels> channelBus_{};
     std::array<std::atomic<int>, kMaxChannels> channelDca_{};
@@ -258,6 +269,7 @@ private:
     juce::AudioBuffer<float> pluginGuardScratch_;
     juce::AudioBuffer<float> dawMixerScratch_;
     juce::AudioBuffer<float> dawDryScratch_;
+    juce::AudioBuffer<float> clickScratch_;
     juce::MidiBuffer pluginMidiScratch_;
     bool pluginsScanned_ { false };
     std::atomic<bool> pluginScanBusy_ { false };
@@ -272,6 +284,7 @@ private:
     std::array<std::array<std::atomic<float>, kMaxChannels>, kIemMixes> iemSendPan_{};
     std::array<std::atomic<float>, kIemMixes> iemMaster_{};
     std::array<std::atomic<bool>, kIemMixes> iemMute_{};
+    std::array<std::atomic<bool>, kIemMixes> iemClickEnabled_{};
     std::array<std::atomic<int>, kIemMixes> iemOutLeft_{};
     std::array<std::atomic<int>, kIemMixes> iemOutRight_{};
 
@@ -350,6 +363,7 @@ private:
     juce::TextButton dashboardStopButton_ { "STOP" };
     juce::ToggleButton dashboardPadButton_ { "PAD" };
     juce::ToggleButton dashboardClickButton_ { "CLICK" };
+    juce::ToggleButton dashboardClickIemButton_ { "CLICK → IEM" };
     juce::Label dashboardTempoLabel_;
     std::array<std::unique_ptr<juce::TextButton>, 8> dashboardSectionButtons_;
 
@@ -436,6 +450,7 @@ private:
     juce::Component clickPage_;
     juce::Label clickTitle_;
     juce::ToggleButton clickEnabledButton_ { "CLICK ON" };
+    juce::ToggleButton clickToIemButton_ { "CLICK → IEM" };
     juce::Slider bpmSlider_;
     juce::TextButton tapTempoButton_ { "TAP TEMPO" };
     juce::ComboBox timeSignatureBox_;
