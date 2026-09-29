@@ -1810,8 +1810,8 @@ MainComponent::MainComponent()
     };
     pluginsPage_.addAndMakeVisible(favoritePluginButton_);
 
-    scanPluginsButton_.setButtonText("ESCANEAR CARPETA...");
-    pluginLocationsButton_.setButtonText("ESCANEAR TODO");
+    scanPluginsButton_.setButtonText("BUSCAR VST3 / WAVES...");
+    pluginLocationsButton_.setButtonText("ESCANEAR TODO VST3");
     loadPluginButton_.setButtonText("CARGAR EN SLOT");
     scanPluginsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(accentDeep));
     pluginLocationsButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(panel3));
