@@ -1088,7 +1088,7 @@ void DawWorkspace::paint(juce::Graphics& g)
         g.setFont(juce::FontOptions(10.0f, selected ? juce::Font::bold : juce::Font::plain));
         g.drawFittedText(tracks_[i].name, strip.removeFromTop(19).reduced(4, 0), juce::Justification::centred, 1);
 
-        auto footer = strip.removeFromBottom(22);
+        auto footer = strip.removeFromBottom(24);
         auto body = strip.reduced(7, 3);
         const float gainDb = static_cast<float>(gainToDb(tracks_[i].gain));
         const float normGain = juce::jlimit(0.0f, 1.0f, (gainDb + 60.0f) / 72.0f);
@@ -1124,23 +1124,25 @@ void DawWorkspace::paint(juce::Graphics& g)
 
         g.setFont(juce::FontOptions(8.5f, juce::Font::bold));
         g.setColour(juce::Colour(kMuted));
-        auto gainLabel = footer.removeFromLeft(std::max(42, footer.getWidth() - 64)).reduced(3, 1);
+        const int insert = juce::jlimit(0, kMaxTracks - 1, tracks_[i].mixerInsert);
+        const bool paEnabled = isPaEnabledForInsert ? isPaEnabledForInsert(insert) : true;
+        const bool iemEnabled = isIemEnabledForInsert ? isIemEnabledForInsert(insert) : false;
+        const int iemMix = currentIemMixIndex ? juce::jlimit(0, 15, currentIemMixIndex()) : 0;
+
+        auto gainLabel = footer.removeFromLeft(std::min(48, std::max(36, footer.getWidth() / 3))).reduced(3, 1);
         g.drawFittedText(juce::String(gainDb, 1) + " dB", gainLabel, juce::Justification::centredLeft, 1);
 
-        auto chipArea = footer.reduced(1, 2);
-        auto drawMiniChip = [&](const char* label, bool active, juce::Colour colour)
+        auto drawRouteChip = [&](const juce::String& label, bool active, juce::Colour colour, int wantedWidth)
         {
-            if (chipArea.getWidth() < 14) return;
-            auto chip = chipArea.removeFromLeft(std::min(18, chipArea.getWidth())).reduced(1);
+            if (footer.getWidth() < 18) return;
+            auto chip = footer.removeFromLeft(std::min(wantedWidth, footer.getWidth())).reduced(1, 2);
             g.setColour(active ? colour : juce::Colour(0xff182832));
-            g.fillRoundedRectangle(chip.toFloat(), 2.0f);
+            g.fillRoundedRectangle(chip.toFloat(), 2.5f);
             g.setColour(active ? juce::Colours::white : juce::Colour(0xff708491));
-            g.drawText(label, chip, juce::Justification::centred);
+            g.drawFittedText(label, chip, juce::Justification::centred, 1);
         };
-        drawMiniChip("M", tracks_[i].mute, juce::Colour(kDanger));
-        drawMiniChip("S", tracks_[i].solo, juce::Colour(kGood));
-        if (!tracks_[i].midi)
-            drawMiniChip("R", tracks_[i].armed, juce::Colour(kDanger));
+        drawRouteChip("PA", paEnabled, juce::Colour(kGood), 31);
+        drawRouteChip("I" + juce::String(iemMix + 1), iemEnabled, juce::Colour(kAccent), 36);
 
         if (selected)
         {
@@ -2033,6 +2035,20 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
             selectedTrack_ = idx;
             selectedClipId_ = -1;
             selectedMidiNoteId_ = -1;
+
+            auto strip = juce::Rectangle<int>(content.getX() + idx * stripW, content.getY(),
+                                              stripW, content.getHeight()).reduced(2);
+            auto footer = strip.removeFromBottom(24);
+            footer.removeFromLeft(std::min(48, std::max(36, footer.getWidth() / 3)));
+            const auto paChip = footer.removeFromLeft(std::min(31, footer.getWidth())).reduced(1, 2);
+            const auto iemChip = footer.removeFromLeft(std::min(36, footer.getWidth())).reduced(1, 2);
+            const int insert = juce::jlimit(0, kMaxTracks - 1, tracks_[idx].mixerInsert);
+
+            if (paChip.contains(e.getPosition()) && onTogglePaForInsert)
+                onTogglePaForInsert(insert);
+            else if (iemChip.contains(e.getPosition()) && onToggleIemForInsert)
+                onToggleIemForInsert(insert);
+
             syncInspector();
             repaint();
         }
@@ -4187,6 +4203,28 @@ void DawWorkspace::timerCallback()
 
     const bool nowPlaying = playing_.load(std::memory_order_acquire);
     playButton_.setButtonText(liveLock ? "STOP CLIPS" : (nowPlaying ? "PAUSE" : "PLAY"));
+
+    // Follow the song automatically so the playhead never disappears off-screen.
+    // The playhead is kept around the 72% mark, leaving useful context ahead.
+    if (nowPlaying && !liveLock)
+    {
+        const auto content = timelineBounds().withTrimmedLeft(headerWidth_);
+        const double visibleBeats = content.getWidth() > 0
+            ? static_cast<double>(content.getWidth()) / std::max(0.001, pixelsPerBeat())
+            : 0.0;
+        if (visibleBeats > 0.25)
+        {
+            const double sr = std::max(1.0, renderSampleRate_.load(std::memory_order_relaxed));
+            const double posBeat = (static_cast<double>(transportSamples_.load(std::memory_order_relaxed)) / sr)
+                                 * bpm() / 60.0;
+            const double followRight = viewStartBeat_ + visibleBeats * 0.72;
+            const double followLeft = viewStartBeat_ + visibleBeats * 0.08;
+            if (posBeat > followRight)
+                viewStartBeat_ = std::max(0.0, posBeat - visibleBeats * 0.28);
+            else if (posBeat < followLeft && posBeat < viewStartBeat_)
+                viewStartBeat_ = std::max(0.0, posBeat - visibleBeats * 0.08);
+        }
+    }
     if (nowPlaying != lastReportedPlaying_)
     {
         lastReportedPlaying_ = nowPlaying;
@@ -4462,6 +4500,11 @@ void DawWorkspace::setTempoFromHost(double value)
     bpmSlider_.setValue(value, juce::dontSendNotification);
     markRenderDirty();
     repaint();
+}
+
+void DawWorkspace::setClickEnabledFromHost(bool enabled)
+{
+    clickButton_.setToggleState(enabled, juce::dontSendNotification);
 }
 
 void DawWorkspace::checkpointUndo()
