@@ -925,9 +925,12 @@ MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
                                       std::atomic<float>& gain, std::atomic<float>& pan,
                                       std::atomic<bool>& muted, std::atomic<float>& meter,
                                       std::atomic<int>& bus, std::atomic<int>& dca,
+                                      std::atomic<bool>& paEnabled,
+                                      std::atomic<float>& iemSendGain, int iemMixIndex,
                                       std::function<void(int)> onOpenFx)
     : index_(index), gain_(gain), pan_(pan), muted_(muted), meter_(meter),
-      bus_(bus), dca_(dca), meterBar_(meterValue_), onOpenFx_(std::move(onOpenFx))
+      bus_(bus), dca_(dca), paEnabled_(paEnabled), iemSendGain_(iemSendGain),
+      iemMixIndex_(iemMixIndex), meterBar_(meterValue_), onOpenFx_(std::move(onOpenFx))
 {
     setOpaque(false);
 
@@ -957,6 +960,21 @@ MainComponent::MixerStrip::MixerStrip(int index, const juce::String& title,
     muteButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(mutedText));
     muteButton_.onClick = [this] { muted_.store(muteButton_.getToggleState(), std::memory_order_relaxed); };
     addAndMakeVisible(muteButton_);
+
+    paButton_.setButtonText("PA");
+    paButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(good));
+    paButton_.setTooltip("Salida exterior / PA. Apagalo para dejar este canal fuera de los parlantes sin quitarlo del IEM.");
+    paButton_.onClick = [this] { paEnabled_.store(paButton_.getToggleState(), std::memory_order_release); };
+    addAndMakeVisible(paButton_);
+
+    iemButton_.setButtonText("IEM " + juce::String(iemMixIndex_ + 1));
+    iemButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(accent));
+    iemButton_.setTooltip("Envío rápido al IEM seleccionado. ON = 0 dB; OFF = sin envío.");
+    iemButton_.onClick = [this]
+    {
+        iemSendGain_.store(iemButton_.getToggleState() ? 1.0f : 0.0f, std::memory_order_release);
+    };
+    addAndMakeVisible(iemButton_);
 
     fxButton_.setButtonText("FX / PLUGINS");
     fxButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff173246));
@@ -1025,8 +1043,13 @@ void MainComponent::MixerStrip::resized()
     r.removeFromBottom(3);
     fxButton_.setBounds(r.removeFromBottom(26));
     r.removeFromBottom(3);
-    muteButton_.setBounds(r.removeFromBottom(28));
-    panSlider_.setBounds(r.removeFromBottom(76));
+    muteButton_.setBounds(r.removeFromBottom(26));
+    r.removeFromBottom(2);
+    auto routeRow = r.removeFromBottom(26);
+    paButton_.setBounds(routeRow.removeFromLeft(routeRow.getWidth() / 2).reduced(1, 0));
+    iemButton_.setBounds(routeRow.reduced(1, 0));
+    r.removeFromBottom(2);
+    panSlider_.setBounds(r.removeFromBottom(64));
     fader_.setBounds(r.reduced(2, 4));
 }
 
@@ -1046,6 +1069,9 @@ void MainComponent::MixerStrip::syncFromModel()
     fader_.setValue(juce::Decibels::gainToDecibels(gain, -60.0f), juce::dontSendNotification);
     panSlider_.setValue(pan_.load(std::memory_order_relaxed), juce::dontSendNotification);
     muteButton_.setToggleState(muted_.load(std::memory_order_relaxed), juce::dontSendNotification);
+    paButton_.setToggleState(paEnabled_.load(std::memory_order_relaxed), juce::dontSendNotification);
+    iemButton_.setToggleState(iemSendGain_.load(std::memory_order_relaxed) > 1.0e-8f, juce::dontSendNotification);
+    iemButton_.setButtonText("IEM " + juce::String(iemMixIndex_ + 1));
     const int bus = bus_.load(std::memory_order_relaxed);
     const int dca = dca_.load(std::memory_order_relaxed);
     busBox_.setSelectedId(bus >= 0 && bus < kBuses ? bus + 2 : 1, juce::dontSendNotification);
@@ -1168,6 +1194,7 @@ MainComponent::MainComponent()
         channelGain_[i].store(dbToGain(-6.0));
         channelPan_[i].store(0.0f);
         channelMute_[i].store(false);
+        channelPaEnabled_[i].store(true);
         channelMeter_[i].store(0.0f);
         channelBus_[i].store(-1);
         channelDca_[i].store(-1);
@@ -1202,6 +1229,7 @@ MainComponent::MainComponent()
     {
         iemMaster_[m].store(1.0f);
         iemMute_[m].store(false);
+        iemClickEnabled_[m].store(false);
         iemOutLeft_[m].store(-1);
         iemOutRight_[m].store(-1);
         for (int ch = 0; ch < kMaxChannels; ++ch)
@@ -1420,7 +1448,10 @@ MainComponent::MainComponent()
         selectedIemMix_ = juce::jlimit(0, kIemMixes - 1, dashboardIemMixBox_.getSelectedId() - 1);
         iemMixBox_.setSelectedId(selectedIemMix_ + 1, juce::dontSendNotification);
         rebuildIemBank();
+        rebuildMixerBank();
         refreshIemUi();
+        refreshDashboard();
+        resized();
     };
     dashboardIemMasterSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     dashboardIemMasterSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 62, 22);
@@ -2137,7 +2168,7 @@ MainComponent::MainComponent()
         pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
         dspChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
         selectedDspChannel_ = ch;
-        tabs_.setCurrentTabIndex(0);
+        tabs_.setCurrentTabIndex(1);
         refreshPluginUi();
         refreshDspUi();
     };
@@ -2189,8 +2220,8 @@ MainComponent::MainComponent()
     };
     tabs_.setColour(juce::TabbedComponent::backgroundColourId, juce::Colour(background));
     tabs_.setTabBarDepth(42);
-    tabs_.addTab("MIXER", juce::Colour(panel), &mixerPage_, false);
-    tabs_.addTab("ARRANGER", juce::Colour(panel), &dawWorkspace_, false);
+    tabs_.addTab("MIXER SOLO", juce::Colour(panel), &mixerPage_, false);
+    tabs_.addTab(juce::String::fromUTF8("PRODUCCIÓN"), juce::Colour(panel), &dawWorkspace_, false);
     tabs_.addTab("SETLIST", juce::Colour(panel), &setlistPage_, false);
     tabs_.addTab("DSP", juce::Colour(panel), &dspPage_, false);
     tabs_.addTab("GRUPOS", juce::Colour(panel), &groupsPage_, false);
@@ -2948,6 +2979,7 @@ void MainComponent::rebuildMixerBank()
             channel, title,
             channelGain_[channel], channelPan_[channel], channelMute_[channel], channelMeter_[channel],
             channelBus_[channel], channelDca_[channel],
+            channelPaEnabled_[channel], iemSendGain_[selectedIemMix_][channel], selectedIemMix_,
             [this](int ch)
             {
                 pluginChannelBox_.setSelectedId(ch + 1, juce::dontSendNotification);
