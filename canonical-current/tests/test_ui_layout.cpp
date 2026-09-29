@@ -328,14 +328,90 @@ int main()
             }
         }
 
+        std::cout << (fullCapacityPass ? "[PASS] " : "[FAIL] ")
+                  << "reopen 35 tracks x 15 scenes -> scene 15 -> 35 real mixer inserts" << std::endl;
+        ok = ok && fullCapacityPass;
+
+        // Timeline regression: a long worship backing track must remain visible
+        // while PLAY advances, and FIT must be able to show the complete song.
+        juce::XmlElement longProject("J3DAW");
+        longProject.setAttribute("version", 3);
+        longProject.setAttribute("bpm", 120.0);
+        longProject.setAttribute("trackCount", 1);
+        longProject.setAttribute("viewStartBeat", 0.0);
+        longProject.setAttribute("zoom", 1.0);
+        longProject.setAttribute("firstVisibleTrack", 0);
+        longProject.setAttribute("liveQuantizationBeats", 4);
+        auto* longTracks = longProject.createNewChildElement("Tracks");
+        auto* longTrack = longTracks->createNewChildElement("Track");
+        longTrack->setAttribute("index", 0);
+        longTrack->setAttribute("name", "Backing Track");
+        longTrack->setAttribute("colour", static_cast<int>(juce::Colour(0xff178dff).getARGB()));
+        longTrack->setAttribute("gain", 1.0);
+        longTrack->setAttribute("pan", 0.0);
+        longTrack->setAttribute("mute", false);
+        longTrack->setAttribute("solo", false);
+        longTrack->setAttribute("armed", false);
+        longTrack->setAttribute("midi", false);
+        longTrack->setAttribute("mixerInsert", 0);
+        longProject.createNewChildElement("MidiNotes");
+        auto* longClips = longProject.createNewChildElement("Clips");
+        auto* longClip = longClips->createNewChildElement("Clip");
+        longClip->setAttribute("id", 1);
+        longClip->setAttribute("track", 0);
+        longClip->setAttribute("path", fixture.getFullPathName());
+        longClip->setAttribute("startBeat", 720.0);
+        longClip->setAttribute("lengthBeats", 0.2);
+        longClip->setAttribute("sourceOffsetSeconds", 0.0);
+        longClip->setAttribute("gain", 1.0);
+        longClip->setAttribute("pan", 0.0);
+        longClip->setAttribute("muted", false);
+        longClip->setAttribute("loop", false);
+        longClip->setAttribute("reversed", false);
+        longClip->setAttribute("fadeInBeats", 0.0);
+        longClip->setAttribute("fadeOutBeats", 0.0);
+        longClip->setAttribute("mixerInsert", 0);
+        longClip->setAttribute("colour", static_cast<int>(juce::Colour(0xff178dff).getARGB()));
+
+        bool followPass = false;
+        bool fitProjectPass = false;
+        if (recovery.replaceWithText(longProject.toString()))
+        {
+            {
+                DawWorkspace navigationWorkspace;
+                navigationWorkspace.setSize(1400, 800);
+                navigationWorkspace.prepare(48000.0, 512);
+                navigationWorkspace.setTransportBeatForTesting(500.0);
+                const bool playStarted = navigationWorkspace.keyPressed(juce::KeyPress(juce::KeyPress::spaceKey));
+                navigationWorkspace.timerTickForTesting();
+
+                const double followStart = navigationWorkspace.viewStartBeatForTesting();
+                const double followSpan = navigationWorkspace.visibleBeatSpanForTesting();
+                followPass = playStarted
+                    && followStart > 1.0
+                    && 500.0 >= followStart
+                    && 500.0 <= followStart + followSpan;
+
+                navigationWorkspace.emergencyStop();
+                navigationWorkspace.fitProjectForTesting();
+                const double endBeat = navigationWorkspace.projectEndBeatForTesting();
+                fitProjectPass = navigationWorkspace.zoomForTesting() < 0.5
+                    && navigationWorkspace.viewStartBeatForTesting() == 0.0
+                    && navigationWorkspace.visibleBeatSpanForTesting() + 0.5 >= endBeat;
+            }
+        }
+
+        std::cout << (followPass ? "[PASS] " : "[FAIL] ")
+                  << "timeline PLAY auto-follow keeps beat 500 visible" << std::endl;
+        ok = ok && followPass;
+        std::cout << (fitProjectPass ? "[PASS] " : "[FAIL] ")
+                  << "FIT shows complete 720-beat project below legacy 0.5 zoom limit" << std::endl;
+        ok = ok && fitProjectPass;
+
         if (hadRecovery)
             recovery.replaceWithText(previousRecovery);
         else
             recovery.deleteFile();
-
-        std::cout << (fullCapacityPass ? "[PASS] " : "[FAIL] ")
-                  << "reopen 35 tracks x 15 scenes -> scene 15 -> 35 real mixer inserts" << std::endl;
-        ok = ok && fullCapacityPass;
 
         fixture.deleteFile();
     }
