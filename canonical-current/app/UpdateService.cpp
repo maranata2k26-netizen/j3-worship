@@ -597,56 +597,51 @@ bool UpdateService::launchInstallerAndRestart(const juce::File& installer,
         return false;
     }
 
-    const auto script = folder.getChildFile("apply-update.cmd");
     const auto logFile = folder.getChildFile("update-install.log");
     const auto failureMarker = updateFailureMarker();
-
-    juce::String body;
-    body << "@echo off\r\n";
-    body << "setlocal\r\n";
-    body << "timeout /t 2 /nobreak >nul\r\n";
-    body << "start /wait \"\" " << quoteForCmd(installer.getFullPathName())
-         << " /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS"
-         << " /DIR=" << quoteForCmd(installDir.getFullPathName())
-         << " /LOG=" << quoteForCmd(logFile.getFullPathName()) << "\r\n";
-    body << "set \"J3_UPDATE_EXIT=%ERRORLEVEL%\"\r\n";
-    body << "if not \"%J3_UPDATE_EXIT%\"==\"0\" (\r\n";
-    body << "  >" << quoteForCmd(failureMarker.getFullPathName())
-         << " echo J3 Worship " << expectedVersion
-         << " no pudo instalarse. Codigo del instalador: %J3_UPDATE_EXIT%.\r\n";
-    body << "  >>" << quoteForCmd(failureMarker.getFullPathName())
-         << " echo Carpeta objetivo: " << installDir.getFullPathName() << "\r\n";
-    body << "  >>" << quoteForCmd(failureMarker.getFullPathName())
-         << " echo Log: " << logFile.getFullPathName() << "\r\n";
-    body << "  start \"\" " << quoteForCmd(currentExe.getFullPathName()) << "\r\n";
-    body << "  del \"%~f0\"\r\n";
-    body << "  exit /b %J3_UPDATE_EXIT%\r\n";
-    body << ")\r\n";
-    body << "del " << quoteForCmd(failureMarker.getFullPathName()) << " 2>nul\r\n";
-    body << "start \"\" " << quoteForCmd(currentExe.getFullPathName()) << "\r\n";
-    body << "del \"%~f0\"\r\n";
-
-    if (!script.replaceWithText(body))
-    {
-        error = juce::String::fromUTF8("No se pudo preparar el instalador automático.");
-        return false;
-    }
-
     const auto pendingMarker = pendingUpdateVersionMarker();
+
     if (!pendingMarker.replaceWithText(expectedVersion))
     {
         error = juce::String::fromUTF8("No se pudo registrar la versión esperada antes de actualizar.");
         return false;
     }
-
     failureMarker.deleteFile();
-    if (!script.startAsProcess())
+
+    const auto installerPath = utf8ToWide(installer.getFullPathName());
+    const auto installPath = utf8ToWide(installDir.getFullPathName());
+    const auto logPath = utf8ToWide(logFile.getFullPathName());
+    if (installerPath.empty() || installPath.empty() || logPath.empty())
     {
         pendingMarker.deleteFile();
-        error = "Windows no pudo iniciar el actualizador.";
+        error = juce::String::fromUTF8("Windows no pudo preparar las rutas del actualizador.");
         return false;
     }
 
+    std::wstring command;
+    command.reserve(installerPath.size() + installPath.size() + logPath.size() + 160);
+    command += L"\"" + installerPath + L"\"";
+    command += L" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS";
+    command += L" /DIR=\"" + installPath + L"\"";
+    command += L" /LOG=\"" + logPath + L"\"";
+
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+
+    STARTUPINFOW si {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi {};
+    if (!CreateProcessW(installerPath.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    {
+        pendingMarker.deleteFile();
+        error = juce::String::fromUTF8("Windows no pudo iniciar el actualizador en segundo plano.")
+            + " (Win32 " + juce::String(static_cast<int>(GetLastError())) + ")";
+        return false;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
     return true;
 #else
     juce::ignoreUnused(installer, expectedVersion);
