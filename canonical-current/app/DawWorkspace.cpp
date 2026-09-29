@@ -17,6 +17,8 @@ constexpr std::uint32_t kMuted = 0xff8fa5b6;
 constexpr std::uint32_t kAccent = 0xff178dff;
 constexpr std::uint32_t kGood = 0xff2ed47a;
 constexpr std::uint32_t kDanger = 0xffff4d64;
+constexpr double kMinTimelineZoom = 0.01;
+constexpr double kMaxTimelineZoom = 4.0;
 
 float dbToGain(double db)
 {
@@ -663,6 +665,13 @@ void DawWorkspace::configureControls()
     recordButton_.setColour(juce::TextButton::buttonColourId, juce::Colour(kDanger).darker(0.32f));
     addAndMakeVisible(loopButton_);
     loopButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(kText));
+    addAndMakeVisible(clickButton_);
+    clickButton_.setColour(juce::ToggleButton::textColourId, juce::Colour(kText));
+    clickButton_.setTooltip("Metrónomo CLICK · un toque para encender/apagar. El destino se configura en CLICK / IEM.");
+    clickButton_.onClick = [this]
+    {
+        if (onToggleClick) onToggleClick();
+    };
 
     newButton_.onClick = [this] { newProject(); };
     openButton_.onClick = [this] { openProjectInteractive(); };
@@ -730,7 +739,7 @@ void DawWorkspace::configureControls()
 
     zoomSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     zoomSlider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    zoomSlider_.setRange(0.5, 4.0, 0.01);
+    zoomSlider_.setRange(kMinTimelineZoom, kMaxTimelineZoom, 0.005);
     zoomSlider_.setValue(1.0, juce::dontSendNotification);
     zoomSlider_.onValueChange = [this] { zoom_ = zoomSlider_.getValue(); repaint(); };
     addAndMakeVisible(zoomSlider_);
@@ -1147,9 +1156,10 @@ void DawWorkspace::paint(juce::Graphics& g)
 
     g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
     const double ppb = pixelsPerBeat();
-    const int firstBeat = std::max(0, static_cast<int>(std::floor(viewStartBeat_)));
-    const int lastBeat = static_cast<int>(std::ceil(viewStartBeat_ + (tl.getWidth() - headerWidth_) / ppb)) + 1;
-    for (int beat = firstBeat; beat <= lastBeat; ++beat)
+    const int gridStep = ppb >= 8.0 ? 1 : (ppb >= 2.0 ? 4 : (ppb >= 0.5 ? 16 : 64));
+    const int firstBeat = std::max(0, static_cast<int>(std::floor(viewStartBeat_ / gridStep)) * gridStep);
+    const int lastBeat = static_cast<int>(std::ceil(viewStartBeat_ + (tl.getWidth() - headerWidth_) / ppb)) + gridStep;
+    for (int beat = firstBeat; beat <= lastBeat; beat += gridStep)
     {
         const float x = xForBeat(static_cast<double>(beat));
         if (x < tl.getX() + headerWidth_ || x > tl.getRight()) continue;
@@ -1418,6 +1428,7 @@ void DawWorkspace::resized()
     takeLeft(bottomRow, playButton_, 60);
     takeLeft(bottomRow, recordButton_, 48);
     takeLeft(bottomRow, loopButton_, 58);
+    takeLeft(bottomRow, clickButton_, 62);
     bottomRow.removeFromLeft(std::min(8, bottomRow.getWidth()));
     takeLeft(bottomRow, splitButton_, 66);
     takeLeft(bottomRow, duplicateButton_, 74);
@@ -1710,7 +1721,7 @@ void DawWorkspace::fitProject()
     const auto tl = timelineBounds();
     const double endBeat = std::max(4.0, projectEndBeat());
     const double usable = std::max(80, tl.getWidth() - headerWidth_ - 24);
-    zoom_ = juce::jlimit(0.5, 4.0, usable / (44.0 * endBeat));
+    zoom_ = juce::jlimit(kMinTimelineZoom, kMaxTimelineZoom, usable / (44.0 * endBeat));
     viewStartBeat_ = 0.0;
     zoomSlider_.setValue(zoom_, juce::dontSendNotification);
     repaint();
@@ -1744,7 +1755,7 @@ void DawWorkspace::fitSelection()
     const double pad = std::max(0.5, (endBeat - startBeat) * 0.12);
     const double span = std::max(0.5, (endBeat - startBeat) + pad * 2.0);
     const double usable = std::max(80, tl.getWidth() - headerWidth_ - 24);
-    zoom_ = juce::jlimit(0.5, 4.0, usable / (44.0 * span));
+    zoom_ = juce::jlimit(kMinTimelineZoom, kMaxTimelineZoom, usable / (44.0 * span));
     viewStartBeat_ = std::max(0.0, startBeat - pad);
     zoomSlider_.setValue(zoom_, juce::dontSendNotification);
     repaint();
@@ -2326,7 +2337,8 @@ void DawWorkspace::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWh
     {
         const auto tl = timelineBounds();
         const double before = beatAtX(static_cast<float>(e.x));
-        const double nextZoom = juce::jlimit(0.5, 4.0, zoom_ * (1.0 + static_cast<double>(wheel.deltaY) * 0.55));
+        const double nextZoom = juce::jlimit(kMinTimelineZoom, kMaxTimelineZoom,
+                                             zoom_ * (1.0 + static_cast<double>(wheel.deltaY) * 0.55));
         if (std::abs(nextZoom - zoom_) > 0.0001)
         {
             zoom_ = nextZoom;
@@ -4569,7 +4581,7 @@ bool DawWorkspace::restoreProject(const juce::String& xmlText, bool updateProjec
     bpm_.store(juce::jlimit(40.0, 240.0, xml->getDoubleAttribute("bpm", 120.0)));
     bpmSlider_.setValue(bpm(), juce::dontSendNotification);
     viewStartBeat_ = std::max(0.0, xml->getDoubleAttribute("viewStartBeat", 0.0));
-    zoom_ = juce::jlimit(0.5, 4.0, xml->getDoubleAttribute("zoom", 1.0));
+    zoom_ = juce::jlimit(kMinTimelineZoom, kMaxTimelineZoom, xml->getDoubleAttribute("zoom", 1.0));
     zoomSlider_.setValue(zoom_, juce::dontSendNotification);
     firstVisibleTrack_ = juce::jlimit(0, std::max(0, trackCount_ - 1),
         xml->getIntAttribute("firstVisibleTrack", 0));
