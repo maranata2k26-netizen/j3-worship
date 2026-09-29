@@ -529,6 +529,40 @@ DWORD launchFullInstaller(const std::filesystem::path& setup, std::wstring& erro
     }
     LocalFree(argv);
 
+    auto waitForExit = [&](HANDLE process) -> DWORD
+    {
+        WaitForSingleObject(process, INFINITE);
+        DWORD exitCode = 1;
+        GetExitCodeProcess(process, &exitCode);
+        CloseHandle(process);
+        if (exitCode != 0)
+            error = L"El instalador completo terminó con código " + std::to_wstring(exitCode) + L".";
+        return exitCode;
+    };
+
+    std::wstring command = quoteArg(setup.wstring());
+    if (!params.empty())
+        command += L" " + params;
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+
+    STARTUPINFOW si {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi {};
+    if (CreateProcessW(setup.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+                       0, nullptr, nullptr, &si, &pi))
+    {
+        CloseHandle(pi.hThread);
+        return waitForExit(pi.hProcess);
+    }
+
+    const auto createError = GetLastError();
+    if (createError != ERROR_ELEVATION_REQUIRED && createError != ERROR_ACCESS_DENIED)
+    {
+        error = L"Windows no pudo iniciar el instalador completo: " + lastErrorText(createError);
+        return createError;
+    }
+
     SHELLEXECUTEINFOW info {};
     info.cbSize = sizeof(info);
     info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
@@ -547,15 +581,7 @@ DWORD launchFullInstaller(const std::filesystem::path& setup, std::wstring& erro
         return code;
     }
 
-    WaitForSingleObject(info.hProcess, INFINITE);
-    DWORD exitCode = 1;
-    GetExitCodeProcess(info.hProcess, &exitCode);
-    CloseHandle(info.hProcess);
-
-    if (exitCode != 0)
-        error = L"El instalador completo terminó con código " + std::to_wstring(exitCode) + L".";
-
-    return exitCode;
+    return waitForExit(info.hProcess);
 }
 
 void showFailure(const std::wstring& error)
