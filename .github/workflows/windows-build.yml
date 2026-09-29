@@ -270,7 +270,8 @@ jobs:
             'del "%~f0"'
           ) | Set-Content -Path $script -Encoding ascii
 
-          $cmd = Start-Process -FilePath $env:ComSpec -ArgumentList "/d","/c","\`"$script\`"" -PassThru
+          $cmdArgs = '/d /c "' + $script + '"'
+          $cmd = Start-Process -FilePath $env:ComSpec -ArgumentList $cmdArgs -PassThru
           Start-Sleep -Milliseconds 750
           if (!$legacyProcess.HasExited) {
             Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue
