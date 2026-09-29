@@ -30,6 +30,275 @@ struct InternetHandle
     ~InternetHandle() { if (handle != nullptr) WinHttpCloseHandle(handle); }
     operator HINTERNET() const noexcept { return handle; }
 };
+
+bool isAllowedUpdateUrl(const juce::String& url)
+{
+    if (!url.startsWithIgnoreCase("https://"))
+        return false;
+
+    const auto lower = url.toLowerCase();
+    return lower.startsWith("https://api.github.com/")
+        || lower.startsWith("https://github.com/")
+        || lower.startsWith("https://release-assets.githubusercontent.com/")
+        || lower.startsWith("https://objects.githubusercontent.com/")
+        || lower.startsWith("https://raw.githubusercontent.com/");
+}
+
+juce::String powershellQuote(const juce::String& value)
+{
+    return "'" + value.replace("'", "''") + "'";
+}
+
+juce::String lastWinHttpError(const juce::String& prefix)
+{
+    return prefix + " (WinHTTP " + juce::String(static_cast<int>(GetLastError())) + ")";
+}
+
+bool requestBytesWithPowerShell(const juce::String& url, juce::MemoryBlock& bytes, juce::String& error)
+{
+    if (!isAllowedUpdateUrl(url))
+    {
+        error = juce::String::fromUTF8("La URL de actualización no pertenece a un servidor permitido.");
+        return false;
+    }
+
+    auto temp = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("j3-update-fallback", ".bin", false);
+
+    const auto command =
+        "$ErrorActionPreference='Stop'; "
+        "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "
+        "Invoke-WebRequest -UseBasicParsing -MaximumRedirection 10 -Uri "
+        + powershellQuote(url)
+        + " -OutFile "
+        + powershellQuote(temp.getFullPathName())
+        + "; exit 0";
+
+    juce::StringArray args;
+    args.add("powershell.exe");
+    args.add("-NoProfile");
+    args.add("-NonInteractive");
+    args.add("-ExecutionPolicy");
+    args.add("Bypass");
+    args.add("-Command");
+    args.add(command);
+
+    juce::ChildProcess process;
+    if (!process.start(args))
+    {
+        error = juce::String::fromUTF8("No se pudo iniciar el método alternativo de descarga de Windows.");
+        return false;
+    }
+
+    if (!process.waitForProcessToFinish(180000))
+    {
+        process.kill();
+        temp.deleteFile();
+        error = juce::String::fromUTF8("La descarga alternativa superó el tiempo máximo.");
+        return false;
+    }
+
+    if (process.getExitCode() != 0 || !temp.existsAsFile())
+    {
+        const auto output = process.readAllProcessOutput().trim();
+        temp.deleteFile();
+        error = juce::String::fromUTF8("Windows tampoco pudo descargar la actualización.")
+            + (output.isNotEmpty() ? " " + output.substring(0, 240) : juce::String());
+        return false;
+    }
+
+    bytes.reset();
+    const bool loaded = temp.loadFileAsData(bytes);
+    temp.deleteFile();
+    if (!loaded || bytes.getSize() == 0)
+    {
+        error = juce::String::fromUTF8("La descarga alternativa terminó vacía.");
+        return false;
+    }
+
+    return true;
+}
+
+bool requestBytesWithWinHttp(const juce::String& initialUrl,
+                             juce::MemoryBlock& bytes,
+                             juce::String& error)
+{
+    juce::String currentUrl = initialUrl;
+
+    for (int redirect = 0; redirect < 10; ++redirect)
+    {
+        if (!isAllowedUpdateUrl(currentUrl))
+        {
+            error = juce::String::fromUTF8("La actualización intentó redirigir a un servidor no permitido.");
+            return false;
+        }
+
+        const auto wideUrl = utf8ToWide(currentUrl);
+        if (wideUrl.empty())
+        {
+            error = juce::String::fromUTF8("URL de actualización inválida.");
+            return false;
+        }
+
+        URL_COMPONENTS parts {};
+        parts.dwStructSize = sizeof(parts);
+        parts.dwSchemeLength = static_cast<DWORD>(-1);
+        parts.dwHostNameLength = static_cast<DWORD>(-1);
+        parts.dwUrlPathLength = static_cast<DWORD>(-1);
+        parts.dwExtraInfoLength = static_cast<DWORD>(-1);
+        if (!WinHttpCrackUrl(wideUrl.c_str(), 0, 0, &parts)
+            || parts.nScheme != INTERNET_SCHEME_HTTPS)
+        {
+            error = juce::String::fromUTF8("No se pudo interpretar la URL segura de actualización.");
+            return false;
+        }
+
+        const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
+        std::wstring object(parts.lpszUrlPath, parts.dwUrlPathLength);
+        if (parts.dwExtraInfoLength > 0)
+            object.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
+        if (object.empty())
+            object = L"/";
+
+        InternetHandle session { WinHttpOpen(L"J3Worship-Updater/2",
+            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+            WINHTTP_NO_PROXY_BYPASS, 0) };
+        if (session.handle == nullptr)
+        {
+            session.handle = WinHttpOpen(L"J3Worship-Updater/2",
+                WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
+                WINHTTP_NO_PROXY_BYPASS, 0);
+        }
+        if (session.handle == nullptr)
+        {
+            error = lastWinHttpError(juce::String::fromUTF8("No se pudo iniciar la conexión para buscar actualizaciones."));
+            return false;
+        }
+
+        WinHttpSetTimeouts(session, 5000, 5000, 12000, 30000);
+        DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+        WinHttpSetOption(session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
+
+        InternetHandle connection { WinHttpConnect(session, host.c_str(), parts.nPort, 0) };
+        if (connection.handle == nullptr)
+        {
+            error = lastWinHttpError(juce::String::fromUTF8("No se pudo conectar con el servidor de actualizaciones."));
+            return false;
+        }
+
+        InternetHandle request { WinHttpOpenRequest(connection, L"GET", object.c_str(), nullptr,
+            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) };
+        if (request.handle == nullptr)
+        {
+            error = lastWinHttpError(juce::String::fromUTF8("No se pudo crear la solicitud de actualización."));
+            return false;
+        }
+
+        DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        WinHttpSetOption(request, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+
+        const bool apiRequest = currentUrl.startsWithIgnoreCase("https://api.github.com/");
+        const wchar_t* headers = apiRequest
+            ? L"Accept: application/vnd.github+json\r\nCache-Control: no-cache, no-store, max-age=0\r\nPragma: no-cache\r\n"
+            : L"Accept: application/octet-stream\r\nCache-Control: no-cache\r\n";
+
+        if (!WinHttpSendRequest(request, headers, static_cast<DWORD>(-1L),
+                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+        {
+            error = lastWinHttpError(juce::String::fromUTF8("No se pudo enviar la solicitud de actualización."));
+            return false;
+        }
+        if (!WinHttpReceiveResponse(request, nullptr))
+        {
+            error = lastWinHttpError(juce::String::fromUTF8("No se pudo recibir la descarga de actualización."));
+            return false;
+        }
+
+        DWORD status = 0;
+        DWORD statusSize = sizeof(status);
+        if (!WinHttpQueryHeaders(request,
+                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize,
+                WINHTTP_NO_HEADER_INDEX))
+        {
+            error = lastWinHttpError(juce::String::fromUTF8("No se pudo leer la respuesta del servidor de actualizaciones."));
+            return false;
+        }
+
+        if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308)
+        {
+            DWORD locationSize = 0;
+            WinHttpQueryHeaders(request, WINHTTP_QUERY_LOCATION,
+                WINHTTP_HEADER_NAME_BY_INDEX, nullptr, &locationSize, WINHTTP_NO_HEADER_INDEX);
+            if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || locationSize == 0)
+            {
+                error = juce::String::fromUTF8("GitHub redirigió la descarga sin indicar un destino válido.");
+                return false;
+            }
+
+            std::vector<wchar_t> location(static_cast<std::size_t>(locationSize / sizeof(wchar_t)) + 2, L'\0');
+            if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_LOCATION,
+                    WINHTTP_HEADER_NAME_BY_INDEX, location.data(), &locationSize,
+                    WINHTTP_NO_HEADER_INDEX))
+            {
+                error = lastWinHttpError(juce::String::fromUTF8("No se pudo seguir la redirección de descarga."));
+                return false;
+            }
+
+            juce::String next(location.data());
+            if (next.startsWithChar('/'))
+                next = "https://" + juce::String(host.c_str()) + next;
+            currentUrl = next;
+            continue;
+        }
+
+        if (status < 200 || status >= 300)
+        {
+            error = juce::String::fromUTF8("El servidor de actualizaciones respondió con HTTP ")
+                + juce::String(static_cast<int>(status)) + ".";
+            return false;
+        }
+
+        bytes.reset();
+        constexpr std::size_t maxDownloadBytes = 256u * 1024u * 1024u;
+        for (;;)
+        {
+            DWORD available = 0;
+            if (!WinHttpQueryDataAvailable(request, &available))
+            {
+                error = lastWinHttpError(juce::String::fromUTF8("Se interrumpió la descarga de actualización."));
+                return false;
+            }
+            if (available == 0)
+                break;
+            if (bytes.getSize() + available > maxDownloadBytes)
+            {
+                error = juce::String::fromUTF8("La descarga de actualización excede el tamaño permitido.");
+                return false;
+            }
+
+            std::vector<std::uint8_t> buffer(static_cast<std::size_t>(available));
+            DWORD read = 0;
+            if (!WinHttpReadData(request, buffer.data(), available, &read))
+            {
+                error = lastWinHttpError(juce::String::fromUTF8("No se pudo completar la descarga de actualización."));
+                return false;
+            }
+            if (read > 0)
+                bytes.append(buffer.data(), static_cast<std::size_t>(read));
+        }
+
+        if (bytes.getSize() == 0)
+        {
+            error = juce::String::fromUTF8("El servidor devolvió una descarga vacía.");
+            return false;
+        }
+        return true;
+    }
+
+    error = juce::String::fromUTF8("La descarga superó el máximo de redirecciones permitido.");
+    return false;
+}
 #endif
 
 juce::String shaFromReleaseBody(const juce::String& body)
@@ -70,117 +339,38 @@ namespace j3ui
 bool UpdateService::requestBytes(const juce::String& url, juce::MemoryBlock& bytes, juce::String& error)
 {
 #if JUCE_WINDOWS
-    if (!url.startsWithIgnoreCase("https://"))
+    if (!isAllowedUpdateUrl(url))
     {
-        error = juce::String::fromUTF8("La actualización fue bloqueada porque la URL no usa HTTPS.");
+        error = juce::String::fromUTF8("La actualización fue bloqueada porque la URL no es HTTPS o no pertenece a GitHub.");
         return false;
     }
 
-    const auto wideUrl = utf8ToWide(url);
-    if (wideUrl.empty())
+    juce::String winHttpError;
+    for (int attempt = 0; attempt < 3; ++attempt)
     {
-        error = juce::String::fromUTF8("URL de actualización inválida.");
-        return false;
+        bytes.reset();
+        if (requestBytesWithWinHttp(url, bytes, winHttpError))
+        {
+            error.clear();
+            return true;
+        }
+
+        if (attempt < 2)
+            juce::Thread::sleep(350 + attempt * 650);
     }
 
-    URL_COMPONENTS parts {};
-    parts.dwStructSize = sizeof(parts);
-    parts.dwSchemeLength = static_cast<DWORD>(-1);
-    parts.dwHostNameLength = static_cast<DWORD>(-1);
-    parts.dwUrlPathLength = static_cast<DWORD>(-1);
-    parts.dwExtraInfoLength = static_cast<DWORD>(-1);
-    if (!WinHttpCrackUrl(wideUrl.c_str(), 0, 0, &parts)
-        || parts.nScheme != INTERNET_SCHEME_HTTPS)
-    {
-        error = juce::String::fromUTF8("No se pudo interpretar la URL segura de actualización.");
-        return false;
-    }
-
-    const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
-    std::wstring object(parts.lpszUrlPath, parts.dwUrlPathLength);
-    if (parts.dwExtraInfoLength > 0)
-        object.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
-    if (object.empty())
-        object = L"/";
-
-    InternetHandle session { WinHttpOpen(L"J3Worship-Updater/1",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
-        WINHTTP_NO_PROXY_BYPASS, 0) };
-    if (session.handle == nullptr)
-    {
-        error = juce::String::fromUTF8("No se pudo iniciar la conexión para buscar actualizaciones.");
-        return false;
-    }
-    WinHttpSetTimeouts(session, 5000, 5000, 10000, 15000);
-
-    InternetHandle connection { WinHttpConnect(session, host.c_str(), parts.nPort, 0) };
-    if (connection.handle == nullptr)
-    {
-        error = "No se pudo conectar con el servidor de actualizaciones.";
-        return false;
-    }
-
-    InternetHandle request { WinHttpOpenRequest(connection, L"GET", object.c_str(), nullptr,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) };
-    if (request.handle == nullptr)
-    {
-        error = juce::String::fromUTF8("No se pudo crear la solicitud de actualización.");
-        return false;
-    }
-
-    const wchar_t* headers =
-        L"Accept: application/vnd.github+json\r\n"
-        L"Cache-Control: no-cache, no-store, max-age=0\r\n"
-        L"Pragma: no-cache\r\n";
-    if (!WinHttpSendRequest(request, headers, static_cast<DWORD>(-1L),
-                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
-        || !WinHttpReceiveResponse(request, nullptr))
-    {
-        error = juce::String::fromUTF8("No se pudo descargar la información de actualización.");
-        return false;
-    }
-
-    DWORD status = 0;
-    DWORD statusSize = sizeof(status);
-    if (!WinHttpQueryHeaders(request,
-            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-            WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize,
-            WINHTTP_NO_HEADER_INDEX)
-        || status < 200 || status >= 300)
-    {
-        error = juce::String::fromUTF8("El servidor de actualizaciones respondió con HTTP ") + juce::String(static_cast<int>(status)) + ".";
-        return false;
-    }
-
+    juce::String fallbackError;
     bytes.reset();
-    constexpr std::size_t maxDownloadBytes = 256u * 1024u * 1024u;
-    for (;;)
+    if (requestBytesWithPowerShell(url, bytes, fallbackError))
     {
-        DWORD available = 0;
-        if (!WinHttpQueryDataAvailable(request, &available))
-        {
-            error = juce::String::fromUTF8("Se interrumpió la descarga de actualización.");
-            return false;
-        }
-        if (available == 0)
-            break;
-        if (bytes.getSize() + available > maxDownloadBytes)
-        {
-            error = juce::String::fromUTF8("La descarga de actualización excede el tamaño permitido.");
-            return false;
-        }
-
-        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(available));
-        DWORD read = 0;
-        if (!WinHttpReadData(request, buffer.data(), available, &read))
-        {
-            error = juce::String::fromUTF8("No se pudo completar la descarga de actualización.");
-            return false;
-        }
-        if (read > 0)
-            bytes.append(buffer.data(), static_cast<std::size_t>(read));
+        error.clear();
+        return true;
     }
-    return bytes.getSize() > 0;
+
+    error = winHttpError;
+    if (fallbackError.isNotEmpty())
+        error << juce::String::fromUTF8(" Método alternativo: ") << fallbackError;
+    return false;
 #else
     juce::ignoreUnused(url, bytes);
     error = juce::String::fromUTF8("Las actualizaciones automáticas están disponibles en Windows.");
