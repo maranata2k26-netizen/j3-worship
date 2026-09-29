@@ -44,7 +44,7 @@ jobs:
       - name: Upload UI layout snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-UI-Layout-1.11.2
+          name: J3Worship-UI-Layout-1.12.0
           path: canonical-current/build-win/ui-snapshots/*.png
           if-no-files-found: error
 
@@ -297,7 +297,7 @@ jobs:
           if ($actual -ne $expected) {
             Get-Content $bootstrapLog -ErrorAction SilentlyContinue
             Get-Content $log -ErrorAction SilentlyContinue
-            throw "1.10.9 update flow did not replace the executable with 1.11.2"
+            throw "1.10.9 update flow did not replace the executable with 1.12.0"
           }
 
           $bootstrapText = Get-Content $bootstrapLog -Raw
@@ -320,21 +320,21 @@ jobs:
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.11.2
+          name: J3Worship-Windows-1.12.0
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows full installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Full-Setup-1.11.2
+          name: J3Worship-Full-Setup-1.12.0
           path: canonical-current/dist-installer/J3Worship-Full-Setup.exe
           if-no-files-found: error
 
       - name: Upload updater bootstrap
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Updater-Bootstrap-1.11.2
+          name: J3Worship-Updater-Bootstrap-1.12.0
           path: canonical-current/dist-bootstrap/J3Worship-Setup.exe
           if-no-files-found: error
 
