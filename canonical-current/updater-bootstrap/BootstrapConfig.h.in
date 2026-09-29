@@ -1,0 +1,5 @@
+#pragma once
+
+inline constexpr wchar_t kVersion[] = L"@J3_BOOTSTRAP_VERSION@";
+inline constexpr wchar_t kFullUrl[] = L"@J3_BOOTSTRAP_URL@";
+inline constexpr wchar_t kFullSha256[] = L"@J3_BOOTSTRAP_SHA256@";
