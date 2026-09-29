@@ -63,7 +63,7 @@ jobs:
       - name: Upload UI layout snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-UI-Layout-1.12.0
+          name: J3Worship-UI-Layout-1.12.1
           path: canonical-current/build-win/ui-snapshots/*.png
           if-no-files-found: error
 
@@ -296,33 +296,42 @@ jobs:
             Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue
           }
 
-          if (!$cmd.WaitForExit(240000)) {
+          # Regression for the exact user-visible bug: a legacy updater may launch
+          # J3Worship-Setup.exe via start /wait, but cmd.exe must now return quickly
+          # while the detached worker continues the update in the background.
+          if (!$cmd.WaitForExit(15000)) {
             Stop-Process -Id $cmd.Id -Force -ErrorAction SilentlyContinue
             Get-Content $bootstrapLog -ErrorAction SilentlyContinue
-            Get-Content $log -ErrorAction SilentlyContinue
-            throw "1.10.9 apply-update.cmd simulation timed out"
+            throw "Legacy updater cmd window stayed open longer than 15 seconds"
           }
-          # The real 1.10.9 updater never consumes the batch-file exit code; the
-          # script self-deletes after relaunching J3, and cmd.exe can report a
-          # non-zero final code even when the bootstrap + installer succeeded.
-          # Validate the actual postconditions instead.
-          Write-Host "Legacy updater cmd exit code: $($cmd.ExitCode)"
-          Start-Sleep -Milliseconds 1500
+          Write-Host "Legacy updater cmd exited quickly with code: $($cmd.ExitCode)"
 
-          # The meaningful regression check: the exact path that 1.10.9 would
-          # reopen must now contain the newly-built J3 Worship executable.
+          # Wait for the detached bootstrap worker to replace the old executable.
           $expected = (Get-FileHash $sourceExe -Algorithm SHA256).Hash
-          $actual = (Get-FileHash $legacyExe -Algorithm SHA256).Hash
+          $deadline = (Get-Date).AddSeconds(240)
+          $actual = ""
+          do {
+            Start-Sleep -Milliseconds 500
+            if (Test-Path $legacyExe) {
+              try { $actual = (Get-FileHash $legacyExe -Algorithm SHA256).Hash } catch { $actual = "" }
+            }
+          } while ($actual -ne $expected -and (Get-Date) -lt $deadline)
+
           if ($actual -ne $expected) {
             Get-Content $bootstrapLog -ErrorAction SilentlyContinue
             Get-Content $log -ErrorAction SilentlyContinue
-            throw "1.10.9 update flow did not replace the executable with 1.12.0"
+            throw "1.10.9 update flow did not replace the executable with 1.12.1"
           }
 
-          $bootstrapText = Get-Content $bootstrapLog -Raw
+          $deadline = (Get-Date).AddSeconds(30)
+          do {
+            Start-Sleep -Milliseconds 250
+            $bootstrapText = if (Test-Path $bootstrapLog) { Get-Content $bootstrapLog -Raw } else { "" }
+          } while ($bootstrapText -notmatch 'completada correctamente' -and (Get-Date) -lt $deadline)
+
           if ($bootstrapText -notmatch 'completada correctamente') {
             Get-Content $bootstrapLog -ErrorAction SilentlyContinue
-            throw "Bootstrap did not record a successful completed update"
+            throw "Detached bootstrap did not record a successful completed update"
           }
 
           Get-Process -Name J3Worship -ErrorAction SilentlyContinue |
@@ -339,21 +348,21 @@ jobs:
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.12.0
+          name: J3Worship-Windows-1.12.1
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows full installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Full-Setup-1.12.0
+          name: J3Worship-Full-Setup-1.12.1
           path: canonical-current/dist-installer/J3Worship-Full-Setup.exe
           if-no-files-found: error
 
       - name: Upload updater bootstrap
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Updater-Bootstrap-1.12.0
+          name: J3Worship-Updater-Bootstrap-1.12.1
           path: canonical-current/dist-bootstrap/J3Worship-Setup.exe
           if-no-files-found: error
 
