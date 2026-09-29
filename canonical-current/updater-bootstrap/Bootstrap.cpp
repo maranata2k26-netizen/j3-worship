@@ -11,6 +11,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -581,6 +582,8 @@ DWORD launchFullInstaller(const std::filesystem::path& setup, std::wstring& erro
     std::wstring params;
     for (int i = 1; i < argc; ++i)
     {
+        if (_wcsicmp(argv[i], L"--j3-worker") == 0)
+            continue;
         if (!params.empty())
             params.push_back(L' ');
         params += quoteArg(argv[i]);
@@ -653,10 +656,144 @@ void showFailure(const std::wstring& error)
     MessageBoxW(nullptr, message.c_str(), L"J3 Worship - Actualización",
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
 }
+
+bool hasWorkerFlag()
+{
+    int argc = 0;
+    auto** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv == nullptr)
+        return false;
+
+    bool found = false;
+    for (int i = 1; i < argc; ++i)
+        if (_wcsicmp(argv[i], L"--j3-worker") == 0)
+        {
+            found = true;
+            break;
+        }
+
+    LocalFree(argv);
+    return found;
+}
+
+std::filesystem::path currentExecutablePath()
+{
+    std::vector<wchar_t> buffer(32768, L'\0');
+    const auto len = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (len == 0 || len >= buffer.size())
+        return {};
+    return std::filesystem::path(std::wstring(buffer.data(), len));
+}
+
+bool launchDetachedWorker(std::wstring& error)
+{
+    const auto self = currentExecutablePath();
+    if (self.empty())
+    {
+        error = L"No se pudo identificar el ejecutable del actualizador.";
+        return false;
+    }
+
+    int argc = 0;
+    auto** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv == nullptr)
+    {
+        error = L"No se pudieron leer los parámetros del actualizador.";
+        return false;
+    }
+
+    std::wstring command = quoteArg(self.wstring()) + L" --j3-worker";
+    for (int i = 1; i < argc; ++i)
+    {
+        if (_wcsicmp(argv[i], L"--j3-worker") == 0)
+            continue;
+        command += L" " + quoteArg(argv[i]);
+    }
+    LocalFree(argv);
+
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\0');
+
+    STARTUPINFOW si {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi {};
+    if (!CreateProcessW(self.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    {
+        error = L"No se pudo iniciar el actualizador en segundo plano: "
+              + lastErrorText(GetLastError());
+        return false;
+    }
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+}
+
+std::optional<std::filesystem::path> requestedInstallDirectory()
+{
+    int argc = 0;
+    auto** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv == nullptr)
+        return std::nullopt;
+
+    std::optional<std::filesystem::path> result;
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::wstring arg(argv[i]);
+        if (arg.size() > 5 && _wcsnicmp(arg.c_str(), L"/DIR=", 5) == 0)
+        {
+            result = std::filesystem::path(arg.substr(5));
+            break;
+        }
+    }
+    LocalFree(argv);
+    return result;
+}
+
+void relaunchInstalledApplication()
+{
+    const auto installDir = requestedInstallDirectory();
+    if (!installDir.has_value())
+    {
+        logLine(L"No se recibió /DIR; se omite el relanzamiento automático.");
+        return;
+    }
+
+    const auto exe = *installDir / L"J3Worship.exe";
+    for (int attempt = 0; attempt < 40 && !std::filesystem::exists(exe); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    if (!std::filesystem::exists(exe))
+    {
+        logLine(L"No se encontró J3Worship.exe para relanzar después de actualizar.");
+        return;
+    }
+
+    const auto result = reinterpret_cast<INT_PTR>(
+        ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, installDir->c_str(), SW_SHOWNORMAL));
+    if (result <= 32)
+        logLine(L"No se pudo relanzar J3 Worship después de actualizar.");
+    else
+        logLine(L"J3 Worship relanzado correctamente.");
+}
 }
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
+    if (!hasWorkerFlag())
+    {
+        std::wstring detachError;
+        if (!launchDetachedWorker(detachError))
+        {
+            showFailure(detachError);
+            return 30;
+        }
+
+        // Important for legacy 1.11/1.12 launchers: return immediately so their
+        // visible cmd.exe / start /wait chain can close instead of appearing frozen.
+        return 0;
+    }
     std::error_code ec;
     std::filesystem::remove(logPath(), ec);
 
@@ -725,5 +862,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 
     logLine(L"Actualización completada correctamente.");
     std::filesystem::remove(destination, ec);
+    relaunchInstalledApplication();
     return 0;
 }
