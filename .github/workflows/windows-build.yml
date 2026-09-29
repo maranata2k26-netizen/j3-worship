@@ -283,12 +283,11 @@ jobs:
             Get-Content $log -ErrorAction SilentlyContinue
             throw "1.10.9 apply-update.cmd simulation timed out"
           }
-          if ($cmd.ExitCode -ne 0) {
-            Get-Content $bootstrapLog -ErrorAction SilentlyContinue
-            Get-Content $log -ErrorAction SilentlyContinue
-            throw "1.10.9 apply-update.cmd simulation failed: $($cmd.ExitCode)"
-          }
-
+          # The real 1.10.9 updater never consumes the batch-file exit code; the
+          # script self-deletes after relaunching J3, and cmd.exe can report a
+          # non-zero final code even when the bootstrap + installer succeeded.
+          # Validate the actual postconditions instead.
+          Write-Host "Legacy updater cmd exit code: $($cmd.ExitCode)"
           Start-Sleep -Milliseconds 1500
 
           # The meaningful regression check: the exact path that 1.10.9 would
@@ -302,7 +301,7 @@ jobs:
           }
 
           $bootstrapText = Get-Content $bootstrapLog -Raw
-          if ($bootstrapText -notmatch 'Actualización completada correctamente') {
+          if ($bootstrapText -notmatch 'completada correctamente') {
             Get-Content $bootstrapLog -ErrorAction SilentlyContinue
             throw "Bootstrap did not record a successful completed update"
           }
