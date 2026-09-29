@@ -1090,7 +1090,10 @@ void DawWorkspace::paint(juce::Graphics& g)
 
         auto footer = strip.removeFromBottom(24);
         auto body = strip.reduced(7, 3);
-        const float gainDb = static_cast<float>(gainToDb(tracks_[i].gain));
+        const int insert = juce::jlimit(0, kMaxTracks - 1, tracks_[i].mixerInsert);
+        const float gainDb = mixerGainDbForInsert
+            ? mixerGainDbForInsert(insert)
+            : static_cast<float>(gainToDb(tracks_[i].gain));
         const float normGain = juce::jlimit(0.0f, 1.0f, (gainDb + 60.0f) / 72.0f);
 
         // A real fader-style quick view reads as a mixer even when no audio is playing.
@@ -1124,7 +1127,6 @@ void DawWorkspace::paint(juce::Graphics& g)
 
         g.setFont(juce::FontOptions(8.5f, juce::Font::bold));
         g.setColour(juce::Colour(kMuted));
-        const int insert = juce::jlimit(0, kMaxTracks - 1, tracks_[i].mixerInsert);
         const bool paEnabled = isPaEnabledForInsert ? isPaEnabledForInsert(insert) : true;
         const bool iemEnabled = isIemEnabledForInsert ? isIemEnabledForInsert(insert) : false;
         const int iemMix = currentIemMixIndex ? juce::jlimit(0, 15, currentIemMixIndex()) : 0;
@@ -2050,9 +2052,36 @@ void DawWorkspace::mouseDown(const juce::MouseEvent& e)
             const int insert = juce::jlimit(0, kMaxTracks - 1, tracks_[idx].mixerInsert);
 
             if (paChip.contains(e.getPosition()) && onTogglePaForInsert)
+            {
                 onTogglePaForInsert(insert);
+            }
             else if (iemChip.contains(e.getPosition()) && onToggleIemForInsert)
+            {
                 onToggleIemForInsert(insert);
+            }
+            else
+            {
+                auto bodyStrip = juce::Rectangle<int>(content.getX() + idx * stripW, content.getY(),
+                                                      stripW, content.getHeight()).reduced(2);
+                bodyStrip.removeFromTop(3);
+                bodyStrip.removeFromTop(19);
+                bodyStrip.removeFromBottom(24);
+                auto body = bodyStrip.reduced(7, 3);
+                if (body.contains(e.getPosition()) && onSetMixerGainDbForInsert)
+                {
+                    quickMixerDragTrack_ = idx;
+                    quickMixerDragInsert_ = insert;
+                    dragMode_ = DragMode::quickMixerFader;
+
+                    auto lane = body.withWidth(std::max(22, body.getWidth() / 3)).withCentre(body.getCentre());
+                    const int top = lane.getY() + 3;
+                    const int bottom = lane.getBottom() - 3;
+                    const float norm = bottom > top
+                        ? juce::jlimit(0.0f, 1.0f, 1.0f - static_cast<float>(e.y - top) / static_cast<float>(bottom - top))
+                        : 0.0f;
+                    onSetMixerGainDbForInsert(insert, -60.0f + norm * 72.0f);
+                }
+            }
 
             syncInspector();
             repaint();
@@ -2197,6 +2226,31 @@ void DawWorkspace::mouseDrag(const juce::MouseEvent& e)
         resized();
         return;
     }
+    if (dragMode_ == DragMode::quickMixerFader)
+    {
+        const auto mixer = mixerBounds();
+        auto content = mixer.reduced(8, 25);
+        const int count = std::min(8, trackCount_);
+        if (quickMixerDragTrack_ >= 0 && quickMixerDragTrack_ < count && onSetMixerGainDbForInsert)
+        {
+            const int stripW = std::max(1, content.getWidth() / count);
+            auto strip = juce::Rectangle<int>(content.getX() + quickMixerDragTrack_ * stripW, content.getY(),
+                                              stripW, content.getHeight()).reduced(2);
+            strip.removeFromTop(3);
+            strip.removeFromTop(19);
+            strip.removeFromBottom(24);
+            auto body = strip.reduced(7, 3);
+            auto lane = body.withWidth(std::max(22, body.getWidth() / 3)).withCentre(body.getCentre());
+            const int top = lane.getY() + 3;
+            const int bottom = lane.getBottom() - 3;
+            const float norm = bottom > top
+                ? juce::jlimit(0.0f, 1.0f, 1.0f - static_cast<float>(e.y - top) / static_cast<float>(bottom - top))
+                : 0.0f;
+            onSetMixerGainDbForInsert(quickMixerDragInsert_, -60.0f + norm * 72.0f);
+            repaint();
+        }
+        return;
+    }
 
     if (rejectStructuralEditWhileLive("mover o recortar clips"))
     {
@@ -2286,6 +2340,8 @@ void DawWorkspace::mouseUp(const juce::MouseEvent&)
                                || dragMode_ == DragMode::resizeInspector
                                || dragMode_ == DragMode::resizeMixer;
     dragMode_ = DragMode::none;
+    quickMixerDragTrack_ = -1;
+    quickMixerDragInsert_ = -1;
     dragUndoSnapshot_.clear();
     dragChanged_ = false;
     if (resizedWorkspace) saveWorkspaceState();
