@@ -5660,7 +5660,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
                     iemR[i] += x * send * std::sin(iemAngle);
                 }
 
-                if (!safePa || dcaMuted)
+                if (!safePa || dcaMuted || !channelPaEnabled_[ch].load(std::memory_order_relaxed))
                     continue;
 
                 const float post = x * channelGain * dcaGain;
@@ -5735,7 +5735,8 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
 
             for (int ch = 0; ch < kMaxChannels; ++ch)
             {
-                if (channelMute_[ch].load(std::memory_order_relaxed))
+                if (channelMute_[ch].load(std::memory_order_relaxed)
+                    || !channelPaEnabled_[ch].load(std::memory_order_relaxed))
                     continue;
 
                 const int dca = channelDca_[ch].load(std::memory_order_relaxed);
@@ -5799,6 +5800,7 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
                 processPluginChainStereo(ch, insertL, insertR, numSamples);
 
                 const bool muted = channelMute_[ch].load(std::memory_order_relaxed);
+                const bool paEnabled = channelPaEnabled_[ch].load(std::memory_order_relaxed);
                 const int dca = channelDca_[ch].load(std::memory_order_relaxed);
                 const bool dcaMuted = dca >= 0 && dca < kDcas && dcaMute_[dca].load(std::memory_order_relaxed);
                 const float dcaGain = dca >= 0 && dca < kDcas ? dcaGain_[dca].load(std::memory_order_relaxed) : 1.0f;
@@ -5812,7 +5814,38 @@ void MainComponent::audioDeviceIOCallbackWithContext(const float* const* inputCh
                     float l = insertL[i];
                     float r = insertR[i];
                     peak = std::max(peak, std::max(std::abs(l), std::abs(r)));
-                    if (muted || dcaMuted)
+                    if (muted)
+                        continue;
+
+                    // DAW tracks follow the same live-console rule as XR18 inputs:
+                    // IEM is post-DSP/FX but pre-fader/DCA and independent from PA ON/OFF.
+                    const float monitorMono = (l + r) * 0.70710678f;
+                    for (int m = 0; m < kIemMixes; ++m)
+                    {
+                        if (iemMute_[m].load(std::memory_order_relaxed))
+                            continue;
+                        const int il = iemOutLeft_[m].load(std::memory_order_relaxed);
+                        const int ir = iemOutRight_[m].load(std::memory_order_relaxed);
+                        if (il < 0 || ir < 0 || il >= numOutputChannels || ir >= numOutputChannels || il == ir)
+                            continue;
+                        if (il == playbackLeft || il == playbackRight || ir == playbackLeft || ir == playbackRight
+                            || il == click || ir == click)
+                            continue;
+                        auto* iemL = outputChannelData[il];
+                        auto* iemR = outputChannelData[ir];
+                        if (iemL == nullptr || iemR == nullptr)
+                            continue;
+                        const float send = iemSendGain_[m][ch].load(std::memory_order_relaxed)
+                            * iemMaster_[m].load(std::memory_order_relaxed);
+                        if (send <= 1.0e-8f)
+                            continue;
+                        const float iemPan = juce::jlimit(-1.0f, 1.0f, iemSendPan_[m][ch].load(std::memory_order_relaxed));
+                        const float iemAngle = (iemPan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+                        iemL[i] += monitorMono * send * std::cos(iemAngle);
+                        iemR[i] += monitorMono * send * std::sin(iemAngle);
+                    }
+
+                    if (dcaMuted || !paEnabled)
                         continue;
 
                     if (pan < 0.0f) r *= 1.0f + pan;
@@ -5992,6 +6025,8 @@ void MainComponent::audioDeviceAboutToStart(juce::AudioIODevice* device)
     dawMixerScratch_.clear();
     dawDryScratch_.setSize(2, preparedBlock, false, true, false);
     dawDryScratch_.clear();
+    clickScratch_.setSize(1, preparedBlock, false, true, false);
+    clickScratch_.clear();
     dawFxSilenceFallbackActive_.store(false, std::memory_order_release);
     outputSafetyEvents_.store(0, std::memory_order_release);
     for (int ch = 0; ch < kMaxChannels; ++ch)
