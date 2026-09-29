@@ -43,6 +43,20 @@ public:
     void emergencyStop();
     double bpm() const noexcept { return bpm_.load(std::memory_order_relaxed); }
     void setTempoFromHost(double bpm);
+    void setClickEnabledFromHost(bool enabled);
+
+    // Test hooks keep timeline navigation deterministic in headless Windows CI.
+    void fitProjectForTesting() { fitProject(); }
+    void setTransportBeatForTesting(double beat) noexcept { setTransportBeat(beat); }
+    void timerTickForTesting() { timerCallback(); }
+    double viewStartBeatForTesting() const noexcept { return viewStartBeat_; }
+    double zoomForTesting() const noexcept { return zoom_; }
+    double projectEndBeatForTesting() const noexcept { return projectEndBeat(); }
+    double visibleBeatSpanForTesting() const noexcept
+    {
+        const auto content = timelineBounds().withTrimmedLeft(headerWidth_);
+        return content.getWidth() > 0 ? static_cast<double>(content.getWidth()) / pixelsPerBeat() : 0.0;
+    }
 
     std::function<void(double)> onBpmChanged;
     std::function<void(bool)> onPlayStateChanged;
@@ -53,9 +67,15 @@ public:
     std::function<void()> onOpenPads;
     std::function<void()> onOpenIem;
     std::function<void()> onOpenSetlist;
+    std::function<void()> onToggleClick;
     std::function<void(int)> onOpenMixerInsert;
     std::function<void(int)> onOpenPluginsForInsert;
     std::function<void()> onMixerRoutingChanged;
+    std::function<bool(int)> isPaEnabledForInsert;
+    std::function<bool(int)> isIemEnabledForInsert;
+    std::function<void(int)> onTogglePaForInsert;
+    std::function<void(int)> onToggleIemForInsert;
+    std::function<int()> currentIemMixIndex;
 
     juce::String mixerInsertName(int insert) const;
     bool validateLayoutForTesting(juce::String& report) const;
@@ -400,6 +420,7 @@ private:
     juce::TextButton stopButton_ { "STOP" };
     juce::TextButton recordButton_ { "REC" };
     juce::ToggleButton loopButton_ { "LOOP" };
+    juce::ToggleButton clickButton_ { "CLICK" };
     juce::TextButton splitButton_ { "DIVIDIR" };
     juce::TextButton duplicateButton_ { "DUPLICAR" };
     juce::TextButton deleteButton_ { "BORRAR" };
