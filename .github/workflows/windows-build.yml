@@ -244,12 +244,16 @@ jobs:
           $legacyExe = Join-Path $legacyDir "J3Worship.exe"
           $script = Join-Path $updaterDir "apply-update.cmd"
           $log = Join-Path $updaterDir "bootstrap-e2e-install.log"
+          $bootstrapLog = Join-Path $updaterDir "bootstrap.log"
 
           Remove-Item $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item $updaterDir -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $legacyDir | Out-Null
           New-Item -ItemType Directory -Force -Path $updaterDir | Out-Null
 
+          # Simulate the exact state of 1.10.9: the installed J3 executable is
+          # still running when apply-update.cmd is launched, then J3 exits while
+          # the script is in its 2-second delay.
           Copy-Item "$env:WINDIR\System32\ping.exe" $legacyExe -Force
           $legacyProcess = Start-Process -FilePath $legacyExe -ArgumentList "127.0.0.1","-t" -PassThru
           Start-Sleep -Milliseconds 500
@@ -260,31 +264,50 @@ jobs:
             'setlocal',
             'timeout /t 2 /nobreak >nul',
             ('start /wait "" "' + $bootstrap + '" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /DIR="' + $legacyDir + '" /LOG="' + $log + '"'),
+            ('set "J3_UPDATE_EXIT=%ERRORLEVEL%"'),
+            ('if not "%J3_UPDATE_EXIT%"=="0" exit /b %J3_UPDATE_EXIT%'),
             ('start "" "' + $legacyExe + '"'),
             'del "%~f0"'
           ) | Set-Content -Path $script -Encoding ascii
 
-          $p = Start-Process -FilePath $bootstrap -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/CLOSEAPPLICATIONS","/DIR=$legacyDir","/LOG=$log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) {
-            Get-Content (Join-Path $updaterDir "bootstrap.log") -ErrorAction SilentlyContinue
-            Get-Content $log -ErrorAction SilentlyContinue
-            Get-Content (Join-Path $updaterDir "migration-result.txt") -ErrorAction SilentlyContinue
-            throw "Bootstrap rescue path failed: $($p.ExitCode)"
+          $cmd = Start-Process -FilePath $env:ComSpec -ArgumentList "/d","/c","\`"$script\`"" -PassThru
+          Start-Sleep -Milliseconds 750
+          if (!$legacyProcess.HasExited) {
+            Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue
           }
 
-          Start-Sleep -Milliseconds 500
+          if (!$cmd.WaitForExit(240000)) {
+            Stop-Process -Id $cmd.Id -Force -ErrorAction SilentlyContinue
+            Get-Content $bootstrapLog -ErrorAction SilentlyContinue
+            Get-Content $log -ErrorAction SilentlyContinue
+            throw "1.10.9 apply-update.cmd simulation timed out"
+          }
+          if ($cmd.ExitCode -ne 0) {
+            Get-Content $bootstrapLog -ErrorAction SilentlyContinue
+            Get-Content $log -ErrorAction SilentlyContinue
+            throw "1.10.9 apply-update.cmd simulation failed: $($cmd.ExitCode)"
+          }
+
+          Start-Sleep -Milliseconds 1500
+
+          # The meaningful regression check: the exact path that 1.10.9 would
+          # reopen must now contain the newly-built J3 Worship executable.
           $expected = (Get-FileHash $sourceExe -Algorithm SHA256).Hash
           $actual = (Get-FileHash $legacyExe -Algorithm SHA256).Hash
           if ($actual -ne $expected) {
-            Get-Content (Join-Path $updaterDir "bootstrap.log") -ErrorAction SilentlyContinue
+            Get-Content $bootstrapLog -ErrorAction SilentlyContinue
             Get-Content $log -ErrorAction SilentlyContinue
-            Get-Content (Join-Path $updaterDir "migration-result.txt") -ErrorAction SilentlyContinue
-            throw "Bootstrap did not replace the legacy executable with 1.11.2"
+            throw "1.10.9 update flow did not replace the executable with 1.11.2"
           }
 
-          $migration = Get-Content (Join-Path $updaterDir "migration-result.txt") -Raw
-          if ($migration -notmatch '^OK') { throw "Bootstrap migration marker did not report success" }
-          if (!$legacyProcess.HasExited) { Stop-Process -Id $legacyProcess.Id -Force -ErrorAction SilentlyContinue }
+          $bootstrapText = Get-Content $bootstrapLog -Raw
+          if ($bootstrapText -notmatch 'Actualización completada correctamente') {
+            Get-Content $bootstrapLog -ErrorAction SilentlyContinue
+            throw "Bootstrap did not record a successful completed update"
+          }
+
+          Get-Process -Name J3Worship -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
           Remove-Item $script -Force -ErrorAction SilentlyContinue
 
       - name: SHA256
