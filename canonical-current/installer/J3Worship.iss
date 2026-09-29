@@ -1,5 +1,5 @@
 #define MyAppName "J3 Worship"
-#define MyAppVersion "1.12.1"
+#define MyAppVersion "1.12.2"
 #define MyAppPublisher "J3 Worship"
 #define MyAppExeName "J3Worship.exe"
 
@@ -20,9 +20,10 @@ WizardStyle=modern
 UsePreviousAppDir=no
 CloseApplications=yes
 RestartApplications=no
+PrivilegesRequired=admin
 SetupIconFile=..\resources\J3Worship.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
-VersionInfoVersion=1.12.1.0
+VersionInfoVersion=1.12.2.0
 VersionInfoCompany=J3 Worship
 VersionInfoDescription=J3 Worship Installer
 VersionInfoProductName=J3 Worship

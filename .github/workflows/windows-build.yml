@@ -57,6 +57,16 @@ jobs:
           }
           Write-Host "Native hidden updater launcher confirmed"
 
+      - name: Validate updater elevation contract
+        shell: pwsh
+        run: |
+          $bootstrap = Get-Content "canonical-current/updater-bootstrap/Bootstrap.cpp" -Raw
+          $installer = Get-Content "canonical-current/installer/J3Worship.iss" -Raw
+          if (!$bootstrap.Contains('TokenElevation')) { throw "Bootstrap no longer checks elevation" }
+          if (!$bootstrap.Contains('lpVerb = L"runas"')) { throw "Bootstrap no longer requests UAC elevation" }
+          if (!$installer.Contains('PrivilegesRequired=admin')) { throw "Installer does not explicitly require admin privileges" }
+          Write-Host "Updater elevation contract confirmed"
+
       - name: Configure Visual Studio x64
         shell: pwsh
         run: cmake -S canonical-current -B canonical-current/build-win -G "Visual Studio 17 2022" -A x64 -DJ3_BUILD_DESKTOP_APP=ON
@@ -72,7 +82,7 @@ jobs:
       - name: Upload UI layout snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-UI-Layout-1.12.1
+          name: J3Worship-UI-Layout-1.12.2
           path: canonical-current/build-win/ui-snapshots/*.png
           if-no-files-found: error
 
@@ -354,7 +364,7 @@ jobs:
           if ($actual -ne $expected) {
             Get-Content $bootstrapLog -ErrorAction SilentlyContinue
             Get-Content $log -ErrorAction SilentlyContinue
-            throw "1.10.9 update flow did not replace the executable with 1.12.1"
+            throw "1.10.9 update flow did not replace the executable with 1.12.2"
           }
 
           $deadline = (Get-Date).AddSeconds(30)
@@ -382,21 +392,21 @@ jobs:
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Windows-1.12.1
+          name: J3Worship-Windows-1.12.2
           path: canonical-current/dist/J3Worship.exe
           if-no-files-found: error
 
       - name: Upload Windows full installer
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Full-Setup-1.12.1
+          name: J3Worship-Full-Setup-1.12.2
           path: canonical-current/dist-installer/J3Worship-Full-Setup.exe
           if-no-files-found: error
 
       - name: Upload updater bootstrap
         uses: actions/upload-artifact@v4
         with:
-          name: J3Worship-Updater-Bootstrap-1.12.1
+          name: J3Worship-Updater-Bootstrap-1.12.2
           path: canonical-current/dist-bootstrap/J3Worship-Setup.exe
           if-no-files-found: error
 

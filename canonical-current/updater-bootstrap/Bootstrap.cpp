@@ -569,6 +569,20 @@ bool verifySha256(const std::filesystem::path& file,
     return true;
 }
 
+bool currentProcessIsElevated()
+{
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return false;
+
+    TOKEN_ELEVATION elevation {};
+    DWORD size = 0;
+    const bool ok = GetTokenInformation(
+        token, TokenElevation, &elevation, sizeof(elevation), &size) != FALSE;
+    CloseHandle(token);
+    return ok && elevation.TokenIsElevated != 0;
+}
+
 DWORD launchFullInstaller(const std::filesystem::path& setup, std::wstring& error)
 {
     int argc = 0;
@@ -601,28 +615,34 @@ DWORD launchFullInstaller(const std::filesystem::path& setup, std::wstring& erro
         return exitCode;
     };
 
-    std::wstring command = quoteArg(setup.wstring());
-    if (!params.empty())
-        command += L" " + params;
-    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
-    mutableCommand.push_back(L'\0');
-
-    STARTUPINFOW si {};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi {};
-    if (CreateProcessW(setup.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
-                       0, nullptr, nullptr, &si, &pi))
+    if (currentProcessIsElevated())
     {
+        std::wstring command = quoteArg(setup.wstring());
+        if (!params.empty())
+            command += L" " + params;
+
+        std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+        mutableCommand.push_back(L'\0');
+
+        STARTUPINFOW si {};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi {};
+        if (!CreateProcessW(setup.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+                            CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        {
+            const auto code = GetLastError();
+            error = L"Windows no pudo iniciar el instalador elevado: " + lastErrorText(code);
+            return code;
+        }
+
         CloseHandle(pi.hThread);
         return waitForExit(pi.hProcess);
     }
 
-    const auto createError = GetLastError();
-    if (createError != ERROR_ELEVATION_REQUIRED && createError != ERROR_ACCESS_DENIED)
-    {
-        error = L"Windows no pudo iniciar el instalador completo: " + lastErrorText(createError);
-        return createError;
-    }
+    // Do not wait for an access-denied failure inside Inno Setup. Ask Windows
+    // for elevation before the installer starts so Program Files / legacy paths
+    // can actually be replaced on normal UAC-enabled PCs.
+    logLine(L"El instalador requiere elevación. Solicitando permiso de administrador.");
 
     SHELLEXECUTEINFOW info {};
     info.cbSize = sizeof(info);
@@ -630,15 +650,15 @@ DWORD launchFullInstaller(const std::filesystem::path& setup, std::wstring& erro
     info.lpVerb = L"runas";
     info.lpFile = setup.c_str();
     info.lpParameters = params.c_str();
-    info.nShow = SW_HIDE;
+    info.nShow = SW_SHOWNORMAL;
 
     if (!ShellExecuteExW(&info))
     {
         const auto code = GetLastError();
         if (code == ERROR_CANCELLED)
-            error = L"La instalación necesita permiso de Windows y fue cancelada.";
+            error = L"La instalación necesita permiso de administrador y fue cancelada.";
         else
-            error = L"Windows no pudo iniciar el instalador completo: " + lastErrorText(code);
+            error = L"Windows no pudo elevar el instalador: " + lastErrorText(code);
         return code;
     }
 
